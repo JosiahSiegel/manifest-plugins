@@ -252,6 +252,7 @@ console.log("OK: all three host functions present in built image");
 SMOKE_EOF
 docker run --rm \
   -v "$SMOKE_TEST_SCRIPT:/tmp/smoke-test.js:ro" \
+  --entrypoint "" \
   "${IMAGE_NAME}:${IMAGE_TAG}" \
   /nodejs/bin/node /tmp/smoke-test.js
 SMOKE_EXIT=$?
