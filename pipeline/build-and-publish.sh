@@ -178,6 +178,10 @@ IMAGE_NAME="manifest-with-plugins"
 TAG_FLAGS=(--tag "${IMAGE_NAME}:${IMAGE_TAG}")
 if [[ -n "$REGISTRY" ]]; then
   REGISTRY="${REGISTRY%/}"   # strip trailing slash
+  # Docker registry component (everything before `:`) must be lowercase.
+  # Lowercase explicitly so users can pass mixed-case org names without
+  # the docker CLI rejecting the push.
+  REGISTRY="$(echo "$REGISTRY" | tr '[:upper:]' '[:lower:]')"
   TAG_FLAGS+=(--tag "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}")
   TAG_FLAGS+=(--tag "${REGISTRY}/${IMAGE_NAME}:latest")
 fi

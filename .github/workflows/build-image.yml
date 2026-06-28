@@ -131,8 +131,11 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.push }}" != "true" ]; then
             echo "WARN: inputs.push = false, building without push"
           else
+            # Docker registry components (everything before `:`) must be
+            # lowercase. GitHub allows mixed-case owner names in the URL
+            # path, but the docker CLI rejects them — lowercase explicitly.
             ARGS+=(
-              --registry "ghcr.io/${{ github.repository_owner }}"
+              --registry "ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
               --push
             )
           fi
