@@ -1,10 +1,10 @@
 # `@josiahsiegel/manifest-plugins`
 
-Fork-only request-transform plugins for [mnfst/manifest](https://github.com/mnfst/manifest), applied post-sync via `npm run apply`.
+Request-transform plugins for [mnfst/manifest](https://github.com/mnfst/manifest), applied to any Manifest checkout via `npm run apply`. The plugins themselves are fork-flavored (e.g. Anthropic OAuth billing headers for Claude Pro/Max), but the apply tool works equally well on upstream, a fork, or a plain local clone.
 
 ## What this does
 
-`mnfst/manifest` (the upstream model router) is a single-service fork-friendly codebase. This repo holds the **plugin host** (a small TS function pasted into `provider-client.ts` at apply time) and a registry of **fork plugins** (each implementing `RequestTransformPlugin`). When the plugin host is installed in a Manifest checkout, every outgoing Anthropic (and future) request flows through the plugin chain, letting you inject headers, mutate the body, or rewrite the URL — **without** editing the housekeeping overlay or fighting upstream/main every sync.
+`mnfst/manifest` (the upstream model router) is a single-service codebase. This repo holds the **plugin host** (a small TS function pasted into `provider-client.ts` at apply time) and a registry of **plugins** (each implementing `RequestTransformPlugin`). When the plugin host is installed in a Manifest checkout — upstream, fork, or local clone — every outgoing Anthropic (and future) request flows through the plugin chain, letting you inject headers, mutate the body, or rewrite the URL.
 
 The flagship plugin shipped today is `AnthropicBillingHeaderPlugin`, which injects the `x-anthropic-billing-header` required by Anthropic's upstream classifier for OAuth subscription tokens (Claude Pro / Max). Without it, Claude Pro/Max traffic gets 429'd as out-of-credit. Reference: [vinzabe/opencode-anthropic-max-fix](https://github.com/vinzabe/opencode-anthropic-max-fix), [NTT123 Gist](https://gist.github.com/NTT123/579183bdd7e028880d06c8befae73b99).
 
@@ -66,7 +66,7 @@ npm run apply -- --link /path/to/manifest
 
 The apply tool is **idempotent** — running it twice is safe. After it has been applied once, subsequent runs report `noop`.
 
-The fork's `docker/Dockerfile` should `COPY` this repo into the runtime image and `npm link` it (see the Dockerfile template below).
+If you build a Docker image from your Manifest checkout, the Dockerfile should `COPY` this repo into the runtime image and `npm link` it (see the Dockerfile template below).
 
 ## Verify
 
