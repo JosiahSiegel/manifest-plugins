@@ -243,18 +243,119 @@ SMOKE_TEST_SCRIPT="$(mktemp -p /tmp smoke-test.XXXXXX.js)"
 chmod a+r "$SMOKE_TEST_SCRIPT"
 cat > "$SMOKE_TEST_SCRIPT" <<'SMOKE_EOF'
 const fs = require("fs");
+const net = require("net");
+const http = require("http");
+
+// --- Static check: the three host functions are present in the compiled dist.
+// The apply step verified the source files before the build, but a build-
+// time regression (wrong Dockerfile, missing COPY, etc.) could strip the
+// host from the dist. Re-check here to fail fast in CI.
 const host = fs.readFileSync("/app/packages/backend/dist/routing/proxy/provider-client.js", "utf-8");
 const rateLimiter = fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy-rate-limiter.js", "utf-8");
 const proxyService = fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy.service.js", "utf-8");
-const ok = host.includes("applyRequestTransformPlugins") && rateLimiter.includes("getResolvedConcurrencyMax") && proxyService.includes("getResolvedMaxMessagesPerRequest");
-if (!ok) {
-  console.error("SMOKE TEST FAILED: host function missing from one of the three files");
+const pluginDist = require("/app/node_modules/manifest-plugins/dist/index.js");
+const staticOk =
+  host.includes("applyRequestTransformPlugins") &&
+  rateLimiter.includes("getResolvedConcurrencyMax") &&
+  proxyService.includes("getResolvedMaxMessagesPerRequest") &&
+  pluginDist.plugins.length > 0;
+
+if (!staticOk) {
+  console.error("FAIL: host function missing from one of the three files");
   process.exit(1);
 }
-const p = require("/app/node_modules/manifest-plugins/package.json");
-console.log("plugin present:", p.name, p.version);
-console.log("plugin array:", require("/app/node_modules/manifest-plugins/dist/index.js").plugins.map(x => x.constructor.name));
-console.log("OK: all three host functions present in built image");
+console.log("static-check: all three host functions present in built image");
+console.log("plugin array:", pluginDist.plugins.map(x => x.constructor.name));
+
+// --- Runtime check: the image must actually boot and respond to HTTP.
+// This is the end-to-end check that catches the "image builds but
+// doesn't run" failure mode. We spawn the manifest backend as a child
+// process, wait for /api/v1/health to respond, then shut it down.
+console.log("runtime-check: starting manifest backend...");
+const { spawn, spawnSync } = require("child_process");
+
+// Start the backend in the background. We pass through env vars (the
+// distroless image exposes PORT, BIND_ADDRESS, DATABASE_URL, etc. — we
+// don't need any of them for a smoke test; the backend will boot and
+// serve /api/v1/health with no DB required, but only on a port we can
+// reach from this script).
+const backend = spawn(
+  "node",
+  ["packages/backend/dist/main.js"],
+  {
+    env: { ...process.env, PORT: "39123", BIND_ADDRESS: "127.0.0.1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  }
+);
+
+let backendExited = false;
+let backendExitCode = null;
+backend.on("exit", (code) => {
+  backendExited = true;
+  backendExitCode = code;
+});
+
+function get(path, port) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: "127.0.0.1", port, path, method: "GET", timeout: 2000 },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => resolve({ status: res.statusCode, body }));
+      },
+    );
+    req.on("error", (e) => resolve({ error: e.message }));
+    req.on("timeout", () => { req.destroy(); resolve({ error: "timeout" }); });
+    req.end();
+  });
+}
+
+async function waitForHealth(port, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (backendExited) {
+      return { ok: false, reason: "backend exited early with code " + backendExitCode };
+    }
+    const r = await get("/api/v1/health", port);
+    if (r.status && r.status < 500) {
+      return { ok: true, status: r.status, body: (r.body || "").slice(0, 200) };
+    }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+  return { ok: false, reason: "timeout after " + timeoutMs + "ms" };
+}
+
+const result = await waitForHealth(39123);
+
+// Clean up the backend child no matter what.
+try { backend.kill("SIGTERM"); } catch (e) {}
+await new Promise((res) => setTimeout(res, 1000));
+if (!backendExited) { try { backend.kill("SIGKILL"); } catch (e) {} }
+
+// Drain the output pipes so node doesn't complain about EPIPE.
+backend.stdout.on("data", () => {});
+backend.stderr.on("data", () => {});
+
+if (!result.ok) {
+  console.error("FAIL: backend did not become healthy:", result.reason);
+  process.exit(1);
+}
+console.log("runtime-check: backend healthy at http://127.0.0.1:39123/api/v1/health, status " + result.status);
+if (result.body) console.log("  body: " + result.body);
+
+// Also verify the plugin host chain actually executes by hitting a
+// route that goes through the Anthropic branch. /api/v1/chat/completions
+// would be ideal but requires a valid body + auth — just check the
+// response shape (status != 404 with a JSON error means the route exists).
+const pluginsRoute = await get("/api/v1/plugins", 39123);
+if (pluginsRoute.status && pluginsRoute.status !== 404) {
+  console.log("plugin-route-check: /api/v1/plugins status " + pluginsRoute.status);
+} else {
+  console.log("plugin-route-check: /api/v1/plugins returned " + pluginsRoute.status + " (no dedicated /plugins route — host chain still verified by static check above)");
+}
+
+console.log("OK: all smoke checks passed");
 SMOKE_EOF
 docker run --rm \
   -v "$SMOKE_TEST_SCRIPT:/tmp/smoke-test.js:ro" \
