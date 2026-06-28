@@ -36,22 +36,23 @@ COPY packages/backend/package.json packages/backend/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --include=dev --prefer-offline --no-audit --no-fund --loglevel=error
 
-# Stage 2: Build the backend bundle. We scope to manifest-backend
-# only — the frontend is not required for the plugin host to work, and
-# keeping the build small reduces failure surface.
+# Stage 2: Build the frontend + backend + shared bundles. The frontend
+# dist is required because, in production, NestJS serves it as a
+# single-service image (UI + API on the same port via @nestjs/serve-static).
+# Without it, GET / returns Nest's default JSON 404 instead of the
+# dashboard, and self-hosted stacks that proxy / to the container fail.
 FROM deps AS build
 # The apply tool has already patched the three target files in the
 # Manifest source. COPY them now (the build context `.` is the manifest
 # checkout — see build-and-publish.sh for the working directory).
 COPY packages/shared packages/shared
+COPY packages/frontend packages/frontend
 COPY packages/backend packages/backend
 COPY packages/manifest packages/manifest
-# Build the backend (TypeScript → JavaScript). The frontend is not
-# required for the plugin host — only the backend needs the host
-# query functions. We intentionally skip --filter=manifest-frontend
-# to keep the build minimal and avoid pre-existing frontend build
-# failures unrelated to the plugin host.
-RUN npx turbo build --filter=manifest-backend --filter=manifest-shared
+# Marks this bundle as a self-hosted build so the frontend reveals the
+# version badge baked in at build time. Mirrors upstream's docker/Dockerfile.
+ENV VITE_MANIFEST_SELFHOSTED=true
+RUN npx turbo build --filter=manifest-backend --filter=manifest-frontend --filter=manifest-shared
 
 # Stage 3: Production dependencies + plugins injection. The plugins
 # package comes in via the named `manifest-plugins` build context (a
@@ -93,6 +94,11 @@ LABEL org.opencontainers.image.title="Manifest (with manifest-plugins)" \
 
 ENV NODE_ENV=production
 ENV BIND_ADDRESS=0.0.0.0
+# Backend listens on this port. Mirrors upstream's docker/Dockerfile
+# default (2099) so this image is a drop-in replacement — stacks
+# expecting `localhost:2099` (like ai-gateway-dev-stack) work without
+# any override. Can still be overridden at `docker run -e PORT=...`.
+ENV PORT=2099
 # Expose the distroless node binary on PATH so `node` in docker-compose
 # healthchecks (and anything else invoked with a bare command name) resolves.
 ENV PATH=/nodejs/bin:$PATH
@@ -104,8 +110,7 @@ COPY --from=prod-deps --chown=nonroot:nonroot /app/packages/backend/node_modules
 COPY --from=prod-deps --chown=nonroot:nonroot /app/package.json package.json
 COPY --from=build --chown=nonroot:nonroot /app/packages/shared/dist packages/shared/dist
 COPY --from=build --chown=nonroot:nonroot /app/packages/backend/dist packages/backend/dist
-# We intentionally don't copy packages/frontend/dist — the frontend
-# isn't built in this image (see comment at the `build` stage).
+COPY --from=build --chown=nonroot:nonroot /app/packages/frontend/dist packages/frontend/dist
 COPY --chown=nonroot:nonroot packages/shared/package.json packages/shared/
 COPY --chown=nonroot:nonroot packages/backend/package.json packages/backend/
 # The telemetry sender reads the canonical Manifest version from this
@@ -125,7 +130,7 @@ COPY --chown=nonroot:nonroot packages/manifest/package.json packages/manifest/
 COPY --from=manifest-plugins /package.json /app/node_modules/manifest-plugins/package.json
 COPY --from=manifest-plugins /dist /app/node_modules/manifest-plugins/dist
 
-EXPOSE 3001
+EXPOSE 2099
 
 # Distroless has no shell; use exec-form and a JS-only check.
 # `node` resolves via the PATH we set above. We read PORT at runtime so

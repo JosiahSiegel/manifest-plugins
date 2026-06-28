@@ -202,6 +202,24 @@ describe('applyAll (three-file patcher)', () => {
     });
   });
 
+  it('reports noop (not drift) when an upstream-shaped file has been customized to behave like the patch', async () => {
+    // Simulates the case where someone hand-applied a similar patch
+    // using a different code path: the OLD upstream anchor is gone but
+    // the new-text sentinel (the post-patch call site) is present. The
+    // patcher should report noop, not drift.
+    await withTempManifest(async (files) => {
+      const original = readFileSync(files.proxyRateLimiter, 'utf-8');
+      const customized = original.replace(
+        'const CONCURRENCY_MAX = 10;\n',
+        'const CONCURRENCY_MAX = getResolvedConcurrencyMax();\n',
+      );
+      writeFileSync(files.proxyRateLimiter, customized, 'utf-8');
+
+      const result = await applyProxyRateLimiterHost(files.proxyRateLimiter);
+      expectStatus('applyProxyRateLimiterHost', result, 'noop');
+    });
+  });
+
   it('dryRun: reports applied but does not modify the file', async () => {
     await withTempManifest(async (files) => {
       const before = {

@@ -91,6 +91,26 @@ interface PatchSpec {
 // =============================================================================
 
 /**
+ * Pull a unique-shaped sentinel out of a patch's replacement text so the
+ * apply tool can detect "already applied via a different shape" — e.g. a
+ * hand-edit or a previous version of the patcher that achieved the same
+ * intent. Strategy: walk the new text and find the *last*
+ * identifier-shaped declaration (a `const X = ...` or `function X(...)`
+ * line). If the file already contains that exact line verbatim, the
+ * patch was already applied in this or a similar form.
+ */
+function extractSentinelFromNew(newText: string): string | null {
+  const lines = newText.split('\n');
+  let lastMatch: string | null = null;
+  for (const line of lines) {
+    if (/^(?:function|const)\s+\w+\s*[=(]/.test(line.trim())) {
+      lastMatch = line;
+    }
+  }
+  return lastMatch;
+}
+
+/**
  * Apply a single patch to a Manifest source file. Idempotent. Fail-loud on
  * upstream drift.
  */
@@ -107,6 +127,19 @@ export async function applyPatch(
 
   // --- Anchor check ---
   if (!original.includes(spec.oldText)) {
+    // The OLD upstream anchor is gone. Two possibilities:
+    //   (a) The patch was already applied via a different shape — e.g.
+    //       a fork's housekeeping overlay, a previous version of the
+    //       patcher, or a hand-edit. If the new post-patch state is
+    //       present (postPatchSymbol), the file is already in the
+    //       patched state and we should report noop, not drift.
+    //   (b) Upstream actually restructured and the patch is now stale.
+    //       We surface the same drift message as before so the user
+    //       knows to update snippet.ts.
+    const newTextSentinel = extractSentinelFromNew(spec.newText);
+    if (newTextSentinel && original.includes(newTextSentinel)) {
+      return { status: 'noop', file: spec.filePath };
+    }
     return {
       status: 'upstream-drift',
       file: spec.filePath,
@@ -116,6 +149,10 @@ export async function applyPatch(
     };
   }
   if (spec.helperMarkerOld && !original.includes(spec.helperMarkerOld)) {
+    // The helper-marker anchor is gone. If we got this far, the
+    // postPatchSymbol check at line 136 didn't fire (else we'd have
+    // returned noop already), so the helper function is genuinely
+    // missing too. Report drift.
     return {
       status: 'upstream-drift',
       file: spec.filePath,

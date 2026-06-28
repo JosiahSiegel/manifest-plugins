@@ -113,15 +113,20 @@ if ! docker buildx version >/dev/null 2>&1; then
 fi
 
 # ---- step 1: ensure Manifest checkout --------------------------------------
+# The patcher applies byte-exact anchors against upstream/main. If the
+# user passes --manifest, we use that path as-is (it's their job to keep
+# it close to upstream). If --manifest is NOT passed, we always clone
+# a fresh shallow copy of MANIFEST_URL into a tempdir — never reuse a
+# sibling clone, because forks / local housekeeping overlays will have
+# drifted anchors and the patcher will fail with upstream-drift.
 if [[ -z "$MANIFEST_PATH" ]]; then
-  # Default: sibling clone
-  MANIFEST_PATH="$(cd "$PLUGINS_REPO_DIR/.." && pwd)/manifest"
-fi
-if [[ ! -d "$MANIFEST_PATH/.git" ]]; then
-  # Use the configured MANIFEST_URL (defaults to mnfst/manifest; can be
-  # overridden with --manifest-url to test against a fork).
-  echo "==> cloning $MANIFEST_URL into $MANIFEST_PATH (pass --manifest or --manifest-url to override)"
+  MANIFEST_PATH="$(mktemp -d -t manifest-build-XXXXXX)/manifest"
+  echo "==> cloning $MANIFEST_URL into $MANIFEST_PATH (fresh upstream copy; pass --manifest to reuse an existing checkout)"
   git clone --depth=1 "$MANIFEST_URL" "$MANIFEST_PATH"
+elif [[ ! -d "$MANIFEST_PATH/.git" ]]; then
+  # User passed --manifest but the path is invalid.
+  echo "error: --manifest path '$MANIFEST_PATH' is not a git checkout" >&2
+  exit 1
 fi
 MANIFEST_PATH="$(cd "$MANIFEST_PATH" && pwd)"
 echo "==> using Manifest checkout: $MANIFEST_PATH"
