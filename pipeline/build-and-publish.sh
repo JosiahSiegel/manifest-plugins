@@ -356,6 +356,7 @@ if (pluginsRoute.status && pluginsRoute.status !== 404) {
 }
 
 console.log("OK: all smoke checks passed");
+})();
 SMOKE_EOF
 docker run --rm \
   -v "$SMOKE_TEST_SCRIPT:/tmp/smoke-test.js:ro" \
