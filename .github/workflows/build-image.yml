@@ -148,7 +148,12 @@ jobs:
             git clone --depth=1 "https://github.com/mnfst/manifest.git" /tmp/manifest
             (cd /tmp/manifest && git checkout "${{ inputs.manifest_ref }}")
           fi
-          ./pipeline/build-and-publish.sh "${ARGS[@]}"
+          # Invoke the script via `bash` (not as `./pipeline/...sh`) so the
+          # workflow doesn't depend on the executable bit — git mode handling
+          # is platform-fragile (Windows + git on Mac/Linux can disagree on
+          # whether the executable bit survives a checkout). The script's
+          # shebang is also `/usr/bin/env bash` so this is equivalent.
+          bash pipeline/build-and-publish.sh "${ARGS[@]}"
 
       - name: Summary
         if: always()
