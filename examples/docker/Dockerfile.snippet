@@ -1,0 +1,89 @@
+# Dockerfile snippet for the manifest-plugins fork layer
+# ================================================
+#
+# Paste this into your Dockerfile just BEFORE the existing distroless
+# runtime stage (Stage 4). It assumes you already have a `prod-deps`
+# stage (Stage 3) that installed the manifest backend's npm dependencies.
+#
+# The snippet is a single self-contained block: the BuildKit stage
+# reference + the COPY commands + the metadata log. Drop it in as-is.
+#
+# You MUST invoke your build with --build-context manifest-plugins=...
+# so Docker can resolve the `manifest-plugins` named context. See
+# ../../README.md for the build invocation.
+
+# Stage 3b: Install the manifest-plugins package into the backend's
+# node_modules. Uses a named BuildKit build-context `manifest-plugins`
+# so the same Dockerfile works for local sibling-checkout builds and CI
+# git-URL builds.
+FROM prod-deps AS plugins-install
+COPY --from=manifest-plugins /package.json /app/node_modules/manifest-plugins/package.json
+COPY --from=manifest-plugins /dist /app/node_modules/manifest-plugins/dist
+RUN node -e "const p=require('/app/node_modules/manifest-plugins/package.json'); \
+              console.log('manifest-plugins installed'); \
+              console.log('  name:', p.name); \
+              console.log('  version:', p.version); \
+              console.log('  main:', p.main);"
+
+
+# Then in your Stage 4 (distroless runtime), add one extra COPY
+# alongside the existing node_modules copy:
+#
+#   FROM prod-deps AS runtime     # or your distroless base
+#   COPY --from=plugins-install /app/node_modules/manifest-plugins /app/node_modules/manifest-plugins
+#
+# Place this COPY AFTER your existing
+#   COPY --from=prod-deps ... /app/node_modules
+# line, so plugins are added to the same layer.
+
+
+# ============================================================================
+# Build invocations
+# ============================================================================
+#
+# Local (sibling clone, no clone needed):
+#
+#   docker build \
+#     --build-context manifest-plugins=../manifest-plugins \
+#     -t manifest:dev .
+#
+# CI (clone from git):
+#
+#   docker build \
+#     --build-context manifest-plugins=https://github.com/<owner>/manifest-plugins.git \
+#     -t manifest:dev .
+#
+# Build without plugins (must supply empty tarball — Docker rejects
+# missing named contexts):
+#
+#   tar -czf /tmp/empty.tgz --files-from=/dev/null
+#   docker build \
+#     --build-context manifest-plugins=/tmp/empty.tgz \
+#     -t manifest:noplugins .
+#
+# Verify the plugins are in the image (distroless has no shell, use node):
+#
+#   docker run --rm --entrypoint='["node","-e"]' manifest:dev \
+#     'require("/app/node_modules/manifest-plugins/package.json")'
+#
+# Expected output: name='@josiahsiegel/manifest-plugins', version=...
+#
+# The plugin host inside provider-client.ts is fail-safe: if the
+# package isn't present, `require('manifest-plugins')` returns nothing
+# inside a try/catch and requests continue without fork behavior.
+
+
+# ============================================================================
+# Why this design
+# ============================================================================
+#
+# - BuildKit named contexts let us reference a sibling repo (local
+#   development) OR a git URL (CI) without changing the Dockerfile.
+# - The plugin package has zero runtime dependencies (typescript, jest,
+#   etc. are all devDependencies), so we can copy `dist/` + `package.json`
+#   straight into `node_modules/manifest-plugins/` without an `npm install`
+#   step inside the build.
+# - Distroless runtime stays unchanged: plugins are pure JS, no native
+#   modules, no shell needed.
+# - Plugin host degrades to a no-op if `require('manifest-plugins')`
+#   fails — fork can build even without the plugins context.

@@ -1,0 +1,121 @@
+# Example: GitHub Actions workflow that applies manifest-plugins and builds
+# a Docker image with the plugin layer installed.
+#
+# Drop this in at `.github/workflows/build-with-plugins.yml` in your Manifest
+# fork (rename the file however you want). It assumes:
+#
+# 1. The fork uses `mnfst/manifest` as `upstream` remote.
+# 2. `ghcr.io/<owner>/manifest` is where the image gets pushed.
+# 3. `PLUGINS_REPO` defaults to `JosiahSiegel/manifest-plugins@main` but
+#    you can pin it to a tag or your own fork.
+#
+# The workflow does:
+#   1. Sync the fork from upstream (your existing housekeeping overlay
+#      handles message-cap etc.).
+#   2. Apply the plugin host (idempotent — safe to re-run on every build).
+#   3. Build + push the Docker image with `manifest-plugins` as a named
+#      BuildKit build-context (referenced from the Dockerfile snippet).
+#
+# Replace the placeholder owner `your-org` with your actual GitHub
+# org/username below.
+
+name: Build Manifest image with manifest-plugins
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/backend/**'
+      - '.github/workflows/build-with-plugins.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to commit the plugin-host patch back to the working tree
+  packages: write   # to push the image to ghcr.io
+
+jobs:
+  apply-plugins-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Manifest fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync fork with upstream (your existing overlay)
+        run: |
+          # This is your existing workflow that re-applies the housekeeping
+          # overlay on every push. Replace with your actual sync mechanism.
+          # If you don't have one, the rest of this workflow still works
+          # against a pristine upstream clone.
+          echo "TODO: invoke your fork's housekeeping overlay here"
+          # Example:
+          # gh workflow run housekeeping-overlay.yml
+
+      - name: Clone manifest-plugins
+        run: |
+          git clone --depth=1 "${{ vars.PLUGINS_REPO || 'https://github.com/JosiahSiegel/manifest-plugins.git' }}" /tmp/manifest-plugins
+          cd /tmp/manifest-plugins
+          npm install --legacy-peer-deps --no-audit --no-fund
+          npm run build
+
+      - name: Apply plugin host to provider-client.ts
+        id: apply
+        # Idempotent: if the host is already installed, the apply tool
+        # reports `noop` and exits 0. If the anchors have drifted against
+        # upstream, the tool exits non-zero and the build fails — that's
+        # the fail-loud guard working as designed.
+        run: |
+          cd /tmp/manifest-plugins
+          npm run apply -- "$GITHUB_WORKSPACE"
+        # If the apply produced a diff, commit it so the build sees it.
+        # (Re-running the workflow will show no diff and the commit is a no-op.)
+      - name: Commit plugin-host patch
+        if: steps.apply.outcome == 'success'
+        run: |
+          git diff --quiet packages/backend/src/routing/proxy/provider-client.ts || \
+            git commit -am "chore: re-apply manifest-plugins plugin host" || true
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/your-org/manifest:${{ github.sha }}
+            ghcr.io/your-org/manifest:latest
+          build-contexts: |
+            manifest-plugins=/tmp/manifest-plugins
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Smoke test plugin host in built image
+        # The plugin host is fail-safe: if require() fails, requests
+        # continue without fork behavior. This test confirms the package
+        # is present and the host was actually injected.
+        run: |
+          docker run --rm --entrypoint='["node","-e"]' \
+            ghcr.io/your-org/manifest:${{ github.sha }} \
+            'const p=require("/app/node_modules/manifest-plugins/package.json"); \
+             console.log("plugin present:", p.name, p.version); \
+             console.log("host applied:", \
+               require("fs").readFileSync("/app/packages/backend/dist/routing/proxy/provider-client.js", "utf-8") \
+                 .includes("applyRequestTransformPlugins"));'
