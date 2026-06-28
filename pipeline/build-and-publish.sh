@@ -159,7 +159,17 @@ echo "==> post-apply check: all three files have the host functions"
 if [[ -z "$IMAGE_TAG" ]]; then
   PLUGINS_VER="$(node -e "console.log(require('$PLUGINS_REPO_DIR/package.json').version)")"
   MANIFEST_SHA="$(git -C "$MANIFEST_PATH" rev-parse --short=12 HEAD)"
-  IMAGE_TAG="${PLUGINS_VER}+${MANIFEST_SHA}"
+  # Docker tag format: [A-Za-z0-9_][A-Za-z0-9_.-]{0,127}. The `+` we used
+  # to use here is illegal — replace with `.` (semver-build convention).
+  IMAGE_TAG="${PLUGINS_VER}.${MANIFEST_SHA}"
+fi
+
+# Validate the tag before passing to docker. Fail loud with a clear
+# message if any character would break docker's tag validation.
+if ! [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+  echo "error: computed IMAGE_TAG '$IMAGE_TAG' is not a valid docker tag" >&2
+  echo "  docker tag format: [A-Za-z0-9_][A-Za-z0-9_.-]{0,127}" >&2
+  exit 1
 fi
 
 # The image is named `manifest-with-plugins` so it's distinct from any
