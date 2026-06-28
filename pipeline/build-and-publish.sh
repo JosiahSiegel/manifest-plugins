@@ -235,6 +235,12 @@ echo "==> smoke test: confirm the host functions are present in the built image"
 # parsing. The distroless image has `node` at /nodejs/bin/node, so the
 # entrypoint override points at the absolute path.
 SMOKE_TEST_SCRIPT="$(mktemp -p /tmp smoke-test.XXXXXX.js)"
+# The distroless image runs as nonroot (UID 65532) but the file is
+# created by the host user (UID 1000 in CI). mktemp defaults to mode 0600
+# (owner-only) which the nonroot user inside the container can't read.
+# chmod a+r makes it world-readable so the in-container node can open
+# the file across the bind mount.
+chmod a+r "$SMOKE_TEST_SCRIPT"
 cat > "$SMOKE_TEST_SCRIPT" <<'SMOKE_EOF'
 const fs = require("fs");
 const host = fs.readFileSync("/app/packages/backend/dist/routing/proxy/provider-client.js", "utf-8");
