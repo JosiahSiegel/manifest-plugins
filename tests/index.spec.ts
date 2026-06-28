@@ -1,12 +1,16 @@
-import { plugins, AnthropicBillingHeaderPlugin } from '../src/index';
+import { plugins, AnthropicBillingHeaderPlugin, DefaultPolicyPlugin } from '../src/index';
 
 describe('plugin registry', () => {
-  it('exports exactly one plugin', () => {
-    expect(plugins).toHaveLength(1);
+  it('exports the two default plugins', () => {
+    expect(plugins).toHaveLength(2);
   });
 
-  it('exports the AnthropicBillingHeaderPlugin instance', () => {
-    expect(plugins[0]).toBeInstanceOf(AnthropicBillingHeaderPlugin);
+  it('includes the AnthropicBillingHeaderPlugin', () => {
+    expect(plugins).toContainEqual(expect.any(AnthropicBillingHeaderPlugin));
+  });
+
+  it('includes the DefaultPolicyPlugin', () => {
+    expect(plugins).toContainEqual(expect.any(DefaultPolicyPlugin));
   });
 
   it('freezes the registry to prevent runtime mutation', () => {

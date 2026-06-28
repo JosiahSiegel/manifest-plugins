@@ -1,89 +1,287 @@
 /**
- * The plugin-host patcher for mnfst/manifest's `provider-client.ts`.
+ * The plugin-host patcher for mnfst/manifest.
  *
- * Apply flow:
- *   1. Read the file.
- *   2. Verify the upstream anchors are present. If not, fail loudly with the
- *      exact anchor that moved so the user can update the snippet.
- *   3. Insert `HOST_HELPER_SOURCE` before `@Injectable()` (idempotent: if
- *      `applyRequestTransformPlugins` is already defined, no-op).
- *   4. Replace the Anthropic branch's `return { ... }; }` with the wrapped
- *      version that calls the helper (idempotent: if `transformed` is
- *      already in the return block, no-op).
+ * Patches three files to install the plugin host:
+ *   1. `packages/backend/src/routing/proxy/provider-client.ts` — wraps the
+ *      Anthropic branch's `return { ... }` with a call to
+ *      `applyRequestTransformPlugins(decision, current)`. Lets the
+ *      RequestTransformPlugin chain run per-request.
+ *   2. `packages/backend/src/routing/proxy/proxy-rate-limiter.ts` —
+ *      replaces the `const CONCURRENCY_MAX = 10;` constant with a call
+ *      to `getResolvedConcurrencyMax()`. Lets the RequestPolicyPlugin
+ *      chain override the per-agent concurrent-request cap.
+ *   3. `packages/backend/src/routing/proxy/proxy.service.ts` — replaces
+ *      the constructor's `this.maxMessagesPerRequest = parseMaxMessagesPerRequest(...)`
+ *      with a call to `getResolvedMaxMessagesPerRequest(this.config)`. Lets
+ *      the RequestPolicyPlugin chain override the per-request message-array cap.
  *
- * All operations are byte-exact against upstream/main. The patcher never
- * deletes or replaces anything outside the two anchored regions.
+ * Each patch is byte-exact against upstream/main and idempotent (running
+ * twice is a no-op). If upstream restructures, the patcher fails loudly
+ * with the exact anchor that moved.
+ *
+ * The host query functions (`applyRequestTransformPlugins`,
+ * `getResolvedConcurrencyMax`, `getResolvedMaxMessagesPerRequest`) are
+ * file-private — they're added immediately above the relevant class
+ * declaration by the apply tool.
  */
 import { promises as fs } from 'fs';
 import {
   HELPER_MARKER_OLD,
   HOST_HELPER_SOURCE,
+  PROXY_SERVICE_HOST_SOURCE,
+  PROXY_SERVICE_NEW,
+  PROXY_SERVICE_OLD,
   RETURN_NEW,
   RETURN_OLD,
+  RATE_LIMITER_NEW,
+  RATE_LIMITER_OLD,
   buildHelperMarkerNew,
 } from './snippet';
 
-export type ApplyResult =
-  | { status: 'applied'; helperInserted: boolean; returnReplaced: boolean }
-  | { status: 'noop'; helperInserted: boolean; returnReplaced: boolean }
-  | { status: 'upstream-drift'; reason: string };
+// =============================================================================
+// Shared types
+// =============================================================================
 
-const HOST_HELPER_SYMBOL = 'function applyRequestTransformPlugins(';
-const RETURN_TRANSFORMED_SYMBOL = 'const transformed = applyRequestTransformPlugins(';
+export type ApplyStatus = 'applied' | 'noop' | 'upstream-drift';
+
+export interface ApplyResult {
+  status: ApplyStatus;
+  file: string;
+  reason?: string;
+}
 
 export interface ApplyOptions {
   /** Dry-run: report what would change without writing. Default: false. */
   dryRun?: boolean;
 }
 
+interface PatchSpec {
+  /** Absolute or relative path to the source file. */
+  filePath: string;
+  /**
+   * Symbol (function/variable name) used to detect the post-patch state.
+   * If the file already contains this symbol, the patch is a no-op.
+   */
+  postPatchSymbol: string;
+  /**
+   * The exact upstream text to replace.
+   */
+  oldText: string;
+  /**
+   * The replacement text. May include a function definition that
+   * precedes the call site.
+   */
+  newText: string;
+  /**
+   * Where to insert the function definition (if any) that precedes the
+   * call site. The apply tool replaces this anchor with the helper
+   * definition + the `@Injectable()` line. Same shape as
+   * `HELPER_MARKER_OLD` for `provider-client.ts`.
+   */
+  helperMarkerOld?: string;
+  /**
+   * The new helper-marker text (replaces the old). If omitted, no helper
+   * is inserted (used for patches that don't add a function definition).
+   */
+  helperMarkerNew?: string;
+}
+
+// =============================================================================
+// Generic apply helper
+// =============================================================================
+
 /**
- * Apply the plugin-host patch to a Manifest `provider-client.ts`.
- *
- * @param filePath Absolute or relative path to the source file.
- * @param options  Optional behaviour overrides.
+ * Apply a single patch to a Manifest source file. Idempotent. Fail-loud on
+ * upstream drift.
+ */
+export async function applyPatch(
+  spec: PatchSpec,
+  options: ApplyOptions = {},
+): Promise<ApplyResult> {
+  const original = await fs.readFile(spec.filePath, 'utf-8');
+
+  // --- Idempotency check ---
+  if (original.includes(spec.postPatchSymbol)) {
+    return { status: 'noop', file: spec.filePath };
+  }
+
+  // --- Anchor check ---
+  if (!original.includes(spec.oldText)) {
+    return {
+      status: 'upstream-drift',
+      file: spec.filePath,
+      reason:
+        `upstream restructured ${spec.filePath} — the expected upstream anchor is missing. ` +
+        `Update src/host/snippet.ts to match the new upstream shape.`,
+    };
+  }
+  if (spec.helperMarkerOld && !original.includes(spec.helperMarkerOld)) {
+    return {
+      status: 'upstream-drift',
+      file: spec.filePath,
+      reason:
+        `upstream restructured ${spec.filePath} — the helper insertion marker is missing. ` +
+        `Update src/host/snippet.ts to match the new upstream shape.`,
+    };
+  }
+
+  // --- First apply ---
+  let next = original;
+  next = next.replace(spec.oldText, spec.newText);
+  if (spec.helperMarkerNew) {
+    next = next.replace(spec.helperMarkerOld!, spec.helperMarkerNew);
+  }
+
+  if (!options.dryRun) {
+    await fs.writeFile(spec.filePath, next, 'utf-8');
+  }
+  return { status: 'applied', file: spec.filePath };
+}
+
+// =============================================================================
+// Per-file patch specs
+// =============================================================================
+
+/**
+ * Patch `provider-client.ts` to install the Anthropic request-transform
+ * host. Two operations: insert `applyRequestTransformPlugins` helper
+ * before the `ProviderClient` class, then replace the Anthropic branch's
+ * `return { ... }` with a call to the helper.
  */
 export async function applyProviderClientHost(
   filePath: string,
   options: ApplyOptions = {},
 ): Promise<ApplyResult> {
-  const original = await fs.readFile(filePath, 'utf-8');
+  return applyPatch(
+    {
+      filePath,
+      postPatchSymbol: 'function applyRequestTransformPlugins(',
+      oldText: RETURN_OLD,
+      newText: RETURN_NEW,
+      helperMarkerOld: HELPER_MARKER_OLD,
+      helperMarkerNew: buildHelperMarkerNew(),
+    },
+    options,
+  );
+}
 
-  // --- State detection ---
-  const hasUpstreamAnchors =
-    original.includes(HELPER_MARKER_OLD) && original.includes(RETURN_OLD);
-  const alreadyPatched =
-    original.includes(HOST_HELPER_SYMBOL) &&
-    original.includes(RETURN_TRANSFORMED_SYMBOL);
+/**
+ * Patch `proxy-rate-limiter.ts` to install the rate-limit host. Two
+ * operations: insert `getResolvedConcurrencyMax` helper before the
+ * `@Injectable()` decorator of the class, then replace the
+ * `const CONCURRENCY_MAX = 10;` constant with a call to the helper.
+ */
+export async function applyProxyRateLimiterHost(
+  filePath: string,
+  options: ApplyOptions = {},
+): Promise<ApplyResult> {
+  // Helper insertion marker: the `@Injectable()` decorator + class
+  // declaration. We include `implements OnModuleDestroy` because the
+  // upstream class declares that interface; if upstream adds/removes an
+  // interface, update this anchor.
+  const helperMarkerOld = `@Injectable()
+export class ProxyRateLimiter implements OnModuleDestroy {
+`;
+  const helperMarkerNew = `${HOST_HELPER_SOURCE}${helperMarkerOld}`;
+  return applyPatch(
+    {
+      filePath,
+      postPatchSymbol: 'function getResolvedConcurrencyMax(',
+      oldText: RATE_LIMITER_OLD,
+      newText: RATE_LIMITER_NEW,
+      helperMarkerOld,
+      helperMarkerNew,
+    },
+    options,
+  );
+}
 
-  if (!hasUpstreamAnchors && !alreadyPatched) {
-    const missing: string[] = [];
-    if (!original.includes(HELPER_MARKER_OLD)) {
-      missing.push('helper insertion marker (HELPER_MARKER_OLD)');
-    }
-    if (!original.includes(RETURN_OLD)) {
-      missing.push('return block (RETURN_OLD)');
-    }
-    return {
-      status: 'upstream-drift',
-      reason:
-        `upstream/main restructured provider-client.ts — missing anchors: ` +
-        missing.join(', ') +
-        '. Update src/host/snippet.ts to match new upstream shape.',
-    };
-  }
+/**
+ * Patch `proxy.service.ts` to install the message-cap host. Two
+ * operations: insert `getResolvedMaxMessagesPerRequest` helper before
+ * the class, then replace the constructor's
+ * `this.maxMessagesPerRequest = parseMaxMessagesPerRequest(...)` block
+ * with a call to the helper.
+ */
+export async function applyProxyServiceHost(
+  filePath: string,
+  options: ApplyOptions = {},
+): Promise<ApplyResult> {
+  // The helper marker here is the end of the `ProxyService` class's
+  // import block, ending with the import of `parseMaxMessagesPerRequest`
+  // and a blank line, before the class declaration. We use the line
+  // right before `@Injectable()` to anchor.
+  const helperMarkerOld = `import { parseMaxMessagesPerRequest } from './message-limit';
+`;
+  const helperMarkerNew = `${PROXY_SERVICE_HOST_SOURCE}import { parseMaxMessagesPerRequest } from './message-limit';
+`;
+  return applyPatch(
+    {
+      filePath,
+      postPatchSymbol: 'function getResolvedMaxMessagesPerRequest(',
+      oldText: PROXY_SERVICE_OLD,
+      newText: PROXY_SERVICE_NEW,
+      helperMarkerOld,
+      helperMarkerNew,
+    },
+    options,
+  );
+}
 
-  // --- Already patched — no-op ---
-  if (alreadyPatched) {
-    return { status: 'noop', helperInserted: false, returnReplaced: false };
-  }
+// =============================================================================
+// Manifest-checkout orchestrator
+// =============================================================================
 
-  // --- First apply ---
-  let next = original;
-  next = next.replace(HELPER_MARKER_OLD, buildHelperMarkerNew());
-  next = next.replace(RETURN_OLD, RETURN_NEW);
+/**
+ * Apply all three patches to a Manifest checkout. Returns the per-file
+ * results. If any single file reports `upstream-drift`, the others still
+ * run (so the user sees the full picture of what needs to be updated),
+ * but no file is written if `dryRun` is true.
+ */
+export interface ManifestFileSpec {
+  providerClient: string;
+  proxyRateLimiter: string;
+  proxyService: string;
+}
 
-  if (!options.dryRun) {
-    await fs.writeFile(filePath, next, 'utf-8');
-  }
-  return { status: 'applied', helperInserted: true, returnReplaced: true };
+export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
+  providerClient: 'packages/backend/src/routing/proxy/provider-client.ts',
+  proxyRateLimiter: 'packages/backend/src/routing/proxy/proxy-rate-limiter.ts',
+  proxyService: 'packages/backend/src/routing/proxy/proxy.service.ts',
+};
+
+export interface ApplyAllResult {
+  providerClient: ApplyResult;
+  proxyRateLimiter: ApplyResult;
+  proxyService: ApplyResult;
+  /** True if all three patches are applied (or were already no-op). */
+  fullyApplied: boolean;
+  /** True if at least one file reported upstream drift. */
+  hasDrift: boolean;
+}
+
+export async function applyAll(
+  manifestRoot: string,
+  files: ManifestFileSpec = DEFAULT_MANIFEST_FILES,
+  options: ApplyOptions = {},
+): Promise<ApplyAllResult> {
+  const resolve = (rel: string) => `${manifestRoot.replace(/\/$/, '')}/${rel}`;
+  const [providerClient, proxyRateLimiter, proxyService] = await Promise.all([
+    applyProviderClientHost(resolve(files.providerClient), options),
+    applyProxyRateLimiterHost(resolve(files.proxyRateLimiter), options),
+    applyProxyServiceHost(resolve(files.proxyService), options),
+  ]);
+  return {
+    providerClient,
+    proxyRateLimiter,
+    proxyService,
+    fullyApplied:
+      providerClient.status !== 'upstream-drift' &&
+      proxyRateLimiter.status !== 'upstream-drift' &&
+      proxyService.status !== 'upstream-drift',
+    hasDrift:
+      providerClient.status === 'upstream-drift' ||
+      proxyRateLimiter.status === 'upstream-drift' ||
+      proxyService.status === 'upstream-drift',
+  };
 }

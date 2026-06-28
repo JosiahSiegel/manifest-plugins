@@ -1,23 +1,29 @@
-# Example: GitHub Actions workflow that applies manifest-plugins and builds
-# a Docker image with the plugin layer installed.
+# Example: GitHub Actions workflow that builds a Manifest Docker image
+# with the manifest-plugins plugin layer installed.
 #
-# Drop this in at `.github/workflows/build-with-plugins.yml` in your Manifest
-# fork (rename the file however you want). It assumes:
+# Drop this in at `.github/workflows/build-with-plugins.yml` in a Manifest
+# checkout (typically a direct clone of mnfst/manifest, or your fork).
+# It assumes:
 #
-# 1. The fork uses `mnfst/manifest` as `upstream` remote.
-# 2. `ghcr.io/<owner>/manifest` is where the image gets pushed.
-# 3. `PLUGINS_REPO` defaults to `JosiahSiegel/manifest-plugins@main` but
-#    you can pin it to a tag or your own fork.
+#   1. The workflow's `actions/checkout` is the Manifest source tree.
+#   2. `ghcr.io/<owner>/manifest` is where the image gets pushed.
+#   3. `PLUGINS_REPO` defaults to `JosiahSiegel/manifest-plugins@main` but
+#      you can pin it to a tag or your own fork.
 #
 # The workflow does:
-#   1. Sync the fork from upstream (your existing housekeeping overlay
-#      handles message-cap etc.).
-#   2. Apply the plugin host (idempotent — safe to re-run on every build).
-#   3. Build + push the Docker image with `manifest-plugins` as a named
-#      BuildKit build-context (referenced from the Dockerfile snippet).
+#   1. Checks out the Manifest source tree.
+#   2. Clones the plugins repo at the pinned ref, installs + builds it.
+#   3. Applies the plugin host to all three target files (idempotent —
+#      safe to re-run on every build).
+#   4. Builds + pushes the Docker image with `manifest-plugins` as a
+#      named BuildKit build-context (referenced from the Dockerfile
+#      snippet).
+#   5. Smoke-tests the plugin host in the built image.
 #
 # Replace the placeholder owner `your-org` with your actual GitHub
-# org/username below.
+# org/username below. The trigger is intentionally broad (every push to
+# main) because there's no fork-vs-upstream distinction — the apply step
+# is idempotent, so re-running on every build is safe and cheap.
 
 name: Build Manifest image with manifest-plugins
 
@@ -37,7 +43,7 @@ jobs:
   apply-plugins-and-build:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out Manifest fork
+      - name: Check out Manifest source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -59,16 +65,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sync fork with upstream (your existing overlay)
-        run: |
-          # This is your existing workflow that re-applies the housekeeping
-          # overlay on every push. Replace with your actual sync mechanism.
-          # If you don't have one, the rest of this workflow still works
-          # against a pristine upstream clone.
-          echo "TODO: invoke your fork's housekeeping overlay here"
-          # Example:
-          # gh workflow run housekeeping-overlay.yml
-
       - name: Clone manifest-plugins
         run: |
           git clone --depth=1 "${{ vars.PLUGINS_REPO || 'https://github.com/JosiahSiegel/manifest-plugins.git' }}" /tmp/manifest-plugins
@@ -76,22 +72,30 @@ jobs:
           npm install --legacy-peer-deps --no-audit --no-fund
           npm run build
 
-      - name: Apply plugin host to provider-client.ts
+      - name: Apply plugin host to all three target files
         id: apply
-        # Idempotent: if the host is already installed, the apply tool
-        # reports `noop` and exits 0. If the anchors have drifted against
-        # upstream, the tool exits non-zero and the build fails — that's
-        # the fail-loud guard working as designed.
+        # Idempotent: if the host is already installed (e.g. a previous
+        # run), the apply tool reports `noop` for each file. If any
+        # anchor has drifted against upstream, the tool exits non-zero
+        # and the build fails — that's the fail-loud guard working as
+        # designed. New in v0.2: the apply tool patches three files
+        # (provider-client.ts + proxy-rate-limiter.ts + proxy.service.ts),
+        # not just one.
         run: |
           cd /tmp/manifest-plugins
           npm run apply -- "$GITHUB_WORKSPACE"
         # If the apply produced a diff, commit it so the build sees it.
         # (Re-running the workflow will show no diff and the commit is a no-op.)
+
       - name: Commit plugin-host patch
         if: steps.apply.outcome == 'success'
         run: |
-          git diff --quiet packages/backend/src/routing/proxy/provider-client.ts || \
+          if ! git diff --quiet \
+              packages/backend/src/routing/proxy/provider-client.ts \
+              packages/backend/src/routing/proxy/proxy-rate-limiter.ts \
+              packages/backend/src/routing/proxy/proxy.service.ts; then
             git commit -am "chore: re-apply manifest-plugins plugin host" || true
+          fi
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -110,12 +114,22 @@ jobs:
       - name: Smoke test plugin host in built image
         # The plugin host is fail-safe: if require() fails, requests
         # continue without fork behavior. This test confirms the package
-        # is present and the host was actually injected.
+        # is present, the host was actually injected into all three files,
+        # and the requested plugins are instantiated (unless filtered out
+        # via manifest-plugins.config.json at build time).
         run: |
           docker run --rm --entrypoint='["node","-e"]' \
             ghcr.io/your-org/manifest:${{ github.sha }} \
-            'const p=require("/app/node_modules/manifest-plugins/package.json"); \
-             console.log("plugin present:", p.name, p.version); \
-             console.log("host applied:", \
-               require("fs").readFileSync("/app/packages/backend/dist/routing/proxy/provider-client.js", "utf-8") \
-                 .includes("applyRequestTransformPlugins"));'
+            'const p=require("/app/node_modules/manifest-plugins/package.json");
+             console.log("plugin present:", p.name, p.version);
+             console.log("plugin array:", require("/app/node_modules/manifest-plugins/dist/index.js").plugins.map(x => x.constructor.name));
+             const fs = require("fs");
+             console.log("provider-client host applied:",
+               fs.readFileSync("/app/packages/backend/dist/routing/proxy/provider-client.js", "utf-8")
+                 .includes("applyRequestTransformPlugins"));
+             console.log("rate-limiter host applied:",
+               fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy-rate-limiter.js", "utf-8")
+                 .includes("getResolvedConcurrencyMax"));
+             console.log("proxy-service host applied:",
+               fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy.service.js", "utf-8")
+                 .includes("getResolvedMaxMessagesPerRequest"));'

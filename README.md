@@ -1,32 +1,38 @@
 # `@josiahsiegel/manifest-plugins`
 
-Request-transform plugins for [mnfst/manifest](https://github.com/mnfst/manifest), applied to any Manifest checkout via `npm run apply`. Works on upstream, a fork, or a plain local clone. The plugins themselves are fork-flavored (e.g. Anthropic OAuth billing headers for Claude Pro/Max), but the apply tool itself doesn't care what kind of Manifest it patches.
+Request-transform plugins for [mnfst/manifest](https://github.com/mnfst/manifest), applied to any Manifest checkout via `npm run apply`. Works on upstream, a fork, or a plain local clone.
 
-The flagship plugin ships today: `AnthropicBillingHeaderPlugin` injects the `x-anthropic-billing-header` required by Anthropic's upstream classifier for OAuth subscription tokens (Claude Pro / Max). Without it, Claude Pro/Max traffic gets 429'd as out-of-credit.
+The plugins are **installable request transforms and policy overrides** for Manifest. The flagship plugin (`AnthropicBillingHeaderPlugin`) injects the `x-anthropic-billing-header` required by Anthropic's upstream classifier for OAuth subscription tokens (Claude Pro / Max). Without it, Claude Pro/Max traffic gets 429'd as out-of-credit. The default-policy plugin (`DefaultPolicyPlugin`) provides sensible baseline rate-limit + message-cap policies.
+
+The apply tool patches **three** Manifest source files to install the plugin host:
+
+- `provider-client.ts` — wraps the Anthropic branch's outbound request with `applyRequestTransformPlugins(decision, current)` (per-request transform hook).
+- `proxy-rate-limiter.ts` — replaces the hardcoded `CONCURRENCY_MAX = 10` with `getResolvedConcurrencyMax()` (config-time policy hook).
+- `proxy.service.ts` — replaces the constructor's message-cap check with `getResolvedMaxMessagesPerRequest(this.config)` (config-time policy hook).
+
+Each patch is byte-exact against upstream/main and idempotent. After every `git pull` of upstream, run `npm run apply -- /path/to/manifest` to re-inject the hosts. No fork, no housekeeping overlay, no source patches to maintain.
 
 ---
 
-## 5-minute happy path (fork, local)
+## 5-minute happy path
 
 ```bash
-# Terminal 1 — set up the plugins repo
+# Clone both repos as siblings
 git clone https://github.com/JosiahSiegel/manifest-plugins.git
+git clone --depth=1 https://github.com/mnfst/manifest.git ../manifest
+# OR: git clone https://github.com/<your-org>/manifest.git ../manifest  (fork is fine too)
+
 cd manifest-plugins
 npm install --legacy-peer-deps
 npm run build
 
-# Terminal 2 — clone Manifest as a sibling (or use an existing fork)
-git clone --depth=1 https://github.com/mnfst/manifest.git ../manifest
-# OR: git clone https://github.com/<your-org>/manifest.git ../manifest
-
-# Apply the plugin host to the sibling Manifest checkout
-cd manifest-plugins
+# Apply the plugin host to all three files in the sibling Manifest checkout
 npm run apply -- ../manifest
-# → "applied (helperInserted=true, returnReplaced=true)"
+# → applied all three files (or reports noop if already applied)
 
 # Verify
 npm run verify -- ../manifest
-# → "OK — host installed in <path>"
+# → OK — host installed in <path>
 
 # Build a Docker image with the plugins
 docker build \
@@ -39,21 +45,41 @@ docker build \
 docker run --rm -p 3001:3001 manifest:dev
 ```
 
-That's it. The image has the plugin host baked in, and Anthropic Pro/Max traffic to it will no longer 429 out-of-credit.
-
----
-
-## 5-minute happy path (upstream, no fork)
-
-Same as above but `git clone https://github.com/mnfst/manifest.git ../manifest` instead of your fork. The apply tool doesn't know or care that it's upstream — it just patches the file. Run `npm run apply -- ../manifest` once after every fresh clone or upstream sync.
+That's it. The image has all three hosts baked in, Anthropic Pro/Max traffic no longer 429s, and there's no fork-specific source code to maintain.
 
 ---
 
 ## What this is
 
-`mnfst/manifest` (the upstream model router) is a single-service codebase. This repo holds the **plugin host** (a small TS function pasted into `provider-client.ts` at apply time) and a registry of **plugins** (each implementing `RequestTransformPlugin`). When the plugin host is installed in a Manifest checkout — upstream, fork, or local clone — every outgoing Anthropic (and future) request flows through the plugin chain, letting you inject headers, mutate the body, or rewrite the URL.
+`mnfst/manifest` (the upstream model router) is a single-service codebase. This repo holds the **plugin host** (a small TS function pasted into three Manifest source files at apply time) and a registry of **plugins** (each implementing one or both of the plugin interfaces). When the plugin host is installed in a Manifest checkout — upstream, fork, or local clone — every outgoing Anthropic (and future) request flows through the plugin chain, and every constructor / constant read consults the policy chain.
 
-The plugin host is **fail-safe**: if `require('manifest-plugins')` throws (package missing, broken install), the host catches it and the request continues as-is. A fork can build with or without the plugins context.
+The plugin host is **fail-safe**: if `require('manifest-plugins')` throws (package missing, broken install), the host catches it and the request continues as-is. A vanilla upstream install builds and runs without any of this; a plugin-enabled build is purely additive.
+
+## Two plugin kinds
+
+| Kind | Lifecycle | When called | Files touched |
+|---|---|---|---|
+| `RequestTransformPlugin` | per-request | every outgoing Anthropic request | `provider-client.ts` host wraps the request before fetch |
+| `RequestPolicyPlugin` | config-time | once per process (in constructor / module load) | `proxy-rate-limiter.ts` + `proxy.service.ts` hosts read policy at startup |
+
+A plugin can implement either or both. The host detects the kind by method presence (duck-typing). The first non-null value returned by any policy plugin wins; later plugins are skipped for that field.
+
+```ts
+// Per-request transform (e.g. inject OAuth headers)
+export interface RequestTransformPlugin {
+  transformRequest(decision: RequestTransformDecision):
+    | { url?: string; headers?: Record<string, string>; requestBody?: Record<string, unknown> }
+    | undefined;
+}
+
+// Config-time policy (e.g. set concurrency / message-cap defaults)
+export interface RequestPolicyPlugin {
+  getRateLimitPolicy(): RateLimitPolicy | null;
+  // where RateLimitPolicy = { concurrencyMax: number | null; maxMessagesPerRequest: number | null }
+}
+```
+
+Plugin errors MUST be non-fatal: the host catches and logs them and continues with the original request. Never throw to abort.
 
 ## Layout
 
@@ -61,23 +87,29 @@ The plugin host is **fail-safe**: if `require('manifest-plugins')` throws (packa
 manifest-plugins/
 ├── .gitattributes                   # enforces LF line endings across the repo
 ├── .gitignore
+├── config.example.json               # template for the user's manifest-plugins.config.json
 ├── package.json                     # @josiahsiegel/manifest-plugins
 ├── tsconfig.json                    # strict TS, LF enforced
 ├── jest.config.js                   # 100% line + branch + statement coverage
+├── scripts/
+│   └── filter-plugins.mjs           # post-build: rewrites dist/index.js to exclude plugins per config
 ├── src/
 │   ├── index.ts                     # plugin registry (export const plugins = [...])
 │   ├── host/
-│   │   ├── snippet.ts               # the TS source pasted into provider-client.ts
-│   │   ├── apply.ts                 # idempotent patcher (applyProviderClientHost)
+│   │   ├── snippet.ts               # TS source pasted into the three Manifest files
+│   │   ├── apply.ts                 # generic applyPatch + per-file wrappers + applyAll
 │   │   ├── cli.ts                   # `npm run apply -- <manifest-checkout>`
 │   │   └── verify.ts                # `npm run verify -- <manifest-checkout>`
 │   └── plugins/
-│       └── anthropic-billing-header/
-│           ├── plugin.ts            # the plugin
-│           ├── plugin.spec.ts       # 100% coverage
-│           └── README.md            # plugin-specific docs
+│       ├── anthropic-billing-header/
+│       │   ├── plugin.ts            # the Anthropic billing-header transform plugin
+│       │   ├── plugin.spec.ts       # 100% coverage
+│       │   └── README.md            # plugin-specific docs
+│       └── default-policy/
+│           ├── plugin.ts            # the default RequestPolicyPlugin
+│           └── plugin.spec.ts       # 100% coverage
 ├── tests/
-│   ├── apply.spec.ts                # patcher integration test (runs tsc on patched file)
+│   ├── apply.spec.ts                # patcher integration tests (3 files, idempotency, drift)
 │   └── index.spec.ts                # plugin registry test
 ├── examples/
 │   ├── docker/
@@ -89,6 +121,37 @@ manifest-plugins/
 └── docs/
     └── TROUBLESHOOTING.md           # concrete failure modes + fixes
 ```
+
+## Selecting plugins at build time
+
+By default, every plugin in the registry is enabled. To exclude specific plugins from the built `dist/index.js` (and therefore from the docker image), create a `manifest-plugins.config.json` at the repo root:
+
+```bash
+cp config.example.json manifest-plugins.config.json
+# edit and set the plugins you want to exclude to false
+```
+
+Schema:
+
+```json
+{
+  "plugins": {
+    "AnthropicBillingHeaderPlugin": true,
+    "DefaultPolicyPlugin": false
+  }
+}
+```
+
+- Keys = plugin class names (validated against the registry at build time — typos fail loud).
+- Values = `true` to include, `false` to exclude. Default if absent = enabled.
+- If `manifest-plugins.config.json` is absent, **all plugins are enabled**.
+
+The post-build step (`scripts/filter-plugins.mjs`) reads the config and rewrites `dist/index.js` to instantiate only the enabled plugins. The TS source (`src/index.ts`) stays unfiltered, so `npm test` runs against the full plugin set with 100% coverage. The runtime image carries only the chosen subset.
+
+**Use cases:**
+- Build a minimal "no fork behavior" image: exclude `DefaultPolicyPlugin` (revert to upstream's hardcoded `CONCURRENCY_MAX = 10` and the 1000-message cap).
+- Build an "Anthropic-only" image: exclude `DefaultPolicyPlugin` (use AnthropicBillingHeaderPlugin only).
+- Build an "everything-off" image: exclude both — then `require('manifest-plugins')` returns an empty plugins array, hosts no-op, runtime behaves like vanilla upstream.
 
 ## Examples
 
@@ -105,10 +168,10 @@ Working, copy-pasteable examples live under `examples/`:
 ```bash
 cd manifest-plugins
 npm install --legacy-peer-deps    # --legacy-peer-deps avoids the ts-node peer-dep conflict
-npm run build                     # produces dist/ for the docker build
+npm run build                     # tsc + filter-plugins (filters per manifest-plugins.config.json)
 ```
 
-### Apply
+### Apply (all three files)
 
 ```bash
 # Default: looks for ../manifest relative to this repo.
@@ -121,7 +184,7 @@ npm run apply -- /path/to/manifest
 MANIFEST_CHECKOUT=/path/to/manifest npm run apply
 ```
 
-The apply tool is **idempotent** — running it twice is safe. After it has been applied once, subsequent runs report `noop`. The tool is also **fail-loud on upstream drift**: if `provider-client.ts` restructured upstream (anchors moved), it raises `SystemExit` with a clear message rather than producing a broken patch.
+The apply tool is **idempotent** — running it twice is safe. After it has been applied once, subsequent runs report `noop` for all three files. The tool is also **fail-loud on upstream drift**: if any of the three files restructured upstream (anchors moved), it raises an error per file with a clear message rather than producing a broken patch.
 
 ### Verify
 
@@ -130,7 +193,7 @@ npm run verify                  # checks ../manifest
 npm run verify -- /custom/path  # checks an arbitrary checkout
 ```
 
-Exits 0 if the host is installed, 1 otherwise. Useful as a smoke test before/after a sync run.
+Exits 0 if the host is installed in all three files, 1 otherwise. Useful as a smoke test before/after an upstream `git pull`.
 
 ### Docker build
 
@@ -149,7 +212,7 @@ Or use the all-in-one script: `./examples/scripts/build-fork-image.sh`.
 
 ### After every upstream sync
 
-If you use a fork with the housekeeping overlay (which resets to upstream/main on every sync), re-apply the plugin host after each sync:
+Direct upstream clones (or forks that rebase on upstream) get the original `provider-client.ts`, `proxy-rate-limiter.ts`, `proxy.service.ts` back on every pull. Re-apply the plugin host:
 
 ```bash
 # Local:
@@ -160,33 +223,18 @@ npm run apply -- ../manifest
 - run: cd manifest-plugins && npm run apply -- $GITHUB_WORKSPACE
 ```
 
-The apply is idempotent — running it twice on a freshly-synced manifest will report `noop` the second time.
-
-## Plugin contract
-
-Every plugin implements:
-
-```ts
-interface RequestTransformPlugin {
-  transformRequest(decision: RequestTransformDecision):
-    | { url?: string; headers?: Record<string, string>; requestBody?: Record<string, unknown> }
-    | undefined;
-}
-```
-
-Plugins receive the routing decision (`endpointKey`, `authType`, `bareModel`, etc.) plus the outgoing `url` / `headers` / `requestBody` the host already computed. Return whatever you want to override; unspecified fields pass through.
-
-Plugin errors are caught by the host and logged; one broken plugin must not break the request. Never throw to abort.
+The apply is idempotent — running it twice on a freshly-pulled manifest will report `noop` the second time.
 
 ## Adding a new plugin
 
-1. Create `src/plugins/<name>/plugin.ts` implementing `RequestTransformPlugin`.
+1. Create `src/plugins/<name>/plugin.ts` implementing `RequestTransformPlugin` and/or `RequestPolicyPlugin`.
 2. Create `src/plugins/<name>/plugin.spec.ts` with 100% coverage.
 3. Add the plugin instance to `plugins` in `src/index.ts`.
-4. Bump the version in `package.json` and `npm run build`.
-5. `npm run apply -- <manifest-checkout>` to pick up the change at runtime (only needed if you change the **plugin host** itself; new plugins are picked up automatically by the next docker build).
+4. Add the class name to `PLUGIN_CLASS_NAMES` in `scripts/filter-plugins.mjs` (so it can be excluded via config).
+5. Bump the version in `package.json` and `npm run build`.
+6. (Optional) Update `manifest-plugins.config.json` to enable/disable the new plugin per build target.
 
-No overlay edits. No upstream-sync collisions.
+No apply-tool edits are needed for new plugins — they're picked up automatically by the next docker build.
 
 ## Environment knobs
 
@@ -194,6 +242,7 @@ No overlay edits. No upstream-sync collisions.
 | ----------------------- | ----------- | ----------------------------------------------------------------------- |
 | `MANIFEST_CC_VERSION`   | `2.1.117`   | Claude Code version stamped into `cc_version`. Bump when Anthropic rotates the classifier. |
 | `MANIFEST_CCH_VALUE`    | (empty)     | Overrides the SHA-derived `cch` token. Empty → use `00000`. Set to a hex value to force a specific token. |
+| `MANIFEST_CHECKOUT`     | `../manifest` | Path to the Manifest checkout for `npm run apply` / `npm run verify`. |
 
 ## Line endings
 
@@ -202,19 +251,20 @@ No overlay edits. No upstream-sync collisions.
 ## Tests
 
 ```bash
-npm test              # 27/27 tests pass
+npm test              # 39/39 tests pass
 npm run test:coverage # 100% line + branch + statement + function coverage
 ```
 
 Coverage is enforced at 100% lines + branches + statements via `jest.config.js`'s `coverageThreshold.global`. CI fails if any new code path is uncovered.
 
-The `apply.spec.ts` integration test copies upstream's `provider-client.ts` into a tempdir, runs the patcher, asserts idempotency, then runs `tsc --noEmit` against the patched file to ensure the inserted TS is syntactically valid in the real backend tsconfig context.
+The `apply.spec.ts` integration test copies upstream's three target files into a tempdir, runs `applyAll()`, asserts idempotency + per-file results, and runs `tsc --noEmit` against the patched files to ensure the inserted TS is syntactically valid in the real backend tsconfig context.
 
 ## Troubleshooting
 
 See [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) for concrete failure modes and fixes. Common issues:
 
-- **"upstream-drift"** — upstream refactored `provider-client.ts` and the anchors moved. Update `src/host/snippet.ts` (the constants) and bump the version.
+- **"upstream-drift"** — upstream refactored one of the three target files and the anchor moved. Update `src/host/snippet.ts` (the constants) and bump the version.
 - **`docker build` fails with "forbidden path outside build context"** — you forgot `--build-context manifest-plugins=...`.
-- **Image runs but Anthropic Pro/Max traffic still gets 429** — usually means `provider-client.ts` was reset by the housekeeping overlay. Re-apply via `npm run apply`.
+- **Image runs but Anthropic Pro/Max traffic still gets 429** — usually means `provider-client.ts` was reverted (e.g. by a fresh `git pull`). Re-apply via `npm run apply`.
 - **Tests fail on Windows with "Invalid regular expression"** — CRLF got into your checkout. Run `git config core.autocrlf false` and re-clone.
+- **Build fails with "unknown plugin"** — typo in `manifest-plugins.config.json`. The class name must match an exported plugin (validated against the registry at build time).

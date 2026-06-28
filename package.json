@@ -14,7 +14,7 @@
     "src/host/apply.ts"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && find dist -type f \\( -name '*.spec.js' -o -name '*.spec.d.ts' -o -name '*.spec.js.map' -o -name '*.spec.d.ts.map' \\) -delete",
+    "build": "tsc -p tsconfig.json && find dist -type f \\( -name '*.spec.js' -o -name '*.spec.d.ts' -o -name '*.spec.js.map' -o -name '*.spec.d.ts.map' \\) -delete && node scripts/filter-plugins.mjs",
     "clean": "rimraf dist coverage .tsbuildinfo",
     "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts'",
     "test": "jest",

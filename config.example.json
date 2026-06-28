@@ -1,0 +1,12 @@
+{
+  "_comment": "Build-time plugin exclusion config. Copy this file to `manifest-plugins.config.json` (without the `_comment` field) and edit the boolean values. Default: all plugins enabled. If `manifest-plugins.config.json` is absent, the build emits all plugins.",
+  "_schema": {
+    "plugins": {
+      "<ClassName>": "boolean (true to include, false to exclude)"
+    }
+  },
+  "plugins": {
+    "AnthropicBillingHeaderPlugin": true,
+    "DefaultPolicyPlugin": true
+  }
+}

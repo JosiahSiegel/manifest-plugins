@@ -1,26 +1,51 @@
 /**
- * Fork-only plugins for mnfst/manifest.
+ * Plugins for mnfst/manifest.
  *
- * Each plugin implements the {@link RequestTransformPlugin} interface and is
- * auto-loaded by the host (installed via `npm run apply`) via
- * `require('manifest-plugins').plugins`.
+ * The plugins repo has two plugin kinds, distinguished by lifecycle:
+ *
+ *   - RequestTransformPlugin — per-request, called by the host in
+ *     `provider-client.ts` immediately before the upstream HTTP fetch.
+ *     Lets the plugin mutate headers, body, or URL (e.g. inject OAuth
+ *     billing headers, prepend a system-prompt preamble).
+ *
+ *   - RequestPolicyPlugin — config-time, called by the host in
+ *     `proxy-rate-limiter.ts` and `proxy.service.ts` constructors. Lets
+ *     the plugin set per-agent concurrency caps, message-array caps, etc.
+ *     Called once per process (the result is cached in the host).
+ *
+ * Both kinds live in the same `plugins` array. The host detects the kind
+ * by method presence (duck-typing). A plugin can implement either or
+ * both kinds.
  *
  * To add a new plugin:
- *   1. Create `src/plugins/<name>/plugin.ts` implementing the interface.
- *   2. Add it to the `plugins` array below.
- *   3. Add the same export path in the `package.json` `files` field if
- *      the plugin ships its own source files (currently only `src/host/*`
- *      and `dist/*` are shipped — the in-tree `src/index.ts` references the
- *      compiled `dist/plugins/...` paths via ts-jest's module resolution).
+ *   1. Create `src/plugins/<name>/plugin.ts` implementing the interface(s).
+ *   2. Add the plugin instance to the `plugins` array below.
+ *   3. `npm test && npm run build` and push.
  *
- * Re-run `npm run apply` against the Manifest checkout, then re-build the
- * Docker image to pick up the new plugin. No overlay edits required.
+ * The apply tool (`src/host/cli.ts`) handles the source-code side: it
+ * patches `provider-client.ts`, `proxy-rate-limiter.ts`, and
+ * `proxy.service.ts` to install the host extensions. After every
+ * `git pull` of upstream, run `npm run apply -- /path/to/manifest` to
+ * re-inject the hosts. No fork repo or housekeeping overlay needed.
  */
 import { AnthropicBillingHeaderPlugin } from './plugins/anthropic-billing-header/plugin';
+import { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
 
-export const plugins: ReadonlyArray<RequestTransformPlugin> = Object.freeze([
+/**
+ * The host iterates this array. Each plugin is queried for whatever
+ * hooks it implements. Plugins MUST be safe to call with no arguments
+ * for hooks they don't implement (the host skips them).
+ */
+export const plugins: ReadonlyArray<
+  Partial<RequestTransformPlugin> & Partial<RequestPolicyPlugin>
+> = Object.freeze([
   new AnthropicBillingHeaderPlugin(),
+  new DefaultPolicyPlugin(),
 ]);
+
+// =============================================================================
+// RequestTransformPlugin — per-request hook
+// =============================================================================
 
 /**
  * The host calls each plugin's `transformRequest(decision)` synchronously
@@ -65,7 +90,54 @@ export interface RequestTransformResult {
 }
 
 export interface RequestTransformPlugin {
-  transformRequest(decision: RequestTransformDecision): RequestTransformResult | undefined;
+  transformRequest(
+    decision: RequestTransformDecision,
+  ): RequestTransformResult | undefined;
 }
 
+// =============================================================================
+// RequestPolicyPlugin — config-time hook
+// =============================================================================
+
+/**
+ * The host calls each plugin's `getRateLimitPolicy()` once at process
+ * start (cached for the process lifetime). The first non-null field
+ * returned by any plugin wins; later plugins are skipped for that field.
+ * Plugins that throw are caught and logged; the host falls through to
+ * the next plugin and ultimately to the env-var fallback.
+ *
+ * Returning `null` from `getRateLimitPolicy()` means "I have no opinion"
+ * and the host skips to the next plugin. Returning `undefined` has the
+ * same effect (back-compat alias).
+ */
+export interface RateLimitPolicy {
+  /**
+   * Per-agent concurrent-request cap (how many in-flight Anthropic
+   * requests one tenant can have at once). `null` means "no opinion;
+   * use the env-var default".
+   */
+  readonly concurrencyMax: number | null;
+  /**
+   * Per-request message-array cap (size of the `messages` array). `null`
+   * means "no opinion; use the env-var default (or upstream's default
+   * of 1000 if no env var is set)".
+   */
+  readonly maxMessagesPerRequest: number | null;
+}
+
+export interface RequestPolicyPlugin {
+  /**
+   * Called once per process. Return a static policy or `null` to defer.
+   * The host walks the plugin array in order; the first non-null
+   * concurrencyMax wins, then the first non-null maxMessagesPerRequest
+   * wins, independently.
+   */
+  getRateLimitPolicy(): RateLimitPolicy | null;
+}
+
+// =============================================================================
+// Re-exports for plugin authors
+// =============================================================================
+
 export { AnthropicBillingHeaderPlugin } from './plugins/anthropic-billing-header/plugin';
+export { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
