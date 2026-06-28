@@ -1,0 +1,167 @@
+# GitHub Actions workflow: build and publish a pre-built Manifest image
+# with the manifest-plugins host pre-installed.
+#
+# This workflow runs the same pipeline as `pipeline/build-and-publish.sh`
+# in CI. The output is a Docker image published to ghcr.io.
+#
+# Triggers:
+#   - workflow_dispatch (manual): run the pipeline on demand with custom
+#     parameters (owner, manifest-ref, image-tag).
+#   - push tags v*: release a versioned image on every semver tag.
+#
+# Image naming:
+#   ghcr.io/<owner>/manifest-with-plugins:<tag>
+#
+# Usage (manual trigger):
+#   1. Go to the repo's Actions tab
+#   2. Select "Build Manifest image with plugins"
+#   3. Click "Run workflow"
+#   4. Optionally set inputs (defaults work for most cases):
+#      - manifest_ref: a specific mnfst/manifest commit SHA to pin to
+#        (default: HEAD of main)
+#      - image_tag: a custom tag (default: <manifest-sha> or 'latest')
+#      - push: 'true' to push to ghcr.io, 'false' to build only
+#   5. The image will appear at:
+#      ghcr.io/<owner>/manifest-with-plugins:<image_tag>
+#      (where <owner> defaults to ${{ github.repository_owner }})
+#
+# To pull and run the resulting image:
+#   docker pull ghcr.io/<owner>/manifest-with-plugins:<image_tag>
+#   docker run --rm -p 3001:3001 \
+#     -e DATABASE_URL=... \
+#     -e BETTER_AUTH_SECRET=... \
+#     ghcr.io/<owner>/manifest-with-plugins:<image_tag>
+
+name: Build Manifest image with plugins
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_ref:
+        description: "mnfst/manifest git ref to build against (commit SHA, branch, or tag). Default: HEAD of main."
+        required: false
+        default: ""
+        type: string
+      image_tag:
+        description: "Override the image tag. Default: short SHA of the manifest ref, or 'latest' if manifest_ref is empty."
+        required: false
+        default: ""
+        type: string
+      push:
+        description: "Push the image to ghcr.io. Set to false for build-only dry runs."
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+  push:
+    tags:
+      - 'v*'
+
+# Cancel any in-flight builds when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read   # checkout plugins repo + clone mnfst/manifest
+  packages: write  # push to ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out plugins repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # Use the docker-container driver for better caching and
+          # layer reuse on repeated runs.
+          driver-opts: image=moby/buildkit:v0.13.0
+
+      - name: Log in to ghcr.io
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push == 'true')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install plugins dependencies
+        run: |
+          npm install --legacy-peer-deps --no-audit --no-fund
+
+      - name: Run build-and-publish.sh pipeline
+        id: pipeline
+        # The pipeline script does: clone/refresh mnfst/manifest, build
+        # the plugins package, apply the host to all three target files,
+        # build the Docker image, smoke-test the host functions, and
+        # optionally push to a registry.
+        #
+        # We pass:
+        #   --manifest /tmp/manifest    : explicit manifest path (pipeline
+        #                                 will clone fresh mnfst/manifest here
+        #                                 if absent)
+        #   --tag <image_tag>           : explicit tag if user supplied one
+        #   --registry ghcr.io/<owner>  : push destination
+        #   --push                       : enable push (unless input said no)
+        #   --no-cache                   : fresh build every run (avoid
+        #                                 stale-layer surprises)
+        env:
+          MANIFEST_PATH: /tmp/manifest
+        run: |
+          ARGS=(
+            --manifest /tmp/manifest
+            --no-cache
+          )
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            ARGS+=(--tag "${{ inputs.image_tag }}")
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.push }}" != "true" ]; then
+            echo "WARN: inputs.push = false, building without push"
+          else
+            ARGS+=(
+              --registry "ghcr.io/${{ github.repository_owner }}"
+              --push
+            )
+          fi
+          # For tag-triggered builds, default to v<tag> as the image tag.
+          if [ "${{ github.event_name }}" = "push" ] && [ -z "${{ inputs.image_tag }}" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            ARGS+=(--tag "$TAG")
+          fi
+          # If a manifest ref is provided, check it out in the manifest
+          # clone dir (pipeline will create it via git clone if absent).
+          if [ -n "${{ inputs.manifest_ref }}" ]; then
+            rm -rf /tmp/manifest
+            git clone --depth=1 "https://github.com/mnfst/manifest.git" /tmp/manifest
+            (cd /tmp/manifest && git checkout "${{ inputs.manifest_ref }}")
+          fi
+          ./pipeline/build-and-publish.sh "${ARGS[@]}"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Build summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image owner: \`${{ github.repository_owner }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image name: \`manifest-with-plugins\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Manifest ref: \`${{ inputs.manifest_ref || 'HEAD of main' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Push: \`${{ inputs.push || 'true (on tag push)' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pull and run:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+          echo "docker pull ghcr.io/${{ github.repository_owner }}/manifest-with-plugins:<TAG>" >> "$GITHUB_STEP_SUMMARY"
+          echo "docker run --rm -p 3001:3001 ghcr.io/${{ github.repository_owner }}/manifest-with-plugins:<TAG>" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

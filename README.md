@@ -171,6 +171,33 @@ REGISTRY=ghcr.io/your-org ./pipeline/build-and-publish.sh --push
 
 The pipeline does the full chain: clones Manifest, builds the plugins package, applies the host, builds the Docker image, smoke-tests the host functions in the built image, and optionally pushes. See [`pipeline/README.md`](./pipeline/README.md) for the full workflow, env-var configuration, and verification steps.
 
+### Run the pipeline as a GitHub Action
+
+The same pipeline ships as a [GitHub Actions workflow](./.github/workflows/build-image.yml) that runs on GitHub's CI, builds the image, and **publishes it to ghcr.io as a package**. Anyone with read access to the repo can `docker pull` the result.
+
+**Triggers:**
+- `workflow_dispatch` (manual): go to the repo's **Actions** tab → select **"Build Manifest image with plugins"** → **"Run workflow"** → optionally set inputs → the run completes in ~5-10 minutes.
+- `push tags: v*`: every semver tag (e.g. `git tag v0.2.1 && git push --tags`) automatically builds a versioned image.
+
+**Inputs** (workflow_dispatch):
+- `manifest_ref`: a specific mnfst/manifest commit SHA to pin to (default: HEAD of main)
+- `image_tag`: custom tag (default: short SHA of the manifest ref, or `latest` for tag-triggered builds)
+- `push`: `true` to push to ghcr.io, `false` for build-only dry runs
+
+**Resulting image** (pushed to ghcr.io):
+- `ghcr.io/<owner>/manifest-with-plugins:<image_tag>`
+
+To pull and run:
+```bash
+docker pull ghcr.io/<owner>/manifest-with-plugins:<image_tag>
+docker run --rm -p 3001:3001 \
+  -e DATABASE_URL=... \
+  -e BETTER_AUTH_SECRET=... \
+  ghcr.io/<owner>/manifest-with-plugins:<image_tag>
+```
+
+The workflow reuses the same `pipeline/build-and-publish.sh` script — local and CI share one source of truth.
+
 ## Examples
 
 Working, copy-pasteable examples live under `examples/`:
