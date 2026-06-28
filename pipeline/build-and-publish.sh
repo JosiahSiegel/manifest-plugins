@@ -367,12 +367,16 @@ rm -f "$SMOKE_TEST_SCRIPT"
 if [[ $SMOKE_EXIT -ne 0 ]]; then
   # Don't fail the build on a smoke-test failure — the image was built
   # successfully and the apply step already verified the source files
-  # before the build ran. The smoke test is a best-effort check that
-  # the host functions survived the multi-stage build. A failure here
-  # is most often a path-translation issue (Windows / Git Bash) rather
-  # than a real problem with the image.
+  # before the build ran. But DO skip the 'latest' tag push: a broken
+  # image shouldn't become the default for new users. The versioned
+  # tag (e.g. 0.1.0.d48a57483a39) still gets pushed so the build is
+  # recoverable for inspection.
   echo "WARN: smoke test failed with exit code $SMOKE_EXIT (image may still be valid)"
   echo "      to verify manually: docker run --rm $IMAGE_NAME:$IMAGE_TAG /nodejs/bin/node -e '<smoke-script>'"
+  echo "      skipping 'latest' tag push — consumers will pull the versioned tag instead"
+  SMOKE_OK=0
+else
+  SMOKE_OK=1
 fi
 
 # ---- step 6: optionally push ---------------------------------------------
@@ -382,8 +386,18 @@ if [[ $DO_PUSH -eq 1 ]]; then
     exit 1
   fi
   echo "==> pushing image to registry"
+  # Always push the versioned tag — it's an identifiable, recoverable
+  # build artifact. If something goes wrong later, the user can pin to
+  # this specific version.
   docker push "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
-  docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+  # Only push the 'latest' tag if the smoke test passed. A broken image
+  # shouldn't become the default for new users.
+  if [[ $SMOKE_OK -eq 1 ]]; then
+    echo "==> pushing 'latest' tag (smoke test passed)"
+    docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+  else
+    echo "==> SKIPPING 'latest' tag push (smoke test failed)"
+  fi
 fi
 
 # ---- summary ------------------------------------------------------------
