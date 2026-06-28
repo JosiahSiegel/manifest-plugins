@@ -1,0 +1,25 @@
+# Enforce LF line endings across the repo so cross-platform patches (e.g. the
+# provider-client.ts plugin-host insertion) match byte-for-byte regardless of
+# whether contributors checkout on Windows or macOS/Linux.
+* text=auto eol=lf
+
+# Explicit per-format defaults to override any .gitattributes inherited from
+# a higher-priority .gitignore/gitconfig (defense in depth).
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.cjs       text eol=lf
+*.mjs       text eol=lf
+*.json      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.md        text eol=lf
+*.sh        text eol=lf
+
+# Binary — never normalize.
+*.png       binary
+*.jpg       binary
+*.gif       binary
+*.ico       binary
+*.woff      binary
+*.woff2     binary
