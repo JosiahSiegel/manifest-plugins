@@ -25,7 +25,11 @@
 #
 # Options (env vars override flags):
 #   --manifest PATH       Path to the Manifest checkout (default: ../manifest)
-#   --tag TAG             Image tag (default: <plugins-version>+<manifest-sha>)
+#   --manifest-url URL     Git URL to clone when the local --manifest path
+#                          doesn't exist (default: https://github.com/mnfst/manifest.git).
+#                          Override to point at a fork, e.g. for testing
+#                          fork-specific Manifest changes with the plugins.
+#   --tag TAG             Image tag (default: <plugins-version>.<manifest-sha>)
 #   --registry REGISTRY   Image registry (e.g. ghcr.io/your-org)
 #                        If unset, image is built but not pushed.
 #   --push                Push to the registry after build
@@ -39,8 +43,11 @@
 #   - git
 #
 # Examples:
-#   # Build only (no push):
+#   # Build only (no push), against official mnfst/manifest:
 #   ./build-and-publish.sh
+#
+#   # Build against a fork to test fork-specific Manifest behavior:
+#   ./build-and-publish.sh --manifest-url https://github.com/myorg/manifest.git
 #
 #   # Build and push to ghcr.io/your-org/manifest-with-plugins:
 #   REGISTRY=ghcr.io/your-org ./build-and-publish.sh --push
@@ -48,12 +55,15 @@
 #   # Build with a custom tag:
 #   ./build-and-publish.sh --tag my-fork:dev
 #
-#   # Build against a specific Manifest checkout:
+#   # Build against a specific local Manifest checkout:
 #   ./build-and-publish.sh --manifest /opt/manifest
 #
-# After the script completes, the image is available locally as
-# `manifest-with-plugins:<tag>`. If --push was used, it's also at
-# `<registry>/manifest-with-plugins:<tag>`.
+# After the script completes, the image is available locally as both
+# `manifest-with-plugins:<tag>` AND `manifest-with-plugins:latest` (the
+# latest tag is always created locally so `docker images` shows it,
+# regardless of whether --push was used). If --push was used, both tags
+# are also at `<registry>/manifest-with-plugins:<tag>` and
+# `<registry>/manifest-with-plugins:latest`.
 
 set -euo pipefail
 
@@ -61,6 +71,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGINS_REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MANIFEST_PATH="${MANIFEST_PATH:-}"
+MANIFEST_URL="${MANIFEST_URL:-https://github.com/mnfst/manifest.git}"
 IMAGE_TAG=""
 REGISTRY="${REGISTRY:-}"
 DO_PUSH=0
@@ -74,15 +85,16 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --manifest)  MANIFEST_PATH="$2"; shift 2 ;;
-    --tag)       IMAGE_TAG="$2"; shift 2 ;;
-    --registry)  REGISTRY="$2"; shift 2 ;;
-    --push)      DO_PUSH=1; shift ;;
-    --platform)  PLATFORM="$2"; shift 2 ;;
-    --no-cache)  NO_CACHE=1; shift ;;
-    -h|--help)   usage ;;
-    -*)          echo "unknown flag: $1" >&2; exit 1 ;;
-    *)           if [[ -z "$MANIFEST_PATH" ]]; then MANIFEST_PATH="$1"; shift; else echo "unexpected positional: $1" >&2; exit 1; fi ;;
+    --manifest)    MANIFEST_PATH="$2"; shift 2 ;;
+    --manifest-url) MANIFEST_URL="$2"; shift 2 ;;
+    --tag)         IMAGE_TAG="$2"; shift 2 ;;
+    --registry)    REGISTRY="$2"; shift 2 ;;
+    --push)        DO_PUSH=1; shift ;;
+    --platform)    PLATFORM="$2"; shift 2 ;;
+    --no-cache)    NO_CACHE=1; shift ;;
+    -h|--help)     usage ;;
+    -*)            echo "unknown flag: $1" >&2; exit 1 ;;
+    *)             if [[ -z "$MANIFEST_PATH" ]]; then MANIFEST_PATH="$1"; shift; else echo "unexpected positional: $1" >&2; exit 1; fi ;;
   esac
 done
 
@@ -106,8 +118,10 @@ if [[ -z "$MANIFEST_PATH" ]]; then
   MANIFEST_PATH="$(cd "$PLUGINS_REPO_DIR/.." && pwd)/manifest"
 fi
 if [[ ! -d "$MANIFEST_PATH/.git" ]]; then
-  echo "==> cloning mnfst/manifest into $MANIFEST_PATH (pass --manifest to override)"
-  git clone --depth=1 https://github.com/mnfst/manifest.git "$MANIFEST_PATH"
+  # Use the configured MANIFEST_URL (defaults to mnfst/manifest; can be
+  # overridden with --manifest-url to test against a fork).
+  echo "==> cloning $MANIFEST_URL into $MANIFEST_PATH (pass --manifest or --manifest-url to override)"
+  git clone --depth=1 "$MANIFEST_URL" "$MANIFEST_PATH"
 fi
 MANIFEST_PATH="$(cd "$MANIFEST_PATH" && pwd)"
 echo "==> using Manifest checkout: $MANIFEST_PATH"
@@ -184,6 +198,15 @@ if [[ -n "$REGISTRY" ]]; then
   REGISTRY="$(echo "$REGISTRY" | tr '[:upper:]' '[:lower:]')"
   TAG_FLAGS+=(--tag "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}")
   TAG_FLAGS+=(--tag "${REGISTRY}/${IMAGE_NAME}:latest")
+fi
+
+# Always tag `latest` locally too (regardless of --push) so `docker images`
+# shows the version immediately, and consumers can `docker run
+# manifest-with-plugins:latest` without specifying a tag. We only do this
+# if the IMAGE_TAG itself isn't already `latest` (to avoid the no-op
+# `--tag foo:latest` case when the user explicitly named it that).
+if [[ "$IMAGE_TAG" != "latest" ]]; then
+  TAG_FLAGS+=(--tag "${IMAGE_NAME}:latest")
 fi
 
 BUILD_FLAGS=()

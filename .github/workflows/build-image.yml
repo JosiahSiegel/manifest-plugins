@@ -42,6 +42,11 @@ on:
         required: false
         default: ""
         type: string
+      manifest_url:
+        description: "Git URL to clone when the local manifest path doesn't exist. Default: official mnfst/manifest. Override with a fork URL to test fork-specific Manifest behavior with the plugins."
+        required: false
+        default: "https://github.com/mnfst/manifest.git"
+        type: string
       image_tag:
         description: "Override the image tag. Default: short SHA of the manifest ref, or 'latest' if manifest_ref is empty."
         required: false
@@ -150,6 +155,11 @@ jobs:
             rm -rf /tmp/manifest
             git clone --depth=1 "https://github.com/mnfst/manifest.git" /tmp/manifest
             (cd /tmp/manifest && git checkout "${{ inputs.manifest_ref }}")
+          fi
+          # Pass through the manifest URL override. The script's default
+          # is already mnfst/manifest; this lets users point at a fork.
+          if [ -n "${{ inputs.manifest_url }}" ]; then
+            export MANIFEST_URL="${{ inputs.manifest_url }}"
           fi
           # Invoke the script via `bash` (not as `./pipeline/...sh`) so the
           # workflow doesn't depend on the executable bit — git mode handling
