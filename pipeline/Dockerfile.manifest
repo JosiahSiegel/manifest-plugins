@@ -1,0 +1,140 @@
+# Pipeline Dockerfile
+# ==================
+#
+# A multi-stage Dockerfile that produces a published Manifest image with
+# the plugin host pre-installed. Designed to be invoked by
+# pipeline/build-and-publish.sh.
+#
+# Build invocation (mirrors what the shell script does):
+#   docker buildx build \
+#     --platform linux/amd64 \
+#     --build-context manifest-plugins=../manifest-plugins \
+#     --tag manifest-with-plugins:0.2.0+abc123 \
+#     --load \
+#     <repo-root>     # build context must be the manifest-plugins repo root
+#
+# The apply tool has already patched the three target files in the
+# Manifest checkout (in the build context, see `build-and-publish.sh`
+# for that step). This Dockerfile is responsible for:
+#   1. Compiling the Manifest backend (Stage 1-2)
+#   2. Copying the plugins dist into node_modules (Stage 3)
+#   3. Producing a distroless runtime image (Stage 4)
+#
+# This is a simplified version of upstream's docker/Dockerfile. The
+# upstream Dockerfile assumes no source patches; we apply the plugin
+# host BEFORE this build runs (via the apply tool in build-and-publish.sh).
+
+# Stage 1: Install all dependencies (including dev deps) for the build.
+FROM node:24-alpine@sha256:d1b3b4da11eefd5941e7f0b9cf17783fc99d9c6fc34884a665f40a06dbdfc94f AS deps
+WORKDIR /app
+# Root files: required for npm workspaces (npm 11 requires --workspaces flag
+# unless the root package.json is present).
+COPY package.json package-lock.json turbo.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/frontend/package.json packages/frontend/
+COPY packages/backend/package.json packages/backend/
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --include=dev --prefer-offline --no-audit --no-fund --loglevel=error
+
+# Stage 2: Build the backend bundle. We scope to manifest-backend
+# only — the frontend is not required for the plugin host to work, and
+# keeping the build small reduces failure surface.
+FROM deps AS build
+# The apply tool has already patched the three target files in the
+# Manifest source. COPY them now (the build context `.` is the manifest
+# checkout — see build-and-publish.sh for the working directory).
+COPY packages/shared packages/shared
+COPY packages/backend packages/backend
+COPY packages/manifest packages/manifest
+# Build the backend (TypeScript → JavaScript). The frontend is not
+# required for the plugin host — only the backend needs the host
+# query functions. We intentionally skip --filter=manifest-frontend
+# to keep the build minimal and avoid pre-existing frontend build
+# failures unrelated to the plugin host.
+RUN npx turbo build --filter=manifest-backend --filter=manifest-shared
+
+# Stage 3: Production dependencies + plugins injection. The plugins
+# package comes in via the named `manifest-plugins` build context (a
+# sibling directory with this Dockerfile's containing repo).
+FROM node:24-slim@sha256:03eae3ef7e88a9de535496fb488d67e02b9d96a063a8967bae657744ecd513f2 AS prod-deps
+WORKDIR /app
+# Root files: required for npm workspaces to recognize the workspace root.
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/frontend/package.json packages/frontend/
+COPY packages/backend/package.json packages/backend/
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev --omit=optional --ignore-scripts \
+           --prefer-offline --no-audit --no-fund --loglevel=error && \
+    rm -rf node_modules/typescript node_modules/@types \
+           node_modules/ts-node node_modules/acorn \
+           node_modules/create-require node_modules/v8-compile-cache-lib && \
+    find . -path "*/node_modules/@esbuild" -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -path "*/node_modules/@vitest" -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -path "*/node_modules/*" \( -name "*.map" -o -name "README*" \
+      -o -name "LICENSE*" -o -name "CHANGELOG*" -o -name "*.txt" \
+      -o -name "*.md" -o -name "Makefile" -o -name "*.gyp" -o -name "*.gypi" \
+      -o \( -name "*.ts" ! -name "*.d.ts" \) \) -delete 2>/dev/null; \
+    find . -path "*/node_modules/*" -type d \( -name "__tests__" -o -name "test" \
+      -o -name "tests" -o -name "docs" -o -name "example" \
+      -o -name "examples" -o -name ".github" \) -exec rm -rf {} + 2>/dev/null; \
+    true
+
+# Stage 4: Distroless runtime. Runs as the built-in `nonroot` user (UID
+# 65532) by default. No shell, no apk/apt, minimal CVE surface.
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:f16acace4aa70086d4a2caad6c716f01e3e2fe0dd8274c4530c7c17d987bdb1a AS runtime
+WORKDIR /app
+
+LABEL org.opencontainers.image.title="Manifest (with manifest-plugins)" \
+      org.opencontainers.image.description="Manifest backend with the manifest-plugins host pre-installed (RequestTransformPlugin + RequestPolicyPlugin chain)." \
+      org.opencontainers.image.url="https://github.com/JosiahSiegel/manifest-plugins" \
+      org.opencontainers.image.source="https://github.com/mnfst/manifest" \
+      org.opencontainers.image.licenses="MIT"
+
+ENV NODE_ENV=production
+ENV BIND_ADDRESS=0.0.0.0
+# Expose the distroless node binary on PATH so `node` in docker-compose
+# healthchecks (and anything else invoked with a bare command name) resolves.
+ENV PATH=/nodejs/bin:$PATH
+
+# Copy the production node_modules (without devDeps, without esbuild/vitest
+# platform-specific binaries, without source maps / READMEs / ts source).
+COPY --from=prod-deps --chown=nonroot:nonroot /app/node_modules node_modules
+COPY --from=prod-deps --chown=nonroot:nonroot /app/packages/backend/node_modules packages/backend/node_modules
+COPY --from=prod-deps --chown=nonroot:nonroot /app/package.json package.json
+COPY --from=build --chown=nonroot:nonroot /app/packages/shared/dist packages/shared/dist
+COPY --from=build --chown=nonroot:nonroot /app/packages/backend/dist packages/backend/dist
+# We intentionally don't copy packages/frontend/dist — the frontend
+# isn't built in this image (see comment at the `build` stage).
+COPY --chown=nonroot:nonroot packages/shared/package.json packages/shared/
+COPY --chown=nonroot:nonroot packages/backend/package.json packages/backend/
+# The telemetry sender reads the canonical Manifest version from this
+# file at boot. Without it, readManifestVersion() falls back to "unknown"
+# and the sender ends up posting invalid semver to the ingest endpoint.
+COPY --chown=nonroot:nonroot packages/manifest/package.json packages/manifest/
+
+# Install the manifest-plugins package into the backend's node_modules.
+# Comes from the named `manifest-plugins` build context (a sibling
+# directory of this Dockerfile's containing repo). The package's
+# `dist/index.js` is what the host's `require('manifest-plugins')`
+# resolves to at runtime.
+#
+# Note: we don't need the source code in the runtime image — only the
+# compiled dist + package.json. The apply tool in build-and-publish.sh
+# has already patched the Manifest source files in the build context.
+COPY --from=manifest-plugins /package.json /app/node_modules/manifest-plugins/package.json
+COPY --from=manifest-plugins /dist /app/node_modules/manifest-plugins/dist
+
+EXPOSE 3001
+
+# Distroless has no shell; use exec-form and a JS-only check.
+# `node` resolves via the PATH we set above. We read PORT at runtime so
+# the healthcheck follows whatever port the backend is actually using —
+# the default is 3001 to match the backend's own fallback, which keeps
+# legacy installs (no PORT env) working without a compose-file update.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+  CMD ["node", "-e", "const p=process.env.PORT||'3001';fetch(`http://127.0.0.1:${p}/api/v1/health`).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+
+# The distroless image's ENTRYPOINT is already ["/nodejs/bin/node"],
+# so CMD only needs the script path.
+CMD ["packages/backend/dist/main.js"]

@@ -108,6 +108,10 @@ manifest-plugins/
 │       └── default-policy/
 │           ├── plugin.ts            # the default RequestPolicyPlugin
 │           └── plugin.spec.ts       # 100% coverage
+├── pipeline/                        # End-to-end pipeline that publishes a pre-built image
+│   ├── Dockerfile.manifest         # Complete Dockerfile (uses --build-context manifest-plugins)
+│   ├── build-and-publish.sh        # End-to-end script: clone, build, apply, docker build, push
+│   └── README.md                   # Pipeline workflow + image verification
 ├── tests/
 │   ├── apply.spec.ts                # patcher integration tests (3 files, idempotency, drift)
 │   └── index.spec.ts                # plugin registry test
@@ -152,6 +156,20 @@ The post-build step (`scripts/filter-plugins.mjs`) reads the config and rewrites
 - Build a minimal "no fork behavior" image: exclude `DefaultPolicyPlugin` (revert to upstream's hardcoded `CONCURRENCY_MAX = 10` and the 1000-message cap).
 - Build an "Anthropic-only" image: exclude `DefaultPolicyPlugin` (use AnthropicBillingHeaderPlugin only).
 - Build an "everything-off" image: exclude both — then `require('manifest-plugins')` returns an empty plugins array, hosts no-op, runtime behaves like vanilla upstream.
+
+## Want a pre-built image instead of building yourself?
+
+The [`pipeline/`](./pipeline/) directory contains an end-to-end pipeline that produces a **published Docker image** with the plugin host pre-installed. Consumers just `docker pull` and `docker run` — no apply step required.
+
+```bash
+# Build only (no push) — image is local as manifest-with-plugins:<tag>
+./pipeline/build-and-publish.sh
+
+# Build and push to a registry (e.g. your ghcr.io org)
+REGISTRY=ghcr.io/your-org ./pipeline/build-and-publish.sh --push
+```
+
+The pipeline does the full chain: clones Manifest, builds the plugins package, applies the host, builds the Docker image, smoke-tests the host functions in the built image, and optionally pushes. See [`pipeline/README.md`](./pipeline/README.md) for the full workflow, env-var configuration, and verification steps.
 
 ## Examples
 

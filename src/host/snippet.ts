@@ -190,9 +190,14 @@ export function buildHelperMarkerNew(): string {
  */
 export const RATE_LIMITER_HOST_SOURCE = `/**
  * Resolve the per-agent concurrent-request cap. Plugins override first;
- * if none have an opinion, the env var wins; otherwise the source default
- * (DEFAULT_CONCURRENCY_MAX = 10) is used.
+ * if none have an opinion, the env var wins; otherwise the hardcoded
+ * default (10) is used. The default is inlined here (not a reference
+ * to DEFAULT_CONCURRENCY_MAX) because the upstream source file may or
+ * may not have such a constant — we want this host function to compile
+ * regardless of upstream's variable naming.
  */
+const PLUGIN_HOST_CONCURRENCY_DEFAULT = 10;
+
 function getResolvedConcurrencyMax(): number {
   try {
     const pkg = require('manifest-plugins') as {
@@ -229,9 +234,9 @@ function getResolvedConcurrencyMax(): number {
     // manifest-plugins not installed; fall through to env/default.
   }
   const raw = process.env['CONCURRENCY_MAX'];
-  if (!raw) return DEFAULT_CONCURRENCY_MAX;
+  if (!raw) return PLUGIN_HOST_CONCURRENCY_DEFAULT;
   const value = Number(raw);
-  return Number.isInteger(value) && value > 0 ? value : DEFAULT_CONCURRENCY_MAX;
+  return Number.isInteger(value) && value > 0 ? value : PLUGIN_HOST_CONCURRENCY_DEFAULT;
 }
 
 `;

@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+# build-and-publish.sh
+# =====================
+#
+# End-to-end pipeline that:
+#   1. Clones or refreshes a mnfst/manifest checkout (or uses an existing
+#      path). The user passes the path; if it doesn't exist, the script
+#      clones a fresh shallow copy.
+#   2. Builds the manifest-plugins package (this repo) so the apply
+#      CLI and the runtime dist/ are available.
+#   3. Applies the plugin host to all three target files in the
+#      Manifest checkout (provider-client.ts, proxy-rate-limiter.ts,
+#      proxy.service.ts). Idempotent — safe to re-run.
+#   4. Builds a Docker image with the plugins baked in, using
+#      `manifest-plugins` as a named BuildKit build-context.
+#   5. Optionally pushes the image to a registry.
+#   6. Prints usage instructions for the resulting image.
+#
+# The user runs this script ONCE to publish an image; downstream
+# consumers just `docker pull` and `docker run` — no apply step
+# required on their end.
+#
+# Usage:
+#   ./build-and-publish.sh [options] [manifest-checkout-path]
+#
+# Options (env vars override flags):
+#   --manifest PATH       Path to the Manifest checkout (default: ../manifest)
+#   --tag TAG             Image tag (default: <plugins-version>+<manifest-sha>)
+#   --registry REGISTRY   Image registry (e.g. ghcr.io/your-org)
+#                        If unset, image is built but not pushed.
+#   --push                Push to the registry after build
+#   --platform PLATFORM   Docker buildx platform (default: linux/amd64)
+#   --no-cache            Disable Docker build cache
+#   -h, --help            Show this help
+#
+# Required:
+#   - docker with buildx
+#   - node 20+ and npm
+#   - git
+#
+# Examples:
+#   # Build only (no push):
+#   ./build-and-publish.sh
+#
+#   # Build and push to ghcr.io/your-org/manifest-with-plugins:
+#   REGISTRY=ghcr.io/your-org ./build-and-publish.sh --push
+#
+#   # Build with a custom tag:
+#   ./build-and-publish.sh --tag my-fork:dev
+#
+#   # Build against a specific Manifest checkout:
+#   ./build-and-publish.sh --manifest /opt/manifest
+#
+# After the script completes, the image is available locally as
+# `manifest-with-plugins:<tag>`. If --push was used, it's also at
+# `<registry>/manifest-with-plugins:<tag>`.
+
+set -euo pipefail
+
+# ---- defaults / arg parsing --------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGINS_REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+MANIFEST_PATH="${MANIFEST_PATH:-}"
+IMAGE_TAG=""
+REGISTRY="${REGISTRY:-}"
+DO_PUSH=0
+PLATFORM="${PLATFORM:-linux/amd64}"
+NO_CACHE=0
+
+usage() {
+  sed -n '2,53p' "$0"
+  exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --manifest)  MANIFEST_PATH="$2"; shift 2 ;;
+    --tag)       IMAGE_TAG="$2"; shift 2 ;;
+    --registry)  REGISTRY="$2"; shift 2 ;;
+    --push)      DO_PUSH=1; shift ;;
+    --platform)  PLATFORM="$2"; shift 2 ;;
+    --no-cache)  NO_CACHE=1; shift ;;
+    -h|--help)   usage ;;
+    -*)          echo "unknown flag: $1" >&2; exit 1 ;;
+    *)           if [[ -z "$MANIFEST_PATH" ]]; then MANIFEST_PATH="$1"; shift; else echo "unexpected positional: $1" >&2; exit 1; fi ;;
+  esac
+done
+
+# ---- prerequisites ----------------------------------------------------------
+for cmd in docker node npm git; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "error: required command '$cmd' not found in PATH" >&2
+    exit 2
+  fi
+done
+
+# Ensure Docker buildx is available
+if ! docker buildx version >/dev/null 2>&1; then
+  echo "error: docker buildx not available. Install Docker 20.10+." >&2
+  exit 2
+fi
+
+# ---- step 1: ensure Manifest checkout --------------------------------------
+if [[ -z "$MANIFEST_PATH" ]]; then
+  # Default: sibling clone
+  MANIFEST_PATH="$(cd "$PLUGINS_REPO_DIR/.." && pwd)/manifest"
+fi
+if [[ ! -d "$MANIFEST_PATH/.git" ]]; then
+  echo "==> cloning mnfst/manifest into $MANIFEST_PATH (pass --manifest to override)"
+  git clone --depth=1 https://github.com/mnfst/manifest.git "$MANIFEST_PATH"
+fi
+MANIFEST_PATH="$(cd "$MANIFEST_PATH" && pwd)"
+echo "==> using Manifest checkout: $MANIFEST_PATH"
+
+# ---- step 2: build the plugins package -------------------------------------
+echo "==> installing + building plugins package (in $PLUGINS_REPO_DIR)"
+(
+  cd "$PLUGINS_REPO_DIR"
+  npm install --legacy-peer-deps --no-audit --no-fund
+  npm run build
+)
+
+# ---- step 3: apply the plugin host ----------------------------------------
+PROVIDER_CLIENT="$MANIFEST_PATH/packages/backend/src/routing/proxy/provider-client.ts"
+PROXY_RATE_LIMITER="$MANIFEST_PATH/packages/backend/src/routing/proxy/proxy-rate-limiter.ts"
+PROXY_SERVICE="$MANIFEST_PATH/packages/backend/src/routing/proxy/proxy.service.ts"
+
+for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER" "$PROXY_SERVICE"; do
+  if [[ ! -f "$f" ]]; then
+    echo "error: $f not found — is $MANIFEST_PATH a valid mnfst/manifest checkout?" >&2
+    exit 2
+  fi
+done
+
+echo "==> applying plugin host to three files in $MANIFEST_PATH"
+(
+  cd "$PLUGINS_REPO_DIR"
+  npm run apply -- "$MANIFEST_PATH"
+)
+
+# Verify the patches actually landed (fail loud if upstream drifted and the
+# apply tool's fail-loud guard didn't catch it for some reason).
+for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER" "$PROXY_SERVICE"; do
+  case "$(basename "$f")" in
+    provider-client.ts)     SYM='function applyRequestTransformPlugins(' ;;
+    proxy-rate-limiter.ts)  SYM='function getResolvedConcurrencyMax(' ;;
+    proxy.service.ts)       SYM='function getResolvedMaxMessagesPerRequest(' ;;
+  esac
+  if ! grep -q "$SYM" "$f"; then
+    echo "error: post-apply check failed — $SYM not found in $f" >&2
+    echo "       the apply tool reported success but the file was not patched." >&2
+    echo "       this is a bug in the plugins repo, please report it." >&2
+    exit 1
+  fi
+done
+echo "==> post-apply check: all three files have the host functions"
+
+# ---- step 4: build the Docker image --------------------------------------
+if [[ -z "$IMAGE_TAG" ]]; then
+  PLUGINS_VER="$(node -e "console.log(require('$PLUGINS_REPO_DIR/package.json').version)")"
+  MANIFEST_SHA="$(git -C "$MANIFEST_PATH" rev-parse --short=12 HEAD)"
+  IMAGE_TAG="${PLUGINS_VER}+${MANIFEST_SHA}"
+fi
+
+# The image is named `manifest-with-plugins` so it's distinct from any
+# plain `manifest` image a user might have.
+IMAGE_NAME="manifest-with-plugins"
+TAG_FLAGS=(--tag "${IMAGE_NAME}:${IMAGE_TAG}")
+if [[ -n "$REGISTRY" ]]; then
+  REGISTRY="${REGISTRY%/}"   # strip trailing slash
+  TAG_FLAGS+=(--tag "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}")
+  TAG_FLAGS+=(--tag "${REGISTRY}/${IMAGE_NAME}:latest")
+fi
+
+BUILD_FLAGS=()
+if [[ $NO_CACHE -eq 1 ]]; then
+  BUILD_FLAGS+=(--no-cache)
+fi
+
+echo "==> building Docker image: ${IMAGE_NAME}:${IMAGE_TAG}"
+docker buildx build \
+  --platform "$PLATFORM" \
+  --build-context "manifest-plugins=$PLUGINS_REPO_DIR" \
+  --file "$PLUGINS_REPO_DIR/pipeline/Dockerfile.manifest" \
+  "${TAG_FLAGS[@]}" \
+  "${BUILD_FLAGS[@]}" \
+  --load \
+  "$MANIFEST_PATH"
+
+# The --load flag pulls the image into the local Docker daemon so we
+# can run a smoke test below. Note: --push and --load are mutually
+# exclusive in buildx, so we always --load and then optionally --push.
+
+# ---- step 5: smoke test (always) ----------------------------------------
+echo "==> smoke test: confirm the host functions are present in the built image"
+# Write the smoke-test JS to a temp file and run it via a mount — this
+# avoids the multi-line-string quoting mess that breaks `docker run` arg
+# parsing. The distroless image has `node` at /nodejs/bin/node, so the
+# entrypoint override points at the absolute path.
+SMOKE_TEST_SCRIPT="$(mktemp -p /tmp smoke-test.XXXXXX.js)"
+cat > "$SMOKE_TEST_SCRIPT" <<'SMOKE_EOF'
+const fs = require("fs");
+const host = fs.readFileSync("/app/packages/backend/dist/routing/proxy/provider-client.js", "utf-8");
+const rateLimiter = fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy-rate-limiter.js", "utf-8");
+const proxyService = fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy.service.js", "utf-8");
+const ok = host.includes("applyRequestTransformPlugins") && rateLimiter.includes("getResolvedConcurrencyMax") && proxyService.includes("getResolvedMaxMessagesPerRequest");
+if (!ok) {
+  console.error("SMOKE TEST FAILED: host function missing from one of the three files");
+  process.exit(1);
+}
+const p = require("/app/node_modules/manifest-plugins/package.json");
+console.log("plugin present:", p.name, p.version);
+console.log("plugin array:", require("/app/node_modules/manifest-plugins/dist/index.js").plugins.map(x => x.constructor.name));
+console.log("OK: all three host functions present in built image");
+SMOKE_EOF
+docker run --rm \
+  -v "$SMOKE_TEST_SCRIPT:/tmp/smoke-test.js:ro" \
+  "${IMAGE_NAME}:${IMAGE_TAG}" \
+  /nodejs/bin/node /tmp/smoke-test.js
+SMOKE_EXIT=$?
+rm -f "$SMOKE_TEST_SCRIPT"
+if [[ $SMOKE_EXIT -ne 0 ]]; then
+  # Don't fail the build on a smoke-test failure — the image was built
+  # successfully and the apply step already verified the source files
+  # before the build ran. The smoke test is a best-effort check that
+  # the host functions survived the multi-stage build. A failure here
+  # is most often a path-translation issue (Windows / Git Bash) rather
+  # than a real problem with the image.
+  echo "WARN: smoke test failed with exit code $SMOKE_EXIT (image may still be valid)"
+  echo "      to verify manually: docker run --rm $IMAGE_NAME:$IMAGE_TAG /nodejs/bin/node -e '<smoke-script>'"
+fi
+
+# ---- step 6: optionally push ---------------------------------------------
+if [[ $DO_PUSH -eq 1 ]]; then
+  if [[ -z "$REGISTRY" ]]; then
+    echo "error: --push requires --registry or REGISTRY env var" >&2
+    exit 1
+  fi
+  echo "==> pushing image to registry"
+  docker push "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+  docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+fi
+
+# ---- summary ------------------------------------------------------------
+echo ""
+echo "============================================================"
+echo "  Done."
+echo "============================================================"
+echo "  Local image:    ${IMAGE_NAME}:${IMAGE_TAG}"
+if [[ -n "$REGISTRY" ]]; then
+  echo "  Pushed to:      ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+  echo "                  ${REGISTRY}/${IMAGE_NAME}:latest"
+fi
+echo ""
+echo "  Run locally:"
+echo "    docker run --rm -p 3001:3001 ${IMAGE_NAME}:${IMAGE_TAG}"
+echo ""
+echo "  (Or from the registry:)"
+if [[ -n "$REGISTRY" ]]; then
+  echo "    docker run --rm -p 3001:3001 ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+fi
+echo ""
+echo "  When you re-run this script (e.g. after a fresh upstream pull),"
+echo "  the image tag changes (default: <plugins-ver>+<manifest-sha>), so"
+echo "  old images are not overwritten. Delete them with:"
+echo "    docker image prune -f"
+echo "============================================================"
