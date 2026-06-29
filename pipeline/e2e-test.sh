@@ -52,6 +52,12 @@ if [[ $# -lt 1 ]]; then
   echo "                          HTTP 200 with a JSON body containing a plugins array." >&2
   echo "                          This is the gate for MVP-mode builds." >&2
   echo "  PLUGINS_PATH            override the plugins API path (default: /api/v1/plugins)" >&2
+  echo "  TIER_ROUTING_SMOKE      when 1, additionally assert that configured" >&2
+  echo "                          header_tiers rules (e.g. x-manifest-tier)" >&2
+  echo "                          win over body.model for /v1/chat/completions." >&2
+  echo "                          Regression fix for upstream 2ab748a6." >&2
+  echo "                          Requires a header_tiers row to be seeded" >&2
+  echo "                          out-of-band (see pipeline/README.md)." >&2
   exit 64
 fi
 
@@ -60,6 +66,7 @@ PORT="${PORT:-2099}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-60}"
 MVP_UI="${MVP_UI:-0}"
 PLUGINS_PATH="${PLUGINS_PATH:-/api/v1/plugins}"
+TIER_ROUTING_SMOKE="${TIER_ROUTING_SMOKE:-0}"
 
 # ---- preflight --------------------------------------------------------------
 
@@ -285,6 +292,112 @@ if [[ "$MVP_UI" == "1" ]]; then
   log "GET ${PLUGINS_PATH} → 200 (MVP_UI=1: JSON body has plugins array)"
 fi
 
+# (e) (TIER_ROUTING_SMOKE=1 only) /v1/chat/completions with x-manifest-tier
+# — assert that configured `header_tiers` rules (e.g. `x-manifest-tier`)
+# win over `body.model`. Regression fix for upstream commit 2ab748a6
+# (PR #2350, 2026-06-29), which added an explicit-model early-return
+# in `proxy.service.ts::resolveRouting()` that bypasses the upstream
+# `resolveHeaderTier()` and silently ignores `x-manifest-tier` when
+# the request body carries a concrete `body.model != "auto"`.
+#
+# How it works:
+#   1. The pipeline runner seeds a `header_tiers` row whose
+#      `header_key='x-manifest-tier'`, `header_value='smoke-test'`,
+#      and `override_route={provider,auth_type,model}` pointing at a
+#      cheap upstream (any configured provider works). The exact
+#      provider/model is irrelevant — we only assert that the
+#      routing decision honors the header.
+#   2. This gate sends `POST /v1/chat/completions` with
+#      `x-manifest-tier: smoke-test` AND `body.model: openai/gpt-4o-mini`
+#      (a concrete non-`auto` model).
+#   3. We capture the response headers and assert that
+#      `X-Manifest-Tier: standard` and
+#      `X-Manifest-Reason: header-match` are returned. The
+#      configured tier name lives in routing metadata, but upstream
+#      builds `X-Manifest-Tier` from `meta.tier`, not
+#      `header_tier_name`. A `direct` tier or `direct` reason in
+#      the response means the upstream regression is back.
+#
+# Failure exit code: 6 (distinct from MVP_UI's 5, so CI can
+# disambiguate).
+if [[ "$TIER_ROUTING_SMOKE" == "1" ]]; then
+  # No new host dependencies — reuses the already-running app
+  # container, curl, and grep. Avoids jq (which the upstream MVP
+  # path already requires, but we don't need JSON parsing here).
+  TIER_HEADER_NAME="${TIER_HEADER_NAME:-smoke-test}"
+  TIER_BODY_MODEL="${TIER_BODY_MODEL:-openai/gpt-4o-mini}"
+  TIER_EXPECTED_RESPONSE_TIER="standard"
+  TIER_EXPECTED_RESPONSE_REASON="header-match"
+  TIER_REQUEST_BODY=$(printf '{"model":"%s","messages":[{"role":"user","content":"ping"}],"stream":false}' "$TIER_BODY_MODEL")
+
+  capture_post_json() {
+    local url="$1"
+    local body="$2"
+    local header="$3"
+    RESP_BODY="$(mktemp)"
+    local meta
+    meta="$(curl -sS -o "$RESP_BODY" -w '%{http_code}|%{content_type}|%{size_download}' \
+      --max-time 10 \
+      -H "Content-Type: application/json" \
+      -H "$header" \
+      -d "$body" \
+      "$url" 2>/dev/null)"
+    if [[ -z "$meta" ]]; then
+      meta='000|application/octet-stream|0'
+    fi
+    IFS='|' read -r RESP_CODE RESP_TYPE RESP_BYTES < <(printf '%s' "$meta" | head -c 200)
+    # Capture response headers to a separate file so we can grep
+    # `X-Manifest-Tier` without the body. `curl -D` writes headers
+    # to the dump file; we re-run the request only for the header
+    # capture to keep the body file separate. This avoids the
+    # pattern of re-parsing curl's `-D -` combined with `-o`.
+    RESP_HEADERS="$(mktemp)"
+    curl -sS -D "$RESP_HEADERS" -o /dev/null \
+      --max-time 10 \
+      -H "Content-Type: application/json" \
+      -H "$header" \
+      -d "$body" \
+      "$url" >/dev/null 2>&1 || true
+  }
+
+  capture_post_json \
+    "http://127.0.0.1:${PORT}/v1/chat/completions" \
+    "$TIER_REQUEST_BODY" \
+    "x-manifest-tier: ${TIER_HEADER_NAME}"
+
+  # The upstream proxy may return 200 (request succeeded), 4xx
+  # (auth/quota/upstream error), or 5xx (upstream broken). The
+  # tier-routing smoke cares ONLY about the X-Manifest-Tier
+  # response header, which is set by upstream's
+  # `proxy-response-handler.ts` BEFORE the upstream HTTP call.
+  # Any response status from the proxy is acceptable for this
+  # smoke — we only assert the routing-decision header.
+  RESP_TIER="$(grep -i '^x-manifest-tier:' "$RESP_HEADERS" | head -1 | awk -F': ' '{print $2}' | tr -d '\r\n' || true)"
+  RESP_REASON="$(grep -i '^x-manifest-reason:' "$RESP_HEADERS" | head -1 | awk -F': ' '{print $2}' | tr -d '\r\n' || true)"
+
+  rm -f "$RESP_HEADERS" "$RESP_BODY"
+
+  # The smoke passes when upstream's observable routing headers
+  # reflect a header-tier match: `X-Manifest-Tier` is built from
+  # `meta.tier` (`standard`), and `X-Manifest-Reason` is
+  # `header-match`. If the upstream regression is back, the response
+  # tier and/or reason will be `direct` (the explicit-model override
+  # path added by 2ab748a6).
+  if [[ "$RESP_TIER" == "$TIER_EXPECTED_RESPONSE_TIER" && "$RESP_REASON" == "$TIER_EXPECTED_RESPONSE_REASON" ]]; then
+    log "tier-routing smoke → 200 (header tier override honored: X-Manifest-Tier: standard X-Manifest-Reason: header-match; configured tier=$TIER_HEADER_NAME)"
+  else
+    fail "tier-routing smoke → header tier NOT honored. " \
+         "Expected X-Manifest-Tier: standard and X-Manifest-Reason: header-match, " \
+         "got X-Manifest-Tier: '$RESP_TIER' and X-Manifest-Reason: '$RESP_REASON'. " \
+         "This means upstream commit 2ab748a6's explicit-model early-return " \
+         "is bypassing the configured header_tiers rule — " \
+         "body.model=$TIER_BODY_MODEL won over x-manifest-tier=$TIER_HEADER_NAME. " \
+         "Fix: verify the routing-override host hook " \
+         "(proxy-service-routing-override-host overlay) was applied to this " \
+         "image and that the XManifestTierPlugin is enabled in the plugin registry." 6
+  fi
+fi
+
 # ---- success --------------------------------------------------------------
 
 echo
@@ -292,6 +405,9 @@ echo "PASS: $IMAGE"
 echo "  serves the Manifest dashboard on http://127.0.0.1:${PORT}/"
 if [[ "$MVP_UI" == "1" ]]; then
   echo "  MVP_UI=1: /api/v1/plugins reachable with JSON body"
+fi
+if [[ "$TIER_ROUTING_SMOKE" == "1" ]]; then
+  echo "  TIER_ROUTING_SMOKE=1: x-manifest-tier override honored"
 fi
 echo "  (containers will be torn down automatically)"
 echo

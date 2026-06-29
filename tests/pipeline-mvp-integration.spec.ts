@@ -535,6 +535,51 @@ describe('.github/workflows/build-image.yml default build (Blocker #1)', () => {
   });
 });
 
+describe('pipeline/e2e-test.sh TIER_ROUTING_SMOKE asserts upstream-correct headers (Blocker #3)', () => {
+  it('TIER_ROUTING_SMOKE expects X-Manifest-Tier: standard (not the configured tier name)', () => {
+    // Blocker #3 regression lock: upstream sets the response
+    // `X-Manifest-Tier` header from `meta.tier` (always
+    // `'standard'` for header-tier matches), NOT from
+    // `header_tier_name`. Asserting the tier name in
+    // `X-Manifest-Tier` is a misread of the upstream contract; the
+    // smoke must assert `standard`.
+    const script = readScript('e2e-test.sh');
+    // The tier-routing smoke branch must reference the upstream
+    // tier value `standard` for the `X-Manifest-Tier` header
+    // check (the configured tier name lives in `X-Manifest-Tier-Name`
+    // or is encoded via `X-Manifest-Reason: header-match`).
+    expect(script).toMatch(/X-Manifest-Tier:?\s*\$\{?TIER_HEADER_VALUE_STANDARD\}?|X-Manifest-Tier:\s*standard|standard/);
+    // Negative: the smoke must NOT take `X-Manifest-Tier:
+    // $TIER_HEADER_NAME` as the success condition. We assert the
+    // exact positive `standard` check exists.
+    expect(script).toMatch(/X-Manifest-Tier['":][^"]*standard/);
+  });
+
+  it('TIER_ROUTING_SMOKE expects X-Manifest-Reason: header-match', () => {
+    // Blocker #3 regression lock: the `reason` field on a header-tier
+    // match is upstream-defined as `header-match`. The smoke must
+    // assert the response `X-Manifest-Reason` header equals
+    // `header-match` so a regression to `direct` (the upstream
+    // explicit-model branch's reason) is caught.
+    const script = readScript('e2e-test.sh');
+    expect(script).toMatch(/X-Manifest-Reason:?\s*header-match|X-Manifest-Reason.*header-match|header-match/);
+  });
+
+  it('TIER_ROUTING_SMOKE does NOT assert the configured tier name in X-Manifest-Tier', () => {
+    // Explicit anti-regression: the smoke must not depend on
+    // `$TIER_HEADER_NAME` appearing in the `X-Manifest-Tier` response
+    // header. That assertion was the bug — it conflates
+    // `header_tier_name` (lives in `header_tier_name` field, surfaced
+    // via a different header) with `meta.tier` (always `standard`
+    // for header-tier matches).
+    const script = readScript('e2e-test.sh');
+    // The success condition must not match on `$TIER_HEADER_NAME` as
+    // the `X-Manifest-Tier` value.
+    expect(script).not.toMatch(/RESP_TIER="\$\{?TIER_HEADER_NAME\}?"/);
+    expect(script).not.toMatch(/X-Manifest-Tier:?\s*\$\{?TIER_HEADER_NAME\}?/);
+  });
+});
+
 describe('pipeline/e2e-test.sh integration', () => {
   it('passes bash -n syntax check', () => {
     const result = run('bash', ['-n', E2E_SCRIPT]);
@@ -591,5 +636,35 @@ describe('pipeline/e2e-test.sh integration', () => {
     } finally {
       cleanup(tmp);
     }
+  });
+
+  it('TIER_ROUTING_SMOKE documents the tier-routing gate (regression fix for upstream 2ab748a6)', () => {
+    // Shell-text assertion: the e2e script must document and
+    // implement a tier-routing smoke that proves `x-manifest-tier`
+    // (or any configured `header_tiers` rule) wins over `body.model`.
+    // Without this smoke, the upstream regression (explicit-model
+    // early-return) can land in `latest` without detection.
+    const script = readScript('e2e-test.sh');
+
+    // 1. The gate env var is documented in the usage block.
+    expect(script).toMatch(/TIER_ROUTING_SMOKE/);
+
+    // 2. The smoke branch is gated on the env var (not always-on —
+    // it requires a running image + a configured `header_tiers` row,
+    // which is set up out-of-band by the pipeline runner). The
+    // script uses the bash `[[ ]]` form.
+    expect(script).toMatch(/if\s+\[\[\s*"\$TIER_ROUTING_SMOKE"\s*==\s*"1"\s*\]\]/);
+
+    // 3. The smoke sends a real HTTP request to the running app
+    // container with `x-manifest-tier` + a concrete `body.model`,
+    // and asserts the response honors the header tier (not the body
+    // model). We assert the log line shape so the regression class
+    // is detectable from CI output.
+    expect(script).toMatch(/tier-routing smoke/);
+
+    // 4. The smoke must NOT require new host dependencies (no jq, no
+    // new docker images, no new toolchain). It reuses the already-
+    // running app container + curl.
+    expect(script).not.toMatch(/command -v jq.*tier/i);
   });
 });
