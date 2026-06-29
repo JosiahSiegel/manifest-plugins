@@ -49,20 +49,21 @@ import type {
   RoutingOverrideRoute,
 } from '../..';
 
-export const X_MANIFEST_TIER_PLUGIN_KIND: PluginKind = 'routing-override';
+export const HEADER_TIER_ROUTER_PLUGIN_KIND: PluginKind = 'routing-override';
 
-export const X_MANIFEST_TIER_PLUGIN_METADATA: PluginMetadata = Object.freeze({
-  id: 'x-manifest-tier',
-  name: 'x-manifest-tier header override',
+export const HEADER_TIER_ROUTER_PLUGIN_METADATA: PluginMetadata = Object.freeze({
+  id: 'header-tier-router',
+  name: 'Header tier router',
   version: '0.1.0',
   description:
-    'Honors configured `header_tiers` rules over `body.model`, ' +
-    'restoring pre-2ab748a6 routing precedence where inbound tier ' +
-    'headers win over explicit OpenAI model IDs.',
-  kind: X_MANIFEST_TIER_PLUGIN_KIND,
+    'Routes requests whose inbound HTTP headers match a configured ' +
+    '`header_tiers` row, restoring pre-`2ab748a6` precedence where ' +
+    '`x-manifest-tier` (or any other configured tier header) wins over ' +
+    '`body.model`.',
+  kind: HEADER_TIER_ROUTER_PLUGIN_KIND,
 });
 
-const PLUGIN_INSTANCE_NAME = 'XManifestTierPlugin';
+const PLUGIN_INSTANCE_NAME = 'HeaderTierRouterPlugin';
 
 /**
  * Pick the first enabled, ordered `header_tiers` row whose header
@@ -192,8 +193,8 @@ export function buildResolvedRoutingFromTier(
   };
 }
 
-export class XManifestTierPlugin implements RoutingOverridePlugin {
-  static readonly metadata: PluginMetadata = X_MANIFEST_TIER_PLUGIN_METADATA;
+export class HeaderTierRouterPlugin implements RoutingOverridePlugin {
+  static readonly metadata: PluginMetadata = HEADER_TIER_ROUTER_PLUGIN_METADATA;
 
   overrideRouting(
     ctx: RoutingOverrideContext,

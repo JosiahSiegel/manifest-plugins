@@ -40,7 +40,7 @@
  */
 import { AnthropicBillingHeaderPlugin } from './plugins/anthropic-billing-header/plugin';
 import { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
-import { XManifestTierPlugin } from './plugins/x-manifest-tier/plugin';
+import { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';
 
 // =============================================================================
 // RequestTransformPlugin — per-request hook
@@ -296,7 +296,7 @@ const anthropicBillingHeaderPlugin = Object.freeze(
   new AnthropicBillingHeaderPlugin(),
 );
 const defaultPolicyPlugin = Object.freeze(new DefaultPolicyPlugin());
-const xManifestTierPlugin = Object.freeze(new XManifestTierPlugin());
+const headerTierRouterPlugin = Object.freeze(new HeaderTierRouterPlugin());
 
 const pluginRegistry: readonly PluginRegistryEntry[] = Object.freeze([
   Object.freeze({
@@ -312,9 +312,9 @@ const pluginRegistry: readonly PluginRegistryEntry[] = Object.freeze([
     enabledByDefault: true,
   }),
   Object.freeze({
-    pluginClassName: 'XManifestTierPlugin',
-    metadata: XManifestTierPlugin.metadata,
-    instance: xManifestTierPlugin,
+    pluginClassName: 'HeaderTierRouterPlugin',
+    metadata: HeaderTierRouterPlugin.metadata,
+    instance: headerTierRouterPlugin,
     enabledByDefault: true,
   }),
 ]);
@@ -367,4 +367,4 @@ export function setPluginEnabled(pluginId: string, enabled: boolean): void {
 
 export { AnthropicBillingHeaderPlugin } from './plugins/anthropic-billing-header/plugin';
 export { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
-export { XManifestTierPlugin } from './plugins/x-manifest-tier/plugin';
+export { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';

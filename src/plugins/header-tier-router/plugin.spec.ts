@@ -1,5 +1,5 @@
 /**
- * Unit tests for the XManifestTierPlugin. Covers:
+ * Unit tests for the HeaderTierRouterPlugin. Covers:
  *   - Skips Anthropic Messages apiMode (upstream contract preserved)
  *   - Skips when body.model is undefined (no override needed)
  *   - Skips when no header tier matches the inbound headers
@@ -22,9 +22,9 @@ import type {
 } from '../..';
 import {
   buildResolvedRoutingFromTier,
+  HeaderTierRouterPlugin,
   isRouteAvailableInDiscoveredModels,
   pickMatchingHeaderTier,
-  XManifestTierPlugin,
 } from './plugin';
 
 function makeRoute(overrides: Partial<RoutingOverrideRoute> = {}): RoutingOverrideRoute {
@@ -94,7 +94,7 @@ function makeCtx(
   return ctx;
 }
 
-describe('XManifestTierPlugin', () => {
+describe('HeaderTierRouterPlugin', () => {
   describe('pickMatchingHeaderTier', () => {
     it('returns null when no tiers are configured', () => {
       const tier = pickMatchingHeaderTier(makeCtx({ headerTiers: [] }));
@@ -287,7 +287,7 @@ describe('XManifestTierPlugin', () => {
     });
   });
 
-  describe('XManifestTierPlugin.overrideRouting', () => {
+  describe('HeaderTierRouterPlugin.overrideRouting', () => {
     let warnSpy: jest.SpyInstance;
 
     beforeEach(() => {
@@ -303,7 +303,7 @@ describe('XManifestTierPlugin', () => {
         apiMode: 'messages',
         headerTiers: [makeTier()],
       });
-      expect(new XManifestTierPlugin().overrideRouting(ctx)).toBeNull();
+      expect(new HeaderTierRouterPlugin().overrideRouting(ctx)).toBeNull();
     });
 
     it('returns null when requestedModel is undefined (no body model to override)', () => {
@@ -313,7 +313,7 @@ describe('XManifestTierPlugin', () => {
         requestedModel: undefined,
         headerTiers: [makeTier()],
       });
-      expect(new XManifestTierPlugin().overrideRouting(ctx)).toBeNull();
+      expect(new HeaderTierRouterPlugin().overrideRouting(ctx)).toBeNull();
     });
 
     it('returns null when no header tier matches', () => {
@@ -321,7 +321,7 @@ describe('XManifestTierPlugin', () => {
         headers: { 'x-manifest-tier': 'unknown' },
         headerTiers: [makeTier({ header_value: 'reasoning' })],
       });
-      expect(new XManifestTierPlugin().overrideRouting(ctx)).toBeNull();
+      expect(new HeaderTierRouterPlugin().overrideRouting(ctx)).toBeNull();
     });
 
     it('returns the matched tier routing when body.model is concrete (regression fix)', () => {
@@ -335,7 +335,7 @@ describe('XManifestTierPlugin', () => {
         requestedModel: 'openai/gpt-4o-mini',
         headerTiers: [tier],
       });
-      const result = new XManifestTierPlugin().overrideRouting(ctx);
+      const result = new HeaderTierRouterPlugin().overrideRouting(ctx);
       expect(result?.reason).toBe('header-match');
       expect(result?.route).toEqual(tier.override_route);
       expect(result?.header_tier_id).toBe('tier-1');
@@ -349,7 +349,7 @@ describe('XManifestTierPlugin', () => {
         requestedModel: 'openai/gpt-4o-mini',
         headerTiers: [makeTier({ override_route: null })],
       });
-      const result = new XManifestTierPlugin().overrideRouting(ctx);
+      const result = new HeaderTierRouterPlugin().overrideRouting(ctx);
       expect(result).toBeNull();
       expect(warnSpy).toHaveBeenCalledTimes(1);
     });
@@ -377,7 +377,7 @@ describe('XManifestTierPlugin', () => {
           { id: 'gpt-4o-mini', provider: 'openai', authType: 'subscription' },
         ],
       });
-      const result = new XManifestTierPlugin().overrideRouting(ctx);
+      const result = new HeaderTierRouterPlugin().overrideRouting(ctx);
       expect(result).toBeNull();
       expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy.mock.calls[0]?.[0]).toContain('not available');
@@ -402,7 +402,7 @@ describe('XManifestTierPlugin', () => {
           { id: 'gpt-5', provider: 'openai', authType: 'subscription' },
         ],
       });
-      const result = new XManifestTierPlugin().overrideRouting(ctx);
+      const result = new HeaderTierRouterPlugin().overrideRouting(ctx);
       expect(result).not.toBeNull();
       expect(result?.reason).toBe('header-match');
       expect(result?.route).toEqual(route);
@@ -415,17 +415,17 @@ describe('XManifestTierPlugin', () => {
         requestedModel: 'openai/gpt-4o-mini',
         headerTiers: [makeTier({ enabled: false })],
       });
-      expect(new XManifestTierPlugin().overrideRouting(ctx)).toBeNull();
+      expect(new HeaderTierRouterPlugin().overrideRouting(ctx)).toBeNull();
     });
   });
 
-  describe('XManifestTierPlugin.metadata', () => {
+  describe('HeaderTierRouterPlugin.metadata', () => {
     it('declares kind=routing-override', () => {
-      expect(XManifestTierPlugin.metadata.kind).toBe('routing-override');
+      expect(HeaderTierRouterPlugin.metadata.kind).toBe('routing-override');
     });
 
-    it('declares id=x-manifest-tier', () => {
-      expect(XManifestTierPlugin.metadata.id).toBe('x-manifest-tier');
+    it('declares id=header-tier-router', () => {
+      expect(HeaderTierRouterPlugin.metadata.id).toBe('header-tier-router');
     });
   });
 });

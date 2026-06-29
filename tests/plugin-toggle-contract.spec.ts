@@ -66,7 +66,7 @@ function resetRuntimeEnabledState(): void {
   if (!isPluginEnabledSetter(candidate)) return;
   candidate('anthropic-billing-header', true);
   candidate('default-policy', true);
-  candidate('x-manifest-tier', true);
+  candidate('header-tier-router', true);
 }
 
 function withTempFilterProject(fn: (root: string) => void): void {
@@ -158,7 +158,7 @@ describe('plugin-toggle MVP registry contract', () => {
           enabledByDefault: true,
         }),
         expect.objectContaining({
-          id: 'x-manifest-tier',
+          id: 'header-tier-router',
           name: expect.any(String),
           version: expect.any(String),
           description: expect.any(String),

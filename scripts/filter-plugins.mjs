@@ -42,7 +42,7 @@ const DIST_INDEX = resolve(repoRoot, 'dist/index.js');
 const PLUGIN_CLASS_NAMES = [
   'AnthropicBillingHeaderPlugin',
   'DefaultPolicyPlugin',
-  'XManifestTierPlugin',
+  'HeaderTierRouterPlugin',
 ];
 
 function loadConfig() {
@@ -124,7 +124,7 @@ function annotateEnabledDefaults(distSource, disabledClassNames) {
   const pluginIds = {
     AnthropicBillingHeaderPlugin: 'anthropic-billing-header',
     DefaultPolicyPlugin: 'default-policy',
-    XManifestTierPlugin: 'x-manifest-tier',
+    HeaderTierRouterPlugin: 'header-tier-router',
   };
   let next = distSource;
   for (const className of disabledClassNames) {

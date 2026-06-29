@@ -8,6 +8,6 @@
   "plugins": {
     "AnthropicBillingHeaderPlugin": true,
     "DefaultPolicyPlugin": true,
-    "XManifestTierPlugin": true
+    "HeaderTierRouterPlugin": true
   }
 }

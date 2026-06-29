@@ -2,7 +2,7 @@ import {
   plugins,
   AnthropicBillingHeaderPlugin,
   DefaultPolicyPlugin,
-  XManifestTierPlugin,
+  HeaderTierRouterPlugin,
 } from '../src/index';
 
 describe('plugin registry', () => {
@@ -18,8 +18,8 @@ describe('plugin registry', () => {
     expect(plugins).toContainEqual(expect.any(DefaultPolicyPlugin));
   });
 
-  it('includes the XManifestTierPlugin', () => {
-    expect(plugins).toContainEqual(expect.any(XManifestTierPlugin));
+  it('includes the HeaderTierRouterPlugin', () => {
+    expect(plugins).toContainEqual(expect.any(HeaderTierRouterPlugin));
   });
 
   it('freezes the registry to prevent runtime mutation', () => {
