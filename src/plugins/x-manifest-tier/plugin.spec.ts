@@ -230,7 +230,12 @@ describe('XManifestTierPlugin', () => {
     });
 
     it('returns a routing object with reason=header-match when route is set', () => {
-      const route = makeRoute({ provider: 'openai', authType: 'subscription', model: 'gpt-5' });
+      const route = makeRoute({
+        provider: 'openai',
+        authType: 'subscription',
+        model: 'gpt-5',
+        keyLabel: null,
+      });
       const tier = makeTier({ override_route: route });
       const result = buildResolvedRoutingFromTier(tier, makeDiscoveredModels([route]));
       expect(result).toEqual({

@@ -421,13 +421,13 @@ function applyProxyRoutingOverridePlugins(
       provider: string;
       authType: string;
       model: string;
-      keyLabel?: string;
+      keyLabel?: string | null;
     } | null;
     fallback_routes: ReadonlyArray<{
       provider: string;
       authType: string;
       model: string;
-      keyLabel?: string;
+      keyLabel?: string | null;
     }> | null;
     output_modality: string | null;
     response_mode: string | null;
@@ -437,25 +437,7 @@ function applyProxyRoutingOverridePlugins(
     provider: string;
     authType?: string;
   }>,
-): {
-  tier?: string;
-  route: { provider: string; authType: string; model: string; keyLabel?: string } | null;
-  fallback_routes?: ReadonlyArray<{
-    provider: string;
-    authType: string;
-    model: string;
-    keyLabel?: string;
-  }> | null;
-  response_mode?: string | null;
-  output_modality?: string | null;
-  confidence?: number;
-  score?: number;
-  reason?: string;
-  header_tier_id?: string;
-  header_tier_name?: string;
-  header_tier_color?: string | null;
-  explicit_model_override?: boolean;
-} | null {
+): ResolvedRouting | null {
   let pkg: { plugins?: unknown } | undefined;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -480,25 +462,7 @@ function applyProxyRoutingOverridePlugins(
         discoveredModels,
       });
       if (out && typeof out === 'object' && (out as { route?: unknown }).route !== undefined) {
-        return out as {
-          tier?: string;
-          route: { provider: string; authType: string; model: string; keyLabel?: string } | null;
-          fallback_routes?: ReadonlyArray<{
-            provider: string;
-            authType: string;
-            model: string;
-            keyLabel?: string;
-          }> | null;
-          response_mode?: string | null;
-          output_modality?: string | null;
-          confidence?: number;
-          score?: number;
-          reason?: string;
-          header_tier_id?: string;
-          header_tier_name?: string;
-          header_tier_color?: string | null;
-          explicit_model_override?: boolean;
-        };
+        return out as ResolvedRouting;
       }
     } catch (err) {
       const name =

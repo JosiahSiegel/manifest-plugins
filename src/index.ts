@@ -178,7 +178,7 @@ export interface RoutingOverrideRoute {
   readonly provider: string;
   readonly authType: string;
   readonly model: string;
-  readonly keyLabel?: string;
+  readonly keyLabel?: string | null;
 }
 
 /**

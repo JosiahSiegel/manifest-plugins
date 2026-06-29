@@ -161,6 +161,22 @@ describe('host snippet: PROXY_ROUTING_OVERRIDE_* (new routing-override anchor)',
     expect(PROXY_ROUTING_OVERRIDE_HOST_SOURCE).toContain('return');
   });
 
+  it('PROXY_ROUTING_OVERRIDE_HOST_SOURCE is assignable to upstream ResolvedRouting', () => {
+    // Packaging regression lock: the pasted helper compiles inside
+    // upstream `proxy.service.ts`, where `resolveRouting()` returns
+    // `Promise<ResolvedRouting>`. A loose structural return type with
+    // optional `tier` fails that build; use the upstream alias directly.
+    expect(PROXY_ROUTING_OVERRIDE_HOST_SOURCE).toContain('): ResolvedRouting | null');
+    expect(PROXY_ROUTING_OVERRIDE_HOST_SOURCE).not.toContain('tier?: string;');
+  });
+
+  it('PROXY_ROUTING_OVERRIDE_HOST_SOURCE accepts upstream ModelRoute keyLabel=null', () => {
+    // Upstream manifest-shared ModelRoute is `keyLabel?: string | null`.
+    // HeaderTier rows can therefore carry null keyLabel values; the
+    // helper parameter and return cast must accept that shape.
+    expect(PROXY_ROUTING_OVERRIDE_HOST_SOURCE).toContain('keyLabel?: string | null;');
+  });
+
   it('PROXY_ROUTING_OVERRIDE_OLD matches the verbatim anchor introduced by upstream 2ab748a6', () => {
     // The anchor is the 5 lines after the `resolveRouting()` signature
     // close-brace. It's the signature of commit 2ab748a6.
