@@ -22,7 +22,8 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "apply": "tsx src/host/cli.ts",
-    "verify": "tsx src/host/verify.ts"
+    "verify": "tsx src/host/verify.ts",
+    "new-plugin": "node scripts/new-plugin.mjs"
   },
   "dependencies": {},
   "devDependencies": {
