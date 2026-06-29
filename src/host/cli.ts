@@ -16,8 +16,8 @@
  *   - --link : also `npm link` this package into the checkout's
  *              `packages/backend/node_modules` so `require('manifest-plugins')`
  *              resolves at runtime.
- *   - --apply-overlay: after `applyAll`, run the MVP overlay apply
- *              path (`src/apply/mvp-overlay.ts`). Exits non-zero if
+ *   - --apply-overlay: after the default four-host apply, run the MVP
+ *              overlay path (`src/apply/mvp-overlay.ts`). Exits non-zero if
  *              any overlay reports drift.
  *   - --manifest-url / --manifest-ref / --manifest-dir / --manifest-fork:
  *              pick a non-default Manifest source. Defaults to a fresh
@@ -33,7 +33,7 @@ import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve, join } from 'path';
 import { promises as fs } from 'fs';
-import { applyAll, type ApplyResult } from './apply';
+import { applyAllFour, type ApplyResult } from './apply';
 import {
   OFFICIAL_MANIFEST_URL,
   resolveManifestSource,
@@ -193,7 +193,7 @@ async function main(): Promise<number> {
 
   process.stdout.write(`[manifest-plugins/apply] SOURCE_COMMIT=${source.commit}\n`);
   process.stdout.write(
-    `[manifest-plugins/apply] patching three files in ${checkoutPath}\n`,
+    `[manifest-plugins/apply] patching four host hooks in ${checkoutPath}\n`,
   );
 
   try {
@@ -213,31 +213,32 @@ async function main(): Promise<number> {
   }
 
   try {
-    const all = await applyAll(checkoutPath);
+    const all = await applyAllFour(checkoutPath);
     logResult('provider-client', all.providerClient);
     logResult('proxy-rate-limiter', all.proxyRateLimiter);
     logResult('proxy-service', all.proxyService);
+    logResult('proxy-routing-override', all.proxyRoutingOverride);
 
     if (all.hasDrift) {
       process.stderr.write(
-        '[manifest-plugins/apply] one or more files reported upstream-drift. ' +
+        '[manifest-plugins/apply] one or more host hooks reported upstream-drift. ' +
           'Update src/host/snippet.ts to match the new upstream shape, then re-run.\n',
       );
       return 1;
     }
 
     process.stdout.write(
-      '[manifest-plugins/apply] all three files patched (or already no-op)\n',
+      '[manifest-plugins/apply] all four host hooks patched (or already no-op)\n',
     );
 
     if (parsed.applyOverlay) {
       // The MVP overlay apply path is a typed/declarative batch over
-      // the same three target files. It runs AFTER applyAll so the
+      // the same target files. It runs AFTER applyAllFour so the
       // host snippet patcher has already had a chance to install
       // the helpers, and it captures SOURCE_COMMIT internally via
       // the same git runner. Drift here means the overlay manifest
       // references an overlay id that did not match the live
-      // applyAll state.
+      // applyAllFour state.
       const { applyMvpOverlay } = await import('../apply/mvp-overlay');
       const overlay = await applyMvpOverlay(checkoutPath);
       if (overlay.hasDrift) {
