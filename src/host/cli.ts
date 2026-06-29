@@ -155,13 +155,15 @@ async function main(): Promise<number> {
 
   let checkoutPath: string;
   let source: ManifestSource;
+  const localCheckoutPath = parsed.checkoutPath ?? parsed.manifestDir;
   try {
-    if (parsed.checkoutPath !== undefined) {
+    if (localCheckoutPath !== undefined) {
       source = await resolveManifestSource({
-        manifestDir: parsed.checkoutPath,
+        manifestDir: localCheckoutPath,
         manifestUrl: parsed.manifestUrl,
         manifestRef: parsed.manifestRef,
         manifestFork: parsed.manifestFork,
+        env: {},
       });
     } else {
       source = await resolveManifestSource({

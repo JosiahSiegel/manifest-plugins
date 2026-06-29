@@ -214,6 +214,15 @@ describe('resolveManifestSource', () => {
     ).rejects.toThrow('choose only one Manifest source');
   });
 
+  it('throws when an explicit local checkout conflicts with MANIFEST_URL from env', async () => {
+    await expect(
+      resolveManifestSource({
+        manifestDir: '/tmp/manifest',
+        env: { MANIFEST_URL: 'https://github.com/example/manifest.git' },
+      }),
+    ).rejects.toThrow('choose only one Manifest source');
+  });
+
   it('throws on invalid URL, fork shorthand, missing dir, and empty ref', async () => {
     await expect(resolveManifestSource({ manifestUrl: 'ftp://example.test/repo' })).rejects.toThrow(
       'manifest URL must be an http(s) URL',

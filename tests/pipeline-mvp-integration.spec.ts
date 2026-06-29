@@ -36,11 +36,26 @@ import {
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 const REPO_ROOT = join(__dirname, '..');
 const BUILD_SCRIPT = join(REPO_ROOT, 'pipeline', 'build-and-publish.sh');
 const E2E_SCRIPT = join(REPO_ROOT, 'pipeline', 'e2e-test.sh');
+const TSX_CLI = join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const PATCHED_MANIFEST_FILES = [
+  {
+    relativePath: 'packages/backend/src/routing/proxy/provider-client.ts',
+    content: 'function applyRequestTransformPlugins() {}\n',
+  },
+  {
+    relativePath: 'packages/backend/src/routing/proxy/proxy-rate-limiter.ts',
+    content: 'function getResolvedConcurrencyMax() { return 10; }\n',
+  },
+  {
+    relativePath: 'packages/backend/src/routing/proxy/proxy.service.ts',
+    content: 'function getResolvedMaxMessagesPerRequest() { return Infinity; }\n',
+  },
+] as const;
 
 function readScript(relativePath: string): string {
   return readFileSync(join(REPO_ROOT, 'pipeline', relativePath), 'utf-8');
@@ -52,6 +67,14 @@ function tempDir(prefix: string): string {
 
 function cleanup(path: string): void {
   rmSync(path, { recursive: true, force: true });
+}
+
+function writePatchedManifestFixture(root: string): void {
+  for (const file of PATCHED_MANIFEST_FILES) {
+    const target = join(root, file.relativePath);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, file.content, 'utf-8');
+  }
 }
 
 function run(
@@ -66,6 +89,65 @@ function run(
     encoding: 'utf-8',
   });
 }
+
+describe('apply CLI integration', () => {
+  it('uses positional checkout path even when MANIFEST_URL remains in the environment', () => {
+    const tmp = tempDir('manifest-apply-cli-env-url-');
+    try {
+      writePatchedManifestFixture(tmp);
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        MANIFEST_URL: 'https://github.com/mnfst/manifest.git',
+        MANIFEST_DIR: '',
+        MANIFEST_CHECKOUT: '',
+        MANIFEST_FORK: '',
+        MVP_UI: '',
+      };
+
+      const result = run(process.execPath, [TSX_CLI, 'src/host/cli.ts', tmp], env, REPO_ROOT);
+
+      if (result.status !== 0) {
+        throw new Error(
+          `expected apply CLI to succeed with an already-resolved checkout path\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+        );
+      }
+      expect(result.stderr).not.toContain('choose only one Manifest source');
+      expect(result.stdout).toContain('[manifest-plugins/apply] SOURCE_COMMIT=');
+      expect(result.stdout).toContain(
+        '[manifest-plugins/apply] all three files patched (or already no-op)',
+      );
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  it('still rejects an explicit manifest URL when a positional checkout path is supplied', () => {
+    const tmp = tempDir('manifest-apply-cli-explicit-url-');
+    try {
+      writePatchedManifestFixture(tmp);
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        MANIFEST_URL: '',
+        MANIFEST_DIR: '',
+        MANIFEST_CHECKOUT: '',
+        MANIFEST_FORK: '',
+        MVP_UI: '',
+      };
+
+      const result = run(
+        process.execPath,
+        [TSX_CLI, 'src/host/cli.ts', '--manifest-url', 'https://github.com/example/manifest.git', tmp],
+        env,
+        REPO_ROOT,
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('choose only one Manifest source');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+});
 
 describe('pipeline/build-and-publish.sh integration', () => {
   it('--help exits 0 and prints usage text', () => {
