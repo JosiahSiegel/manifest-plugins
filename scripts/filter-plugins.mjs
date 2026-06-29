@@ -39,7 +39,11 @@ const DIST_INDEX = resolve(repoRoot, 'dist/index.js');
  * registry is the build-time allowlist, the index is the runtime
  * instantiation.
  */
-const PLUGIN_CLASS_NAMES = ['AnthropicBillingHeaderPlugin', 'DefaultPolicyPlugin'];
+const PLUGIN_CLASS_NAMES = [
+  'AnthropicBillingHeaderPlugin',
+  'DefaultPolicyPlugin',
+  'XManifestTierPlugin',
+];
 
 function loadConfig() {
   if (!existsSync(CONFIG_PATH)) {
@@ -120,6 +124,7 @@ function annotateEnabledDefaults(distSource, disabledClassNames) {
   const pluginIds = {
     AnthropicBillingHeaderPlugin: 'anthropic-billing-header',
     DefaultPolicyPlugin: 'default-policy',
+    XManifestTierPlugin: 'x-manifest-tier',
   };
   let next = distSource;
   for (const className of disabledClassNames) {

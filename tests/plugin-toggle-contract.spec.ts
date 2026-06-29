@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import * as registry from '../src/index';
 import { AnthropicBillingHeaderPlugin, DefaultPolicyPlugin } from '../src/index';
 
-type PluginKind = 'transform' | 'policy';
+type PluginKind = 'transform' | 'policy' | 'routing-override';
 
 interface InstalledPluginMetadata {
   readonly id: string;
@@ -66,6 +66,7 @@ function resetRuntimeEnabledState(): void {
   if (!isPluginEnabledSetter(candidate)) return;
   candidate('anthropic-billing-header', true);
   candidate('default-policy', true);
+  candidate('x-manifest-tier', true);
 }
 
 function withTempFilterProject(fn: (root: string) => void): void {
@@ -135,7 +136,7 @@ describe('plugin-toggle MVP registry contract', () => {
     resetRuntimeEnabledState();
   });
 
-  it('exports installed plugin metadata for both built-in plugins', () => {
+  it('exports installed plugin metadata for all three built-in plugins', () => {
     const installed = getInstalledPlugins();
 
     expect(installed).toEqual(
@@ -154,6 +155,14 @@ describe('plugin-toggle MVP registry contract', () => {
           version: expect.any(String),
           description: expect.any(String),
           kind: 'policy',
+          enabledByDefault: true,
+        }),
+        expect.objectContaining({
+          id: 'x-manifest-tier',
+          name: expect.any(String),
+          version: expect.any(String),
+          description: expect.any(String),
+          kind: 'routing-override',
           enabledByDefault: true,
         }),
       ]),

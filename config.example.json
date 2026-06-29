@@ -7,6 +7,7 @@
   },
   "plugins": {
     "AnthropicBillingHeaderPlugin": true,
-    "DefaultPolicyPlugin": true
+    "DefaultPolicyPlugin": true,
+    "XManifestTierPlugin": true
   }
 }
