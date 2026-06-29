@@ -130,6 +130,7 @@ jobs:
             --manifest /tmp/manifest
             --no-cache
           )
+          ARGS+=(--apply-overlay)
           if [ -n "${{ inputs.image_tag }}" ]; then
             ARGS+=(--tag "${{ inputs.image_tag }}")
           fi

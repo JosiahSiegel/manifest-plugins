@@ -386,7 +386,7 @@ describe('apply CLI integration', () => {
       expect(result.stderr).not.toContain('choose only one Manifest source');
       expect(result.stdout).toContain('[manifest-plugins/apply] SOURCE_COMMIT=');
       expect(result.stdout).toContain(
-        '[manifest-plugins/apply] all three files patched (or already no-op)',
+        '[manifest-plugins/apply] all four host hooks patched (or already no-op)',
       );
     } finally {
       cleanup(tmp);
@@ -418,6 +418,37 @@ describe('apply CLI integration', () => {
     } finally {
       cleanup(tmp);
     }
+  });
+});
+
+describe('pipeline/build-and-publish.sh default install path (Blocker #1)', () => {
+  it('default apply invocation passes --apply-overlay to install the routing-override hook', () => {
+    // Blocker #1 regression lock: the pipeline's normal (non-MVP)
+    // apply invocation MUST pass `--apply-overlay` so the
+    // routing-override hook is part of the default image build.
+    const script = readScript('build-and-publish.sh');
+    // The default branch (no --apply-overlay flag) must include
+    // --apply-overlay in the npm run apply -- invocation.
+    const defaultApplyInvocation = script.match(
+      /npm run apply --[^\n]*"\$MANIFEST_PATH"/,
+    );
+    expect(defaultApplyInvocation).not.toBeNull();
+    if (defaultApplyInvocation === null) return;
+    expect(defaultApplyInvocation[0]).toMatch(/--apply-overlay\b/);
+  });
+
+  it('post-apply verification grep checks `function applyProxyRoutingOverridePlugins(`', () => {
+    // Blocker #1 regression lock: the pipeline's post-apply grep MUST
+    // check the routing-override function sentinel — without this
+    // check the image can ship without the routing-override hook and
+    // pass the build.
+    const script = readScript('build-and-publish.sh');
+    expect(script).toMatch(/grep -q ['"]?function applyProxyRoutingOverridePlugins\(/);
+  });
+
+  it('default invocation is bash -n clean', () => {
+    const result = run('bash', ['-n', BUILD_SCRIPT]);
+    expect(result.status).toBe(0);
   });
 });
 
@@ -483,6 +514,24 @@ describe('pipeline/build-and-publish.sh integration', () => {
         `shellcheck failed for build-and-publish.sh:\n${result.stdout}\n${result.stderr}`,
       );
     }
+  });
+});
+
+describe('.github/workflows/build-image.yml default build (Blocker #1)', () => {
+  it('CI default image build passes the routing-override install flag', () => {
+    // Blocker #1 regression lock: the GitHub Actions workflow MUST
+    // pass the flag that triggers the four-overlay installer so the
+    // default image build always installs the routing-override hook.
+    const workflow = readFileSync(
+      join(REPO_ROOT, '.github/workflows/build-image.yml'),
+      'utf-8',
+    );
+    // The default ARGS construction must include the
+    // routing-override install flag. The pipeline exposes this as
+    // `--apply-overlay` (the documented flag for the four-file
+    // installer), so we assert the workflow passes it.
+    expect(workflow).toMatch(/ARGS=\([^)]*\)/);
+    expect(workflow).toMatch(/ARGS\+=?\(\s*--apply-overlay\s*\)/);
   });
 });
 

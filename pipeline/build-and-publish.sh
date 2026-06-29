@@ -51,13 +51,13 @@
 #                          official clone (which would silently publish
 #                          MVP UI against whatever upstream HEAD happens
 #                          to be).
-#   --apply-overlay        Run the MVP overlay apply path after the
-#                          standard host patches. Compiles the
-#                          overlay package via `npm run build:overlay`
-#                          and invokes the apply CLI's
-#                          `--apply-overlay` mode. Default OFF. When
-#                          the apply step reports drift, the pipeline
-#                          exits non-zero.
+#   --apply-overlay        Rebuild the overlay package via
+#                          `npm run build:overlay` before invoking the
+#                          apply CLI. The normal apply path already
+#                          forwards the CLI's `--apply-overlay` mode so
+#                          the routing-override host hook is installed
+#                          by default. When the apply step reports
+#                          drift, the pipeline exits non-zero.
 #   --tag TAG              Image tag (default: <plugins-version>.<manifest-sha>)
 #   --registry REGISTRY    Image registry (e.g. ghcr.io/your-org)
 #                          If unset, image is built but not pushed.
@@ -244,24 +244,15 @@ echo "[manifest-plugins/apply] SOURCE_COMMIT=${SOURCE_COMMIT}"
 (
   cd "$PLUGINS_REPO_DIR"
   # Pass MVP=1 through so the CLI guard activates for the same condition.
-  # When --apply-overlay is set, build the overlay package and forward
-  # the flag so the apply CLI runs the MVP overlay apply path after
-  # the standard host patches.
+  # The default image build always forwards --apply-overlay so the
+  # four-overlay installer applies the routing-override host hook.
   if [[ $APPLY_MVP_OVERLAY -eq 1 ]]; then
     npm run build:overlay
   fi
   if [[ $MVP -eq 1 ]]; then
-    if [[ $APPLY_MVP_OVERLAY -eq 1 ]]; then
-      MVP_UI=1 npm run apply -- --apply-overlay "$MANIFEST_PATH"
-    else
-      MVP_UI=1 npm run apply -- "$MANIFEST_PATH"
-    fi
+    MVP_UI=1 npm run apply -- --apply-overlay "$MANIFEST_PATH"
   else
-    if [[ $APPLY_MVP_OVERLAY -eq 1 ]]; then
-      npm run apply -- --apply-overlay "$MANIFEST_PATH"
-    else
-      npm run apply -- "$MANIFEST_PATH"
-    fi
+    npm run apply -- --apply-overlay "$MANIFEST_PATH"
   fi
 )
 
@@ -280,7 +271,12 @@ for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER" "$PROXY_SERVICE"; do
     exit 1
   fi
 done
-echo "==> post-apply check: all three files have the host functions"
+if ! grep -q 'function applyProxyRoutingOverridePlugins(' "$PROXY_SERVICE"; then
+  echo "error: post-apply check failed — function applyProxyRoutingOverridePlugins( not found in $PROXY_SERVICE" >&2
+  echo "       the default apply/build path did not install the routing-override hook." >&2
+  exit 1
+fi
+echo "==> post-apply check: all host functions are installed"
 
 # ---- step 4: build the Docker image --------------------------------------
 if [[ -z "$IMAGE_TAG" ]]; then
