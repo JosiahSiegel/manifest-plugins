@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+#
+# End-to-end test for a built manifest-with-plugins image.
+#
+# Boots the image against a scratch PostgreSQL, waits for the Nest
+# backend to bind its port, and asserts:
+#
+#   1. GET /api/v1/health      → HTTP 200, JSON {"status":"healthy",...}
+#   2. GET /                   → HTTP 200, content-type text/html
+#                                (i.e. the SolidJS dashboard loads, not
+#                                Nest's default 404 for an unhandled route)
+#   3. GET /assets/<filename>   → HTTP 200, content-type application/javascript
+#                                (i.e. the dashboard's JS bundle is reachable)
+#
+# This is the canonical validation that the image is a drop-in replacement
+# for the upstream Manifest image. Symbol-only checks (does the compiled
+# JS contain "applyRequestTransformPlugins") catch build-time regressions
+# but not serve-static / dashboard / asset-pipeline regressions.
+#
+# Usage:
+#   bash pipeline/e2e-test.sh <image:tag>
+#
+# Required tools: docker, curl, openssl, postgres client (only used
+# implicitly via docker exec).
+#
+# Exit codes:
+#   0  all checks passed
+#   1  image does not exist locally
+#   2  container did not become healthy within the timeout
+#   3  one or more HTTP checks returned a non-200 status / wrong type
+#   4  unexpected runtime error during the test
+
+set -uo pipefail
+
+# ---- arguments + defaults ---------------------------------------------------
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: $0 <image:tag>" >&2
+  echo "" >&2
+  echo "Example:" >&2
+  echo "  $0 manifest-with-plugins:0.1.0.d48a57483" >&2
+  echo "" >&2
+  echo "Env vars:" >&2
+  echo "  PORT                    port to publish (default: 2099)" >&2
+  echo "  HEALTH_TIMEOUT_SECONDS  how long to wait for /api/v1/health (default: 60)" >&2
+  exit 64
+fi
+
+IMAGE="$1"
+PORT="${PORT:-2099}"
+HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-60}"
+
+# ---- preflight --------------------------------------------------------------
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "error: docker not on PATH" >&2
+  exit 4
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo "error: curl not on PATH" >&2
+  exit 4
+fi
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "error: openssl not on PATH" >&2
+  exit 4
+fi
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "error: image '$IMAGE' not present in local docker" >&2
+  echo "      pull it first: docker pull $IMAGE" >&2
+  echo "      or build it:    bash pipeline/build-and-publish.sh --tag <t>" >&2
+  exit 1
+fi
+
+# ---- helpers ----------------------------------------------------------------
+
+# Names are per-PID so concurrent runs don't collide. We don't share
+# between runs; this is throwaway.
+RUN_ID="$$"
+NET_NAME="mwp-e2e-${RUN_ID}"
+PG_NAME="mwp-e2e-pg-${RUN_ID}"
+APP_NAME="mwp-e2e-app-${RUN_ID}"
+
+cleanup() {
+  # Remove containers first (they depend on the network), then the net.
+  docker rm -f "$APP_NAME" "$PG_NAME" >/dev/null 2>&1 || true
+  docker network rm "$NET_NAME" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+log()  { printf '  %s\n' "$*"; }
+fail() { printf '  FAIL: %s\n' "$*" >&2; exit "${2:-3}"; }
+
+# Poll $1 until it returns 200 or $2 seconds elapse. Returns:
+#   0  on 200 (ready)
+#   2  on any other HTTP status (server is up but wrong response)
+#   1  on timeout (server never came up)
+wait_for_health() {
+  local url="$1"
+  local timeout_s="$2"
+  local deadline=$(( $(date +%s) + timeout_s ))
+  while (( $(date +%s) < deadline )); do
+    local code
+    # curl outputs `%{http_code}` (000 on connect failure) AND exits
+    # non-zero on failure — the `|| echo` would then append another
+    # 000. Strip it: take only the first 3 chars.
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 2 "$url" 2>/dev/null)"
+    code="${code:0:3}"
+    case "$code" in
+      200) return 0 ;;
+      000) : ;;  # not yet listening — keep polling
+      *)   return 2 ;;
+    esac
+    sleep 1
+  done
+  return 1
+}
+
+# Capture response metadata into $RESP_CODE, $RESP_TYPE, $RESP_BYTES,
+# $RESP_BODY (path to temp file with the body).
+RESP_CODE=
+RESP_TYPE=
+RESP_BYTES=
+RESP_BODY=
+
+capture() {
+  local url="$1"
+  RESP_BODY="$(mktemp)"
+  # curl's -w output is emitted even when curl exits non-zero (e.g.
+  # connect-refused gives `000|application/octet-stream|0`), so the
+  # `|| echo` fallback below would duplicate the fields. We use
+  # `--fail-with-body` semantics via the explicit output parsing
+  # instead: only run the echo fallback if curl produced no output at
+  # all.
+  local meta
+  meta="$(curl -sS -o "$RESP_BODY" -w '%{http_code}|%{content_type}|%{size_download}' --max-time 10 "$url" 2>/dev/null)"
+  if [[ -z "$meta" ]]; then
+    meta='000|application/octet-stream|0'
+  fi
+  # Defensive: take only the first three pipe-delimited fields in case
+  # content_type contained a `|` (unlikely but safe).
+  IFS='|' read -r RESP_CODE RESP_TYPE RESP_BYTES < <(printf '%s' "$meta" | head -c 200)
+}
+
+# ---- step 1: scratch postgres ---------------------------------------------
+
+echo "[1/4] starting scratch PostgreSQL on user-defined network"
+docker network create --driver bridge "$NET_NAME" >/dev/null \
+  || fail "could not create network $NET_NAME" 4
+docker run -d --name "$PG_NAME" \
+  --network "$NET_NAME" \
+  -e POSTGRES_USER=myuser \
+  -e POSTGRES_PASSWORD=mypassword \
+  -e POSTGRES_DB=mwp_e2e \
+  postgres:16 >/dev/null \
+  || fail "could not start scratch postgres" 4
+log "postgres container up"
+
+# Wait for postgres to be ready (its own init takes ~2-3s).
+for _ in $(seq 1 30); do
+  if docker exec "$PG_NAME" pg_isready -U myuser >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+if ! docker exec "$PG_NAME" pg_isready -U myuser >/dev/null 2>&1; then
+  fail "postgres did not become ready in 30s" 4
+fi
+log "postgres ready"
+
+# ---- step 2: app container -------------------------------------------------
+
+echo "[2/4] starting $IMAGE"
+docker run -d --name "$APP_NAME" \
+  --network "$NET_NAME" \
+  -p "${PORT}:${PORT}" \
+  -e BETTER_AUTH_SECRET="$(openssl rand -hex 32)" \
+  -e DATABASE_URL="postgresql://myuser:mypassword@${PG_NAME}:5432/mwp_e2e" \
+  -e PORT="$PORT" \
+  -e NODE_ENV=development \
+  -e MANIFEST_MODE=selfhosted \
+  -e BIND_ADDRESS=0.0.0.0 \
+  "$IMAGE" >/dev/null \
+  || fail "could not start application container" 4
+log "app container up (logs: docker logs $APP_NAME)"
+
+# ---- step 3: wait for health ----------------------------------------------
+
+echo "[3/4] waiting for http://127.0.0.1:${PORT}/api/v1/health (timeout: ${HEALTH_TIMEOUT_SECONDS}s)"
+# Capture wait_for_health's exit code BEFORE branching, since $? inside
+# the elif would refer to the if-condition's negation, not the function.
+wait_for_health "http://127.0.0.1:${PORT}/api/v1/health" "$HEALTH_TIMEOUT_SECONDS"
+health_rc=$?
+case "$health_rc" in
+  0) log "/api/v1/health is up" ;;
+  2) fail "GET /api/v1/health returned non-200 within timeout" 2 ;;
+  *) fail "GET /api/v1/health did not respond within ${HEALTH_TIMEOUT_SECONDS}s" 2 ;;
+esac
+
+# ---- step 4: dashboard + asset delivery ----------------------------------
+
+echo "[4/4] validating dashboard delivery"
+
+# (a) /api/v1/health — JSON
+capture "http://127.0.0.1:${PORT}/api/v1/health"
+[[ "$RESP_CODE" == "200" ]] \
+  || fail "GET /api/v1/health → $RESP_CODE (expected 200)" 3
+[[ "$RESP_TYPE" == application/json* ]] \
+  || fail "GET /api/v1/health content-type: $RESP_TYPE (expected application/json)" 3
+log "GET /api/v1/health          → 200 ($RESP_BYTES bytes, $RESP_TYPE)"
+
+# (b) / — dashboard HTML (this is the canonical regression check — the
+# root cause of the 404 bug was that the Dockerfile didn't copy the
+# frontend dist into the runtime image).
+capture "http://127.0.0.1:${PORT}/"
+[[ "$RESP_CODE" == "200" ]] \
+  || fail "GET / → $RESP_CODE (expected 200 — the frontend dist is missing or the serve-static middleware is misconfigured)" 3
+[[ "$RESP_TYPE" == text/html* ]] \
+  || fail "GET / content-type: $RESP_TYPE (expected text/html)" 3
+if ! grep -q '<title>Manifest</title>' "$RESP_BODY"; then
+  fail "GET / returned HTML but it doesn't contain '<title>Manifest</title>' — the dashboard index.html is wrong" 3
+fi
+log "GET /                       → 200 ($RESP_BYTES bytes, $RESP_TYPE, contains dashboard title)"
+
+# (c) /assets/<bundled-js> — Vite asset path (catches asset-pipeline
+# regressions where the HTML references a hash that the dist doesn't ship).
+ASSET_FILE="$(grep -oE '/assets/[A-Za-z0-9_./-]+\.(js|css)' "$RESP_BODY" | head -1 || true)"
+if [[ -n "$ASSET_FILE" ]]; then
+  capture "http://127.0.0.1:${PORT}${ASSET_FILE}"
+  [[ "$RESP_CODE" == "200" ]] \
+    || fail "GET ${ASSET_FILE} → $RESP_CODE (expected 200 — Vite asset path is broken)" 3
+  case "$RESP_TYPE" in
+    application/javascript*|text/javascript*|application/x-javascript*|text/css*) ;;
+    *) fail "GET ${ASSET_FILE} content-type: $RESP_TYPE (expected js/css)" 3 ;;
+  esac
+  log "GET ${ASSET_FILE}  → 200 ($RESP_BYTES bytes, $RESP_TYPE)"
+else
+  log "(skipped asset check — no /assets/* file found in dashboard HTML)"
+fi
+
+# ---- success --------------------------------------------------------------
+
+echo
+echo "PASS: $IMAGE"
+echo "  serves the Manifest dashboard on http://127.0.0.1:${PORT}/"
+echo "  (containers will be torn down automatically)"
+echo

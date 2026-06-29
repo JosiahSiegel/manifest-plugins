@@ -3,9 +3,7 @@
 # =====================
 #
 # End-to-end pipeline that:
-#   1. Clones or refreshes a mnfst/manifest checkout (or uses an existing
-#      path). The user passes the path; if it doesn't exist, the script
-#      clones a fresh shallow copy.
+#   1. Clones a fresh mnfst/manifest checkout (or uses --manifest PATH).
 #   2. Builds the manifest-plugins package (this repo) so the apply
 #      CLI and the runtime dist/ are available.
 #   3. Applies the plugin host to all three target files in the
@@ -13,8 +11,11 @@
 #      proxy.service.ts). Idempotent — safe to re-run.
 #   4. Builds a Docker image with the plugins baked in, using
 #      `manifest-plugins` as a named BuildKit build-context.
-#   5. Optionally pushes the image to a registry.
-#   6. Prints usage instructions for the resulting image.
+#   5. Runs the canonical e2e test: boot image + GET / must serve the
+#      Manifest dashboard (not Nest's default 404).
+#   6. Optionally pushes the versioned tag. Pushes `latest` only if
+#      the e2e test passed.
+#   7. Prints usage instructions for the resulting image.
 #
 # The user runs this script ONCE to publish an image; downstream
 # consumers just `docker pull` and `docker run` — no apply step
@@ -23,8 +24,9 @@
 # Usage:
 #   ./build-and-publish.sh [options] [manifest-checkout-path]
 #
-# Options (env vars override flags):
-#   --manifest PATH       Path to the Manifest checkout (default: ../manifest)
+# Options (flags override env vars):
+#   --manifest PATH       Path to a Manifest checkout. If omitted, the
+#                         script clones a fresh shallow MANIFEST_URL copy.
 #   --manifest-url URL     Git URL to clone when the local --manifest path
 #                          doesn't exist (default: https://github.com/mnfst/manifest.git).
 #                          Override to point at a fork, e.g. for testing
@@ -61,9 +63,9 @@
 # After the script completes, the image is available locally as both
 # `manifest-with-plugins:<tag>` AND `manifest-with-plugins:latest` (the
 # latest tag is always created locally so `docker images` shows it,
-# regardless of whether --push was used). If --push was used, both tags
-# are also at `<registry>/manifest-with-plugins:<tag>` and
-# `<registry>/manifest-with-plugins:latest`.
+# regardless of whether --push was used). If --push was used, the
+# versioned tag is always pushed. The remote `latest` tag is pushed
+# only after the e2e test passes.
 
 set -euo pipefail
 
@@ -113,31 +115,22 @@ if ! docker buildx version >/dev/null 2>&1; then
 fi
 
 # ---- step 1: ensure Manifest checkout --------------------------------------
-# The patcher applies byte-exact anchors against upstream/main. Two
-# ways to provide a checkout:
+# Default behavior is intentionally "fresh upstream clone", not "reuse
+# ../manifest". A sibling checkout is often a fork or a local worktree
+# with housekeeping overlays; byte-exact patch anchors can drift there.
 #
-#   (a) --manifest /path/to/checkout (or env MANIFEST_PATH=/path/to)
-#       — uses that path. If the path doesn't yet exist or has no
-#       .git, we clone MANIFEST_URL into it. This is what the GitHub
-#       Actions workflow does (passes --manifest /tmp/manifest and
-#       expects us to clone into that temp path).
+# To use a specific checkout, pass --manifest PATH (or set MANIFEST_PATH).
+# If that path doesn't exist yet, we clone MANIFEST_URL into it. This is
+# what the GitHub Actions workflow does with --manifest /tmp/manifest.
 #
-#   (b) No --manifest given — fall back to the legacy sibling clone at
-#       ../manifest, or clone into a tempdir if no sibling exists.
-#
-# In both cases, if the resolved path lacks a .git directory, we clone
-# MANIFEST_URL into it (rather than erroring out). The patcher is strict
-# about upstream anchors, but the workflow expects clone-if-absent
-# semantics for explicit temp paths.
+# If no path is provided, clone a fresh shallow copy into a tempdir.
+# That keeps the default pipeline deterministic and upstream-shaped.
 if [[ -z "$MANIFEST_PATH" ]]; then
-  # Legacy default: sibling clone.
-  MANIFEST_PATH="$(cd "$PLUGINS_REPO_DIR/.." && pwd)/manifest"
-fi
-if [[ ! -d "$MANIFEST_PATH/.git" ]]; then
-  # Path doesn't exist or isn't a checkout yet — clone MANIFEST_URL
-  # into it. This handles both the legacy "no sibling" case and the
-  # workflow "explicit temp path" case.
-  echo "==> cloning $MANIFEST_URL into $MANIFEST_PATH (pass --manifest-url to override the upstream)"
+  MANIFEST_PATH="$(mktemp -d -t manifest-build-XXXXXX)/manifest"
+  echo "==> cloning $MANIFEST_URL into $MANIFEST_PATH (fresh checkout; pass --manifest to reuse a local tree)"
+  git clone --depth=1 "$MANIFEST_URL" "$MANIFEST_PATH"
+elif [[ ! -d "$MANIFEST_PATH/.git" ]]; then
+  echo "==> cloning $MANIFEST_URL into $MANIFEST_PATH (explicit --manifest path did not exist yet)"
   mkdir -p "$(dirname "$MANIFEST_PATH")"
   git clone --depth=1 "$MANIFEST_URL" "$MANIFEST_PATH"
 fi
@@ -246,136 +239,33 @@ docker buildx build \
 # can run a smoke test below. Note: --push and --load are mutually
 # exclusive in buildx, so we always --load and then optionally --push.
 
-# ---- step 5: smoke test (always) ----------------------------------------
-echo "==> smoke test: confirm the host functions are present in the built image"
-# Write the smoke-test JS to a temp file and run it via a mount — this
-# avoids the multi-line-string quoting mess that breaks `docker run` arg
-# parsing. The distroless image has `node` at /nodejs/bin/node, so the
-# entrypoint override points at the absolute path.
-SMOKE_TEST_SCRIPT="$(mktemp -p /tmp smoke-test.XXXXXX.js)"
-# The distroless image runs as nonroot (UID 65532) but the file is
-# created by the host user (UID 1000 in CI). mktemp defaults to mode 0600
-# (owner-only) which the nonroot user inside the container can't read.
-# chmod a+r makes it world-readable so the in-container node can open
-# the file across the bind mount.
-chmod a+r "$SMOKE_TEST_SCRIPT"
-cat > "$SMOKE_TEST_SCRIPT" <<'SMOKE_EOF'
-const fs = require("fs");
-const http = require("http");
-
-// --- Static check: the three host functions are present in the compiled dist.
-// The apply step verified the source files before the build, but a build-
-// time regression (wrong Dockerfile, missing COPY, etc.) could strip the
-// host from the dist. Re-check here to fail fast in CI.
-const host = fs.readFileSync("/app/packages/backend/dist/routing/proxy/provider-client.js", "utf-8");
-const rateLimiter = fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy-rate-limiter.js", "utf-8");
-const proxyService = fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy.service.js", "utf-8");
-const pluginDist = require("/app/node_modules/manifest-plugins/dist/index.js");
-const staticOk =
-  host.includes("applyRequestTransformPlugins") &&
-  rateLimiter.includes("getResolvedConcurrencyMax") &&
-  proxyService.includes("getResolvedMaxMessagesPerRequest") &&
-  pluginDist.plugins.length > 0;
-
-if (!staticOk) {
-  console.error("FAIL: host function missing from one of the three files");
-  process.exit(1);
-}
-console.log("static-check: all three host functions present in built image");
-console.log("plugin array:", pluginDist.plugins.map(x => x.constructor.name));
-
-// --- Runtime check: the plugin host machinery must actually work in
-// the distroless node runtime. We do NOT boot the full manifest backend
-// here — that requires a database connection and other env vars that
-// aren't guaranteed in CI. Instead, we instantiate each plugin in
-// isolation and call their hooks with synthetic inputs. This proves
-// the compiled dist + the plugins package work together at the node
-// level — the same level the manifest backend's runtime will use.
-//
-// The async IIFE wrap is required because CJS doesn't allow top-level
-// await (only ESM does). All the calls below are inside the IIFE.
-(async () => {
-  const errors = [];
-  for (const plugin of pluginDist.plugins) {
-    try {
-      // Every plugin must implement at least one of the hook interfaces.
-      // We try both and require at least one to succeed.
-      let ok = false;
-      if (typeof plugin.transformRequest === "function") {
-        const r = plugin.transformRequest({
-          endpointKey: "anthropic",
-          provider: "anthropic",
-          bareModel: "claude-sonnet-4-20250514",
-          apiKey: "sk-ant-test",
-          authType: "subscription",
-          apiMode: "chat_completions",
-          stream: false,
-          url: "https://api.anthropic.com/v1/messages",
-          headers: { "Content-Type": "application/json" },
-          requestBody: { model: "claude-sonnet-4-20250514", messages: [] },
-        });
-        // The plugin may return undefined to mean "no change", or a
-        // partial override. We just need it to not throw.
-        if (r === undefined || (r && typeof r === "object")) ok = true;
-      }
-      if (typeof plugin.getRateLimitPolicy === "function") {
-        const p = plugin.getRateLimitPolicy();
-        if (p === null || (p && typeof p === "object" && "concurrencyMax" in p)) ok = true;
-      }
-      if (!ok) {
-        errors.push(plugin.constructor.name + " did not implement any known hook");
-      } else {
-        console.log("runtime-check: " + plugin.constructor.name + " instantiated and responded to hooks OK");
-      }
-    } catch (e) {
-      errors.push(plugin.constructor.name + " threw: " + (e && e.message ? e.message : String(e)));
-    }
-  }
-
-  // Also verify the distroless node can serve a basic HTTP request via
-  // http.request — this proves the in-container node runtime + stdlib
-  // work end-to-end (we don't need to boot the full manifest backend
-  // for this; we use http.request to hit a public test endpoint).
-  const httpOk = await new Promise((resolve) => {
-    const req = http.request(
-      { host: "127.0.0.1", port: 1, path: "/", method: "GET", timeout: 1000 },
-      () => resolve(true),
-    );
-    req.on("error", () => resolve(true));
-    req.on("timeout", () => { req.destroy(); resolve(true); });
-    req.end();
-  });
-  console.log("runtime-check: node http runtime OK");
-
-  if (errors.length > 0) {
-    console.error("FAIL: plugin runtime errors:");
-    for (const e of errors) console.error("  - " + e);
-    process.exit(1);
-  }
-  console.log("OK: all smoke checks passed");
-})();
-SMOKE_EOF
-docker run --rm \
-  -v "$SMOKE_TEST_SCRIPT:/tmp/smoke-test.js:ro" \
-  --entrypoint "" \
-  "${IMAGE_NAME}:${IMAGE_TAG}" \
-  /nodejs/bin/node /tmp/smoke-test.js
-SMOKE_EXIT=$?
-rm -f "$SMOKE_TEST_SCRIPT"
-if [[ $SMOKE_EXIT -ne 0 ]]; then
-  # Don't fail the build on a smoke-test failure — the image was built
-  # successfully and the apply step already verified the source files
-  # before the build ran. But DO skip the 'latest' tag push: a broken
-  # image shouldn't become the default for new users. The versioned
-  # tag (e.g. 0.1.0.d48a57483a39) still gets pushed so the build is
-  # recoverable for inspection.
-  echo "WARN: smoke test failed with exit code $SMOKE_EXIT (image may still be valid)"
-  echo "      to verify manually: docker run --rm $IMAGE_NAME:$IMAGE_TAG /nodejs/bin/node -e '<smoke-script>'"
-  echo "      skipping 'latest' tag push — consumers will pull the versioned tag instead"
-  SMOKE_OK=0
+# ---- step 5: e2e test (always) -------------------------------------------
+# The canonical validation: boot the container against a scratch
+# PostgreSQL, wait for the Nest backend to bind its port, and assert
+# the dashboard actually serves at GET /. This catches every class of
+# regression a symbol-check can't see:
+#   - missing frontend dist in the runtime image (the 404 bug)
+#   - broken serve-static config
+#   - Vite asset-pipeline / hash mismatch
+#   - port-binding / DNS / network-mode regressions
+#
+# The e2e test is a sibling script (pipeline/e2e-test.sh) so the same
+# logic runs locally (`make e2e` or `bash pipeline/e2e-test.sh <tag>`)
+# and in CI. The script returns non-zero on any failed assertion.
+echo "==> e2e test: boot container, GET / must serve the dashboard"
+E2E_OK=1
+E2E_LOG="$(mktemp -t e2e-test.XXXXXX.log)"
+if ! bash "$(dirname "$0")/e2e-test.sh" "${IMAGE_NAME}:${IMAGE_TAG}" >"$E2E_LOG" 2>&1; then
+  E2E_OK=0
+  echo "  FAIL — e2e test did not pass; see log below."
+  echo "  --- e2e log (${E2E_LOG}) ---"
+  sed 's/^/    /' "$E2E_LOG"
+  echo "  --- end e2e log ---"
 else
-  SMOKE_OK=1
+  # Echo the e2e output so the build log shows what passed.
+  sed 's/^/    /' "$E2E_LOG"
 fi
+rm -f "$E2E_LOG"
 
 # ---- step 6: optionally push ---------------------------------------------
 if [[ $DO_PUSH -eq 1 ]]; then
@@ -388,14 +278,22 @@ if [[ $DO_PUSH -eq 1 ]]; then
   # build artifact. If something goes wrong later, the user can pin to
   # this specific version.
   docker push "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
-  # Only push the 'latest' tag if the smoke test passed. A broken image
-  # shouldn't become the default for new users.
-  if [[ $SMOKE_OK -eq 1 ]]; then
-    echo "==> pushing 'latest' tag (smoke test passed)"
+  # Only push the 'latest' tag if the e2e test passed. A broken image
+  # shouldn't become the default for new users. The versioned tag
+  # (e.g. 0.1.0.d48a57483a39) still gets pushed so the build is
+  # recoverable for inspection.
+  if [[ $E2E_OK -eq 1 ]]; then
+    echo "==> pushing 'latest' tag (e2e test passed)"
     docker push "${REGISTRY}/${IMAGE_NAME}:latest"
   else
-    echo "==> SKIPPING 'latest' tag push (smoke test failed)"
+    echo "==> SKIPPING 'latest' tag push (e2e test failed — see log above)"
+    echo "    consumers will pull the versioned tag instead"
   fi
+fi
+
+if [[ $E2E_OK -ne 1 ]]; then
+  echo "error: e2e test failed — not publishing latest and exiting non-zero" >&2
+  exit 1
 fi
 
 # ---- summary ------------------------------------------------------------
@@ -410,11 +308,15 @@ if [[ -n "$REGISTRY" ]]; then
 fi
 echo ""
 echo "  Run locally:"
-echo "    docker run --rm -p 3001:3001 ${IMAGE_NAME}:${IMAGE_TAG}"
+echo "    docker run --rm -p 2099:2099 \\"
+echo "      -e DATABASE_URL=... -e BETTER_AUTH_SECRET=\$(openssl rand -hex 32) \\"
+echo "      ${IMAGE_NAME}:${IMAGE_TAG}"
 echo ""
 echo "  (Or from the registry:)"
 if [[ -n "$REGISTRY" ]]; then
-  echo "    docker run --rm -p 3001:3001 ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+  echo "    docker run --rm -p 2099:2099 \\"
+  echo "      -e DATABASE_URL=... -e BETTER_AUTH_SECRET=\$(openssl rand -hex 32) \\"
+  echo "      ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
 fi
 echo ""
 echo "  When you re-run this script (e.g. after a fresh upstream pull),"

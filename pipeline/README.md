@@ -1,84 +1,117 @@
-# Pipeline
+# pipeline/
 
-End-to-end build pipeline that produces a **published Docker image** with the manifest-plugins host pre-installed. Consumers `docker pull` the image and run it — no apply step required on their end.
+End-to-end build pipeline that produces a **published Docker image** with the manifest-plugins host pre-installed. Consumers `docker pull` and run it — no apply step required.
 
 ## What this is
 
-`build-and-publish.sh` and the accompanying `Dockerfile.manifest` form a complete pipeline that:
+`build-and-publish.sh` + `Dockerfile.manifest` + `e2e-test.sh` form a complete pipeline that:
 
 1. Clones (or uses) a Manifest source tree.
-2. Builds the manifest-plugins package (this repo) so the apply CLI and runtime `dist/` are available.
-3. Applies the plugin host to all three target files in the Manifest checkout.
+2. Builds the manifest-plugins package.
+3. Applies the plugin host to all three target files.
 4. Builds a Docker image with the plugins baked in.
-5. Runs a smoke test in the built image to confirm the host functions are present.
-6. Optionally pushes the image to a registry.
+5. **Runs an end-to-end test** (boots the image, asserts the dashboard serves at `GET /`).
+6. Tags the image as `latest` — only if the e2e test passed.
+7. Optionally pushes the image to a registry.
 
-The image is named `manifest-with-plugins:<tag>` (distinct from any plain `manifest` image) and is published as a drop-in replacement — `docker run` it exactly like upstream's image.
-
-## Prerequisites
-
-- Docker 20.10+ with buildx enabled
-- Node 20+ and npm
-- Git
-- A registry to push to (optional; `ghcr.io/your-org` works out of the box if you log in via `docker login`)
+The image is `manifest-with-plugins:<tag>` (distinct from the plain `manifest` image) and is a drop-in replacement — `docker run` it exactly like the upstream image.
 
 ## Usage
 
-### Build only (no push)
+### Pull the pre-built image (no build required)
 
 ```bash
-# Run from the plugins repo root
-./pipeline/build-and-publish.sh
+docker pull ghcr.io/josiahsiegel/manifest-with-plugins:latest
+
+docker run --rm -p 2099:2099 \
+  -e DATABASE_URL=postgresql://myuser:mypassword@host:5432/manifest \
+  -e BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+  ghcr.io/josiahsiegel/manifest-with-plugins:latest
 ```
 
-This:
-- Clones `mnfst/manifest` to `../manifest` (or uses the existing checkout if present)
-- Builds the plugins package
-- Applies the plugin host to all three target files
-- Builds the Docker image as `manifest-with-plugins:<tag>` (default tag: `<plugins-version>+<manifest-sha>`)
-- Runs a smoke test in the built image
-- Prints usage instructions
+Open `http://localhost:2099` to access the dashboard.
 
-### Build and push to a registry
+### Build it yourself
 
 ```bash
-REGISTRY=ghcr.io/your-org ./pipeline/build-and-publish.sh --push
+# Build only (no push) — image lands as manifest-with-plugins:<tag>
+bash pipeline/build-and-publish.sh
+
+# Build + push to a registry
+REGISTRY=ghcr.io/your-org bash pipeline/build-and-publish.sh --push
 ```
-
-This additionally pushes:
-- `ghcr.io/your-org/manifest-with-plugins:<tag>`
-- `ghcr.io/your-org/manifest-with-plugins:latest`
-
-You need to be logged in to the registry first: `docker login ghcr.io`.
 
 ### Options
 
-```text
---manifest PATH       Path to the Manifest checkout (default: ../manifest)
---tag TAG             Image tag (default: <plugins-version>+<manifest-sha>)
---registry REGISTRY   Image registry (e.g. ghcr.io/your-org)
-                      If unset, image is built but not pushed.
---push                Push to the registry after build
---platform PLATFORM   Docker buildx platform (default: linux/amd64)
---no-cache            Disable Docker build cache
--h, --help            Show this help
+| Flag | Env var | Default | Purpose |
+| --- | --- | --- | --- |
+| `--manifest PATH` | `MANIFEST_PATH` | _(clone fresh)_ | Path to a Manifest checkout (clone happens if absent) |
+| `--manifest-url URL` | `MANIFEST_URL` | `https://github.com/mnfst/manifest.git` | Git URL to clone when no local checkout exists |
+| `--tag TAG` | _(none)_ | `<plugins-ver>.<manifest-sha>` | Override the image tag |
+| `--registry REGISTRY` | `REGISTRY` | _(none)_ | Image registry (e.g. `ghcr.io/your-org`) |
+| `--push` | _(none)_ | `false` | Push to the registry after build |
+| `--platform PLATFORM` | `PLATFORM` | `linux/amd64` | Docker buildx platform |
+| `--no-cache` | _(none)_ | `false` | Disable Docker build cache |
+
+### Run the pipeline as a GitHub Action
+
+The [`../.github/workflows/build-image.yml`](../.github/workflows/build-image.yml) workflow runs the same pipeline on GitHub's CI and publishes the image to `ghcr.io/josiahsiegel/manifest-with-plugins`.
+
+**Triggers:**
+- `workflow_dispatch` (manual): go to **Actions** → **"Build Manifest image with plugins"** → **"Run workflow"** → optionally set inputs.
+- `push tags: v*`: every semver tag (e.g. `git tag v0.2.1 && git push --tags`) auto-builds a versioned image.
+
+**Resulting image:** `ghcr.io/josiahsiegel/manifest-with-plugins:<tag>` (and `latest` if the e2e test passes).
+
+## How the image is gated
+
+`latest` is **only** pushed when the e2e test passes. The versioned tag (e.g. `0.1.0.d48a57483`) is always pushed.
+
+```
+[1/4] starting scratch PostgreSQL on user-defined network
+  postgres container up
+  postgres ready
+[2/4] starting manifest-with-plugins:latest
+  app container up (logs: docker logs mwp-e2e-app-…)
+[3/4] waiting for http://127.0.0.1:2099/api/v1/health (timeout: 60s)
+  /api/v1/health is up
+[4/4] validating dashboard delivery
+  GET /api/v1/health          → 200 (39 bytes, application/json)
+  GET /                       → 200 (1826 bytes, text/html, contains dashboard title)
+  GET /assets/index-…js        → 200 (118347 bytes, text/javascript)
+
+PASS: manifest-with-plugins:latest
+==> pushing 'latest' tag (e2e test passed)
 ```
 
-All options also accept env-var equivalents (`MANIFEST_PATH`, `REGISTRY`, `PLATFORM`).
+If any assertion fails, the pipeline prints the failure, pushes only the versioned tag, skips the `latest` push, and exits non-zero:
 
-## What the image contains
+```
+==> SKIPPING 'latest' tag push (e2e test failed — see log above)
+    consumers will pull the versioned tag instead
+```
 
-A complete Manifest backend with the three host queries injected:
+## End-to-end test
 
-- **`provider-client.ts`** — `applyRequestTransformPlugins(decision, current)` runs on every outgoing Anthropic request. The `AnthropicBillingHeaderPlugin` adds the `x-anthropic-billing-header` so Claude Pro/Max OAuth traffic doesn't get 429'd.
-- **`proxy-rate-limiter.ts`** — `getResolvedConcurrencyMax()` runs once at module load. The `DefaultPolicyPlugin` returns `{concurrencyMax: 10, maxMessagesPerRequest: null}` (10 concurrent requests per agent, no message cap).
-- **`proxy.service.ts`** — `getResolvedMaxMessagesPerRequest(this.config)` runs once at constructor time. The `DefaultPolicyPlugin`'s `maxMessagesPerRequest: null` means "no cap" (Infinity).
+The e2e test (`pipeline/e2e-test.sh`) is a sibling script — same logic runs locally (`make e2e`) and in CI. It boots the image against a scratch PostgreSQL and asserts:
 
-All three hosts are **fail-safe**: if `require('manifest-plugins')` throws (e.g. the package was somehow excluded from the build), the host catches the error and the request continues without plugin behavior.
+1. `GET /api/v1/health` → 200, `application/json`
+2. `GET /` → 200, `text/html` containing `<title>Manifest</title>`
+3. `GET /assets/<filename>` → 200, `application/javascript` or `text/css`
+
+The first assertion catches backend boot regressions; the second catches missing-frontend-dist regressions (the original 404 bug); the third catches Vite asset-pipeline / hash-mismatch regressions.
+
+You can run it independently:
+
+```bash
+make e2e                                    # test manifest-with-plugins:latest
+make e2e IMAGE=myimage:mytag                # test a specific tag
+PORT=3001 make e2e IMAGE=myimage:mytag      # test on a non-default port
+```
 
 ## Selecting a subset of plugins
 
-The plugins repo supports build-time plugin exclusion via `manifest-plugins.config.json` (at the root of the plugins repo). When the pipeline runs `npm run build` (step 2), the post-build filter (`scripts/filter-plugins.mjs`) reads the config and rewrites `dist/index.js` accordingly.
+The plugins repo supports build-time plugin exclusion via `manifest-plugins.config.json` (at the root of the plugins repo). The pipeline's `npm run build` step runs the post-build filter, which rewrites `dist/index.js` accordingly.
 
 For example, to ship an "Anthropic-billing-only" image (no DefaultPolicyPlugin):
 
@@ -91,81 +124,12 @@ For example, to ship an "Anthropic-billing-only" image (no DefaultPolicyPlugin):
 }
 ```
 
-With this config in place before running `build-and-publish.sh`, the resulting image has only the billing-header plugin in `dist/index.js`. The default policy is the upstream hardcoded values (concurrency = 10, message cap = 1000).
-
-## Verifying the image
-
-After the pipeline completes, run a smoke test:
-
-```bash
-docker run --rm --entrypoint='["node","-e"]' manifest-with-plugins:<tag> \
-  'const fs = require("fs");
-   const host = fs.readFileSync("/app/packages/backend/dist/routing/proxy/provider-client.js", "utf-8");
-   const rateLimiter = fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy-rate-limiter.js", "utf-8");
-   const proxyService = fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy.service.js", "utf-8");
-   const ok = host.includes("applyRequestTransformPlugins") &&
-             rateLimiter.includes("getResolvedConcurrencyMax") &&
-             proxyService.includes("getResolvedMaxMessagesPerRequest");
-   if (!ok) { console.error("FAIL"); process.exit(1); }
-   const p = require("/app/node_modules/manifest-plugins/package.json");
-   console.log("OK:", p.name, p.version);
-   console.log("plugins:", require("/app/node_modules/manifest-plugins/dist/index.js").plugins.map(x => x.constructor.name));'
-```
-
-Expected output:
-
-```
-OK: @josiahsiegel/manifest-plugins 0.2.0
-plugins: [ 'AnthropicBillingHeaderPlugin', 'DefaultPolicyPlugin' ]
-```
-
-(The plugin list reflects whatever's in `manifest-plugins.config.json` at build time. With `DefaultPolicyPlugin: false`, only `AnthropicBillingHeaderPlugin` is listed.)
-
-## Running the image
-
-```bash
-# Local
-docker run --rm -p 3001:3001 manifest-with-plugins:<tag>
-
-# From a registry
-docker run --rm -p 3001:3001 ghcr.io/your-org/manifest-with-plugins:<tag>
-```
-
-Set your `.env` / `DATABASE_URL` / `BETTER_AUTH_SECRET` etc. via `-e` flags or a `docker run --env-file`.
-
 ## Cleaning up old images
 
-The default image tag includes a short git SHA of the Manifest checkout (`<plugins-version>+<manifest-sha>`), so each pipeline run produces a new tag rather than overwriting. To reclaim disk space:
+The default image tag includes a short git SHA of the Manifest checkout, so each pipeline run produces a new tag rather than overwriting. To reclaim disk space:
 
 ```bash
-# List local manifest-with-plugins images
-docker images manifest-with-plugins
-
-# Remove old ones
 docker image prune -f
 ```
 
-The script never auto-deletes — you can run it freely without losing old images.
-
-## File layout
-
-```
-pipeline/
-├── Dockerfile.manifest         # The buildx target (used by build-and-publish.sh)
-├── build-and-publish.sh        # The end-to-end entry point
-└── README.md                   # This file
-```
-
-The `Dockerfile.manifest` is a **complete, drop-in replacement** for upstream's `docker/Dockerfile`. It produces a distroless-based image with the plugin host pre-baked.
-
-## Why a separate `pipeline/` directory?
-
-The plugins repo has three layers:
-
-| Layer | Purpose | Audience |
-|---|---|---|
-| `src/` | Plugin implementations + apply tool source | Plugin authors, contributors |
-| `examples/` | Copy-pasteable fragments (Dockerfile snippet, CI workflow, build script) | Existing Manifest users adding plugins |
-| `pipeline/` | End-to-end script + full Dockerfile that produces a published image | Operators who want a pre-built image |
-
-`pipeline/` is the "I just want the image" path. `examples/` is the "I'm integrating plugins into my own setup" path. Both share the same underlying tools (`scripts/filter-plugins.mjs`, `src/host/apply.ts`, etc.).
+The pipeline never auto-deletes — run it freely without losing old images.
