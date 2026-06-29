@@ -41,11 +41,18 @@ export interface MvpOverlaySpec {
 /**
  * The MVP overlay manifest. Iterated in order by `applyMvpOverlay`.
  *
- * The three overlays mirror the three patch sites in
+ * The four overlays mirror the four patch sites in
  * `src/host/apply.ts`:
- *   - `provider-client-transform-host` → Anthropic request-transform host
- *   - `proxy-rate-limiter-policy-host` → per-agent concurrency cap host
- *   - `proxy-service-policy-host`      → per-request message-array cap host
+ *   - `provider-client-transform-host`         → Anthropic request-transform host
+ *   - `proxy-rate-limiter-policy-host`         → per-agent concurrency cap host
+ *   - `proxy-service-policy-host`              → per-request message-array cap host
+ *   - `proxy-service-routing-override-host`    → routing-override hook on
+ *     `proxy.service.ts::resolveRouting()`, installed BEFORE the upstream
+ *     `2ab748a6` explicit-model early-return so configured `header_tiers`
+ *     rules (e.g. `x-manifest-tier`) win over `body.model`. Pre-`2ab748a6`
+ *     upstream does not have the anchor and the overlay reports drift —
+ *     this is correct (the upstream shape pre-`2ab748a6` already routed
+ *     headers first).
  */
 export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
   Object.freeze({
@@ -62,5 +69,10 @@ export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
     id: 'proxy-service-policy-host',
     target: 'packages/backend/src/routing/proxy/proxy.service.ts',
     postPatchSymbol: 'function getResolvedMaxMessagesPerRequest(',
+  }),
+  Object.freeze({
+    id: 'proxy-service-routing-override-host',
+    target: 'packages/backend/src/routing/proxy/proxy.service.ts',
+    postPatchSymbol: 'function applyProxyRoutingOverridePlugins(',
   }),
 ]);

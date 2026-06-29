@@ -220,7 +220,7 @@ describe('applyMvpOverlay (synthesized Manifest checkout)', () => {
       );
       writeFileSync(
         proxyServicePath,
-        `${UPSTREAM_FIXTURES.proxyService}\nfunction getResolvedMaxMessagesPerRequest() {}\n`,
+        `${UPSTREAM_FIXTURES.proxyService}\nfunction getResolvedMaxMessagesPerRequest() {}\nfunction applyProxyRoutingOverridePlugins() {}\n`,
         'utf-8',
       );
 
@@ -307,17 +307,42 @@ describe('applyMvpOverlay (synthesized Manifest checkout)', () => {
           id: 'proxy-service-policy-host',
           postPatchSymbol: 'function getResolvedMaxMessagesPerRequest(',
         },
+        {
+          id: 'proxy-service-routing-override-host',
+          postPatchSymbol: 'function applyProxyRoutingOverridePlugins(',
+        },
       ];
       const proxyDir = join(tmp.path, 'packages/backend/src/routing/proxy');
       const fileMap: Readonly<Record<string, string>> = {
         'provider-client-transform-host': join(proxyDir, 'provider-client.ts'),
         'proxy-rate-limiter-policy-host': join(proxyDir, 'proxy-rate-limiter.ts'),
         'proxy-service-policy-host': join(proxyDir, 'proxy.service.ts'),
+        // Both proxy-service-* overlays target the same file. The
+        // orchestrator's idempotency check sees the sentinel on each
+        // apply step.
+        'proxy-service-routing-override-host': join(proxyDir, 'proxy.service.ts'),
       };
       for (const overlay of overlays) {
         const path = fileMap[overlay.id];
         if (path === undefined) {
           throw new Error(`missing fixture for ${overlay.id}`);
+        }
+        // Both proxy-service-* overlays target the same file. We write
+        // both post-patch sentinels into a single fixture so each
+        // overlay's idempotency check sees its own sentinel without
+        // the other overlay's apply step trying to run (and
+        // reporting drift because the anchor would be missing in a
+        // bare sentinel-only fixture).
+        if (
+          overlay.id === 'proxy-service-policy-host' ||
+          overlay.id === 'proxy-service-routing-override-host'
+        ) {
+          writeFileSync(
+            path,
+            `function getResolvedMaxMessagesPerRequest() {}\nfunction applyProxyRoutingOverridePlugins() {}\n`,
+            'utf-8',
+          );
+          continue;
         }
         writeFileSync(path, `${overlay.postPatchSymbol}\n`, 'utf-8');
       }
@@ -894,11 +919,28 @@ describe('OVERLAY_SPEC re-exports', () => {
   it('MVP_OVERLAY_SPEC and OVERLAY_SPEC reference the same frozen array', () => {
     expect(OVERLAY_SPEC).toBe(MVP_OVERLAY_SPEC);
     expect(Object.isFrozen(OVERLAY_SPEC)).toBe(true);
-    expect(OVERLAY_SPEC).toHaveLength(3);
+    expect(OVERLAY_SPEC).toHaveLength(4);
     for (const overlay of OVERLAY_SPEC) {
       expect(typeof overlay.id).toBe('string');
       expect(typeof overlay.target).toBe('string');
       expect(typeof overlay.postPatchSymbol).toBe('string');
     }
+  });
+
+  it('includes the proxy-service-routing-override-host overlay (regression fix for 2ab748a6)', () => {
+    // The 4th overlay restores the precedence where `x-manifest-tier`
+    // (or any configured header tier) wins over `body.model`. Without
+    // this overlay, upstream's explicit-model early-return ignores
+    // header tiers entirely. See PR #2350 / commit 2ab748a6.
+    const routingOverride = OVERLAY_SPEC.find(
+      (overlay) => overlay.id === 'proxy-service-routing-override-host',
+    );
+    expect(routingOverride).toBeDefined();
+    expect(routingOverride?.target).toBe(
+      'packages/backend/src/routing/proxy/proxy.service.ts',
+    );
+    expect(routingOverride?.postPatchSymbol).toBe(
+      'function applyProxyRoutingOverridePlugins(',
+    );
   });
 });

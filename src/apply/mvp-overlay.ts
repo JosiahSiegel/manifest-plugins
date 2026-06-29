@@ -38,6 +38,7 @@ import { join } from 'path';
 import {
   applyProviderClientHost,
   applyProxyRateLimiterHost,
+  applyProxyRoutingOverrideHost,
   applyProxyServiceHost,
   type ApplyResult,
 } from '../host/apply';
@@ -182,7 +183,7 @@ export async function _applyOverlayForTesting(
   }
 
   // Apply the MVP overlay through the host's existing per-file
-  // apply path. The MVP overlay spec shares the three-file shape
+  // apply path. The MVP overlay spec shares the four-file shape
   // with the standard apply orchestrator, so we map each overlay id
   // to its corresponding apply function and call it directly. The
   // try/catch guards against ENOENT (missing target) and write
@@ -196,6 +197,8 @@ export async function _applyOverlayForTesting(
       result = await applyProxyRateLimiterHost(targetPath);
     } else if (overlay.id === 'proxy-service-policy-host') {
       result = await applyProxyServiceHost(targetPath);
+    } else if (overlay.id === 'proxy-service-routing-override-host') {
+      result = await applyProxyRoutingOverrideHost(targetPath);
     } else {
       // The MVP overlay spec is closed (OVERLAY_SPEC in the manifest
       // module is the only producer). Any other id is a bug in the
