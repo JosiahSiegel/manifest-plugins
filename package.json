@@ -10,11 +10,13 @@
     "dist/index.d.ts",
     "dist/host",
     "dist/plugins",
+    "dist/overlays/mvp",
+    "dist/admin",
     "src/host/snippet.ts",
     "src/host/apply.ts"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && find dist -type f \\( -name '*.spec.js' -o -name '*.spec.d.ts' -o -name '*.spec.js.map' -o -name '*.spec.d.ts.map' \\) -delete && node scripts/filter-plugins.mjs && node scripts/build-overlay.mjs",
+    "build": "tsc -p tsconfig.json && find dist -type f \\( -name '*.spec.js' -o -name '*.spec.d.ts' -o -name '*.spec.js.map' -o -name '*.spec.d.ts.map' \\) -delete && node scripts/filter-plugins.mjs && node scripts/build-overlay.mjs && node scripts/build-admin-ui.mjs",
     "build:overlay": "node scripts/build-overlay.mjs",
     "clean": "rimraf dist coverage .tsbuildinfo",
     "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts'",
@@ -23,7 +25,11 @@
     "test:coverage": "jest --coverage",
     "apply": "tsx src/host/cli.ts",
     "verify": "tsx src/host/verify.ts",
-    "new-plugin": "node scripts/new-plugin.mjs"
+    "new-plugin": "node scripts/new-plugin.mjs",
+    "plugins:list": "node scripts/plugins-cli.mjs list",
+    "plugins:enable": "node scripts/plugins-cli.mjs enable",
+    "plugins:disable": "node scripts/plugins-cli.mjs disable",
+    "plugins:reset": "node scripts/plugins-cli.mjs reset"
   },
   "dependencies": {
     "express": "^4.21.0"
