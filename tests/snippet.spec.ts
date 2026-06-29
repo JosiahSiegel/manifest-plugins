@@ -63,6 +63,18 @@ describe('host snippet: existing anchors (pre-existing fixtures, regression cove
     expect(HOST_HELPER_SOURCE).toContain('transformRequest');
   });
 
+  it('HOST_HELPER_SOURCE honors MANIFEST_PLUGINS_DISABLED at module load', () => {
+    // Wave 5: the pasted snippet must call
+    // `require('manifest-plugins').applyDisabledListFromEnv(...)` so
+    // operators can flip plugins off at process start without a
+    // rebuild. The call sits between the `require('manifest-plugins')`
+    // guard and the plugin walk.
+    expect(HOST_HELPER_SOURCE).toContain('applyDisabledListFromEnv');
+    expect(HOST_HELPER_SOURCE).toContain(
+      "process.env['MANIFEST_PLUGINS_DISABLED']",
+    );
+  });
+
   it('HELPER_MARKER_OLD anchors on the stripVendorPrefix + @Injectable() boundary', () => {
     expect(HELPER_MARKER_OLD).toBe(
       [
@@ -101,6 +113,18 @@ describe('host snippet: existing anchors (pre-existing fixtures, regression cove
     expect(RATE_LIMITER_HOST_SOURCE).toContain('getRateLimitPolicy');
   });
 
+  it('RATE_LIMITER_HOST_SOURCE honors MANIFEST_PLUGINS_DISABLED at module load', () => {
+    // Wave 5: the pasted snippet must call
+    // `require('manifest-plugins').applyDisabledListFromEnv(...)` so
+    // operators can flip plugins off at process start without a
+    // rebuild. The call sits between the `require('manifest-plugins')`
+    // guard and the plugin walk.
+    expect(RATE_LIMITER_HOST_SOURCE).toContain('applyDisabledListFromEnv');
+    expect(RATE_LIMITER_HOST_SOURCE).toContain(
+      "process.env['MANIFEST_PLUGINS_DISABLED']",
+    );
+  });
+
   it('PROXY_SERVICE_OLD anchors on the constructor maxMessages assignment', () => {
     expect(PROXY_SERVICE_OLD).toBe(
       [
@@ -125,6 +149,18 @@ describe('host snippet: existing anchors (pre-existing fixtures, regression cove
     expect(PROXY_SERVICE_HOST_SOURCE).toContain("require('manifest-plugins')");
     expect(PROXY_SERVICE_HOST_SOURCE).toContain('getRateLimitPolicy');
   });
+
+  it('PROXY_SERVICE_HOST_SOURCE honors MANIFEST_PLUGINS_DISABLED at module load', () => {
+    // Wave 5: the pasted snippet must call
+    // `require('manifest-plugins').applyDisabledListFromEnv(...)` so
+    // operators can flip plugins off at process start without a
+    // rebuild. The call sits between the `require('manifest-plugins')`
+    // guard and the plugin walk.
+    expect(PROXY_SERVICE_HOST_SOURCE).toContain('applyDisabledListFromEnv');
+    expect(PROXY_SERVICE_HOST_SOURCE).toContain(
+      "process.env['MANIFEST_PLUGINS_DISABLED']",
+    );
+  });
 });
 
 describe('host snippet: PROXY_ROUTING_OVERRIDE_* (new routing-override anchor)', () => {
@@ -134,6 +170,20 @@ describe('host snippet: PROXY_ROUTING_OVERRIDE_* (new routing-override anchor)',
     );
     expect(PROXY_ROUTING_OVERRIDE_HOST_SOURCE).toContain("require('manifest-plugins')");
     expect(PROXY_ROUTING_OVERRIDE_HOST_SOURCE).toContain('overrideRouting');
+  });
+
+  it('PROXY_ROUTING_OVERRIDE_HOST_SOURCE honors MANIFEST_PLUGINS_DISABLED at module load', () => {
+    // Wave 5: the pasted snippet must call
+    // `require('manifest-plugins').applyDisabledListFromEnv(...)` so
+    // operators can flip plugins off at process start without a
+    // rebuild. The call sits between the `require('manifest-plugins')`
+    // guard and the plugin walk.
+    expect(PROXY_ROUTING_OVERRIDE_HOST_SOURCE).toContain(
+      'applyDisabledListFromEnv',
+    );
+    expect(PROXY_ROUTING_OVERRIDE_HOST_SOURCE).toContain(
+      'process.env[\'MANIFEST_PLUGINS_DISABLED\']',
+    );
   });
 
   it('PROXY_ROUTING_OVERRIDE_NEW preserves the upstream comment block verbatim (so the helper marker anchors)', () => {

@@ -361,3 +361,20 @@ export function setPluginEnabled(pluginId: string, enabled: boolean): void {
 export { AnthropicBillingHeaderPlugin } from './plugins/anthropic-billing-header/plugin';
 export { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
 export { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';
+
+// =============================================================================
+// Re-exports for the pasted host snippets
+// =============================================================================
+
+/**
+ * Read `MANIFEST_PLUGINS_DISABLED` (or a caller-supplied value) and
+ * disable each parsed plugin id at runtime. Called once per host
+ * snippet at module load, BEFORE the plugin walk, so the plugin walk
+ * already reflects the env-var-driven disable state.
+ *
+ * Exported here so the pasted snippets (which can only reach the
+ * host package via `require('manifest-plugins')`) can invoke it.
+ * The pure parse helper `parseDisabledList` is also re-exported for
+ * callers that want to pre-flight the env value.
+ */
+export { applyDisabledListFromEnv, parseDisabledList } from './host/env-toggle';

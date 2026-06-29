@@ -15,6 +15,13 @@ const ROUTING_OVERRIDE_HEADER_TIER_IMPORT_SYMBOL =
   "import { HeaderTierService } from '../header-tiers/header-tier.service';";
 const ROUTING_OVERRIDE_CONSTRUCTOR_SYMBOL =
   'private readonly headerTierService: HeaderTierService,';
+// Wave 5: every pasted host snippet must call
+// `require('manifest-plugins').applyDisabledListFromEnv(...)` so the
+// MANIFEST_PLUGINS_DISABLED env var is honored at process start.
+// If a fork maintenance strips this call, operators lose the ability
+// to flip plugins off without rebuilding — verifier must catch it.
+const ENV_TOGGLE_SYMBOL = 'applyDisabledListFromEnv';
+const ENV_VAR_SYMBOL = "process.env['MANIFEST_PLUGINS_DISABLED']";
 
 function parseArgs(argv: string[]): string {
   const args = argv.slice(2);
@@ -55,18 +62,27 @@ function main(): number {
   const hasRoutingOverrideConstructor = proxyServiceText.includes(
     ROUTING_OVERRIDE_CONSTRUCTOR_SYMBOL,
   );
+  const hasProviderEnvToggle =
+    providerClientText.includes(ENV_TOGGLE_SYMBOL) &&
+    providerClientText.includes(ENV_VAR_SYMBOL);
+  const hasProxyEnvToggle =
+    proxyServiceText.includes(ENV_TOGGLE_SYMBOL) &&
+    proxyServiceText.includes(ENV_VAR_SYMBOL);
 
   if (
     hasHelper &&
     hasReturnWrap &&
     hasRoutingOverrideHelper &&
     hasRoutingOverrideImport &&
-    hasRoutingOverrideConstructor
+    hasRoutingOverrideConstructor &&
+    hasProviderEnvToggle &&
+    hasProxyEnvToggle
   ) {
     process.stdout.write(
       `[manifest-plugins/verify] OK — hosts installed in ${checkoutPath}\n` +
         `  ✓ request-transform hook (provider-client.ts)\n` +
-        `  ✓ routing-override hook (proxy.service.ts)\n`,
+        `  ✓ routing-override hook (proxy.service.ts)\n` +
+        `  ✓ MANIFEST_PLUGINS_DISABLED env-toggle wired\n`,
     );
     return 0;
   }
@@ -78,6 +94,8 @@ function main(): number {
       `  routing-override helper present:   ${hasRoutingOverrideHelper}\n` +
       `  routing-override import present:   ${hasRoutingOverrideImport}\n` +
       `  routing-override constructor:     ${hasRoutingOverrideConstructor}\n` +
+      `  env-toggle wired (provider-client): ${hasProviderEnvToggle}\n` +
+      `  env-toggle wired (proxy.service):   ${hasProxyEnvToggle}\n` +
       `  run \`npm run apply\` from this repo.\n`,
   );
   return 1;

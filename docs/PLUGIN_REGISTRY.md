@@ -115,8 +115,7 @@ setPluginEnabled('header-tier-router', true);
 
 The toggle is in-memory only. It does NOT survive a process restart.
 For persistent runtime toggle, use the `MANIFEST_PLUGINS_DISABLED`
-environment variable (see Wave 5 of the work plan), which the host
-honors at module load.
+environment variable (see [`MANIFEST_PLUGINS_DISABLED`](#manifest_plugins_disabled-env-var) below).
 
 ### Idempotency contract
 
@@ -191,6 +190,102 @@ The runtime toggle is keyed by `metadata.id`. The build-time filter is
 keyed by class name (because that is what `manifest-plugins.config.json`
 uses). Both must be unique across the registry.
 
+## `MANIFEST_PLUGINS_DISABLED` env var
+
+Operators can disable a plugin at process start without rebuilding the
+image by setting the env var:
+
+```bash
+# Disable a single plugin.
+MANIFEST_PLUGINS_DISABLED=header-tier-router docker run …
+
+# Disable multiple plugins (comma-separated, no spaces required).
+MANIFEST_PLUGINS_DISABLED=header-tier-router,experimental-foo docker run …
+```
+
+### Contract
+
+- **Format**: comma-separated list of plugin ids (`metadata.id`). Empty,
+  unset, or whitespace-only value → no plugins disabled.
+- **Whitespace**: each segment is `.trim()`ed before parsing; doubled or
+  trailing commas produce empty segments that are dropped silently.
+- **Duplicates**: deduped, preserving first-appearance order. `a,b,a,c,b`
+  becomes `[a, b, c]`.
+- **Unknown ids**: applied anyway (the host treats unknown ids as a
+  misconfiguration, not as an error). The `setPluginEnabled(id, false)`
+  call is invoked; if the id is not in the registry, the call is a
+  no-op on the next `plugins` walk.
+- **Timing**: the env value is read once per host snippet at module
+  load. The call sits between the `require('manifest-plugins')` guard
+  and the plugin walk, so the plugin walk already reflects the
+  env-var-driven disable state.
+- **Survives restart**: yes (process-level). The value lives in the
+  process's environment, not in any persisted file.
+
+### Host snippet wiring
+
+Every pasted host snippet (provider-client, proxy-rate-limiter,
+proxy.service, the routing-override hook) calls:
+
+```typescript
+try {
+  const toggle = (require('manifest-plugins')).applyDisabledListFromEnv;
+  if (typeof toggle === 'function') {
+    toggle(process.env['MANIFEST_PLUGINS_DISABLED']);
+  }
+} catch {
+  // env-toggle is best-effort; never block a request on it.
+}
+```
+
+The host tolerates three failure modes without blocking the request:
+
+1. `manifest-plugins` is missing (upstream without the plugins package).
+2. The package exports no `applyDisabledListFromEnv` (older host build).
+3. The call itself throws (defensive `try/catch`).
+
+### Verifier sentinel
+
+`src/host/verify.ts` checks that both patched files contain:
+
+1. The literal `applyDisabledListFromEnv` reference (the helper call).
+2. The literal `process.env['MANIFEST_PLUGINS_DISABLED']` reference
+   (the env-var name).
+
+If either sentinel is missing, `npm run verify` reports drift and the
+patch needs to be re-applied. This guards against fork maintenance that
+strips the env-var wiring and silently loses operator toggle.
+
+### Use cases
+
+- **Disable a misbehaving plugin** without rolling back the image:
+  `docker run -e MANIFEST_PLUGINS_DISABLED=experimental-foo …`.
+- **Canary rollout**: enable for a percentage of processes via
+  orchestrator-level env-var injection.
+- **Per-environment policy**: staging runs with one disable list, prod
+  runs with another — no rebuild, just env-var differences.
+
+### API surface
+
+The host package exports the env-parse helpers so non-snippet callers
+can reuse them:
+
+```typescript
+import {
+  applyDisabledListFromEnv,
+  parseDisabledList,
+} from 'manifest-plugins';
+
+// Pure parse — no side effects.
+const ids = parseDisabledList(process.env.MANIFEST_PLUGINS_DISABLED);
+
+// Side-effecting — disables each parsed id via setPluginEnabled.
+const applied = applyDisabledListFromEnv(process.env.MANIFEST_PLUGINS_DISABLED);
+```
+
+See `src/host/env-toggle.ts` for the implementation and
+`src/host/env-toggle.spec.ts` for the contract tests.
+
 ## Lifecycle summary
 
 | Stage | Mechanism | Survives restart? |
@@ -198,7 +293,7 @@ uses). Both must be unique across the registry.
 | Module load | `src/registry/discover.ts` walks `src/plugins/*/plugin.ts` | n/a |
 | `npm run build` | `scripts/filter-plugins.mjs` rewrites `dist/index.js` `enabledByDefault` | Yes (image ships with the toggle) |
 | `setPluginEnabled(id, …)` | Reassigns `plugins` export in memory | No |
-| `MANIFEST_PLUGINS_DISABLED` env | Host snippet reads at module load (Wave 5) | Yes (process-level) |
+| `MANIFEST_PLUGINS_DISABLED` env | Host snippet calls `applyDisabledListFromEnv(...)` at module load (see [`MANIFEST_PLUGINS_DISABLED` env var](#manifest_plugins_disabled-env-var)) | Yes (process-level) |
 | Admin HTTP endpoint | (Not yet implemented — gated on auth model choice) | Yes (would persist via sidecar file) |
 
 For sustained per-deployment customization, the recommended path is

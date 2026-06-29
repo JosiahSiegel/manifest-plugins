@@ -60,6 +60,15 @@ function applyRequestTransformPlugins(
     return current;
   }
   if (!pkg || !Array.isArray(pkg.plugins)) return current;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const toggle = (pkg as any).applyDisabledListFromEnv;
+    if (typeof toggle === 'function') {
+      toggle(process.env['MANIFEST_PLUGINS_DISABLED']);
+    }
+  } catch {
+    // env-toggle is best-effort; never block a request on it.
+  }
   let result = current;
   for (const plugin of pkg.plugins) {
     if (!plugin || typeof plugin.transformRequest !== 'function') continue;
@@ -206,6 +215,15 @@ function getResolvedConcurrencyMax(): number {
       }>;
     };
     if (pkg?.plugins && Array.isArray(pkg.plugins)) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const toggle = (pkg as any).applyDisabledListFromEnv;
+        if (typeof toggle === 'function') {
+          toggle(process.env['MANIFEST_PLUGINS_DISABLED']);
+        }
+      } catch {
+        // env-toggle is best-effort; never block a request on it.
+      }
       for (const plugin of pkg.plugins) {
         if (plugin && typeof plugin.getRateLimitPolicy === 'function') {
           try {
@@ -301,6 +319,15 @@ function getResolvedMaxMessagesPerRequest(
       }>;
     };
     if (pkg?.plugins && Array.isArray(pkg.plugins)) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const toggle = (pkg as any).applyDisabledListFromEnv;
+        if (typeof toggle === 'function') {
+          toggle(process.env['MANIFEST_PLUGINS_DISABLED']);
+        }
+      } catch {
+        // env-toggle is best-effort; never block a request on it.
+      }
       for (const plugin of pkg.plugins) {
         if (plugin && typeof plugin.getRateLimitPolicy === 'function') {
           try {
@@ -446,6 +473,15 @@ function applyProxyRoutingOverridePlugins(
     return null;
   }
   if (!pkg || !Array.isArray(pkg.plugins)) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const toggle = (pkg as any).applyDisabledListFromEnv;
+    if (typeof toggle === 'function') {
+      toggle(process.env['MANIFEST_PLUGINS_DISABLED']);
+    }
+  } catch {
+    // env-toggle is best-effort; never block a request on it.
+  }
   for (const plugin of pkg.plugins) {
     if (!plugin || typeof (plugin as { overrideRouting?: unknown }).overrideRouting !== 'function') continue;
     try {

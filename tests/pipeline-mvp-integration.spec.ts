@@ -302,7 +302,14 @@ describe('host/verify.ts reads routing-override sentinels from proxy.service.ts 
 
       writeFileSync(
         providerClientTarget,
-        'function applyRequestTransformPlugins(){}\nconst transformed = applyRequestTransformPlugins();\n',
+        [
+          'function applyRequestTransformPlugins(){}',
+          'const transformed = applyRequestTransformPlugins();',
+          // Wave 5: the pasted snippet must reference the env-toggle
+          // helper so MANIFEST_PLUGINS_DISABLED is honored at module
+          // load. Verifier checks for these symbols.
+          "const _toggle = (require('manifest-plugins')).applyDisabledListFromEnv(process.env['MANIFEST_PLUGINS_DISABLED']);",
+        ].join('\n'),
         'utf-8',
       );
       writeFileSync(
@@ -312,6 +319,9 @@ describe('host/verify.ts reads routing-override sentinels from proxy.service.ts 
           "import { HeaderTierService } from '../header-tiers/header-tier.service';",
           'function applyProxyRoutingOverridePlugins(){}',
           'private readonly headerTierService: HeaderTierService,',
+          // Wave 5: same env-toggle sentinel — pasted proxy.service.ts
+          // snippet must reference the helper.
+          "const _toggle2 = (require('manifest-plugins')).applyDisabledListFromEnv(process.env['MANIFEST_PLUGINS_DISABLED']);",
           '',
         ].join('\n'),
         'utf-8',
