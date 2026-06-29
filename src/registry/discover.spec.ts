@@ -1,20 +1,23 @@
 /**
  * Unit tests for the plugin auto-discoverer.
  *
- * The discoverer scans `src/plugins/<name>/plugin.ts` and extracts the
- * named class export + `static metadata` for each plugin file. Adding a
- * new plugin requires only dropping a new file in the plugins directory —
- * the registry re-reads on every build.
+ * The discoverer scans `<pluginsDir>/<name>/plugin.ts` (source mode) OR
+ * `<pluginsDir>/<name>/plugin.js` (built/runtime mode) and extracts the
+ * named class export + `static metadata` for each plugin file. Adding
+ * a new plugin requires only dropping a new directory under the plugins
+ * root — the registry re-reads on every build / process start.
  *
- * Locks the Wave 2 contract:
+ * Locks the contract:
  *   - Named class exports (no `default` required).
  *   - `static metadata` with a unique `id` is required.
  *   - Throws loudly on duplicate class names AND duplicate `metadata.id`.
- *   - Discovers the 3 built-in plugins from the real `src/plugins/`.
+ *   - Discovers the 3 built-in plugins from the real `src/plugins/` AND
+ *     from the compiled `dist/plugins/` mirror (this is the runtime
+ *     shape; if it breaks, the production image boots with zero plugins).
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { discoverPlugins, PluginDiscoveryError } from './discover';
 
 const PLUGINS_SRC_DIR = join(__dirname, '..', 'plugins');
@@ -162,7 +165,7 @@ describe('discoverPlugins (filesystem enumeration)', () => {
     );
   });
 
-  it('skips subdirectories without a plugin.ts', () => {
+  it('skips subdirectories without a plugin file', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-skip-'));
     try {
       writeTempPlugin(tmp, 'real', 'RealPlugin', 'real');
@@ -180,6 +183,114 @@ describe('PluginDiscoveryError', () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe('PluginDiscoveryError');
     expect(err.message).toContain('alpha plugin.ts');
+  });
+});
+
+/**
+ * Compiled-shape (post-`tsc`) discovery contract.
+ *
+ * `tsc` emits `dist/plugins/<name>/plugin.js` — NOT `plugin.ts`. The
+ * production image boots from `dist/`, so the discoverer MUST work
+ * against `.js` files; otherwise the host installs zero plugins and
+ * the image returns upstream's "no providers configured" fallback.
+ *
+ * These tests are the gate against that regression. If they fail, the
+ * image will silently lose every installed plugin at boot.
+ */
+describe('discoverPlugins (compiled JS shape — post-tsc runtime)', () => {
+  /**
+   * Write a CommonJS-shaped `plugin.js` fixture that mimics tsc's
+   * exact output: `exports.<ClassName> = ...` and `exports.<NAME>_METADATA = ...`.
+   * The discoverer must accept this shape at runtime.
+   */
+  function writeCompiledPlugin(
+    parent: string,
+    name: string,
+    className: string,
+    pluginId: string,
+  ): string {
+    const pluginDir = join(parent, name);
+    mkdirSync(pluginDir, { recursive: true });
+    const file = join(pluginDir, 'plugin.js');
+    const metaConst = `${name.toUpperCase().replace(/-/g, '_')}_METADATA`;
+    writeFileSync(
+      file,
+      [
+        `"use strict";`,
+        `Object.defineProperty(exports, "__esModule", { value: true });`,
+        `exports.${className} = exports.${metaConst} = void 0;`,
+        `exports.${metaConst} = Object.freeze({`,
+        `  id: '${pluginId}',`,
+        `  name: '${pluginId}',`,
+        `  version: '0.0.1',`,
+        `  description: '${name} compiled-fixture',`,
+        `  kind: 'transform',`,
+        `});`,
+        `class ${className} {`,
+        `  static metadata = exports.${metaConst};`,
+        `  transformRequest() { return undefined; }`,
+        `}`,
+        `exports.${className} = ${className};`,
+        ``,
+      ].join('\n'),
+      'utf-8',
+    );
+    return file;
+  }
+
+  it('discovers plugins from compiled plugin.js (the production runtime shape)', () => {
+    const tmp = mkdtempSync(
+      join(tmpdir(), 'manifest-plugins-discover-compiled-'),
+    );
+    try {
+      writeCompiledPlugin(tmp, 'alpha', 'AlphaPlugin', 'alpha');
+      writeCompiledPlugin(tmp, 'beta', 'BetaPlugin', 'beta');
+      const discovered = discoverPlugins(tmp);
+      const ids = discovered.map((entry) => entry.metadata.id);
+      const classes = discovered.map((entry) => entry.pluginClassName);
+      expect(ids).toEqual(expect.arrayContaining(['alpha', 'beta']));
+      expect(classes).toEqual(
+        expect.arrayContaining(['AlphaPlugin', 'BetaPlugin']),
+      );
+      expect(discovered).toHaveLength(2);
+      // The instance must actually be a usable object, not the metadata bag.
+      expect(typeof discovered[0]?.instance.transformRequest).toBe('function');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The canonical regression check: discover against the SAME `dist/`
+   * tree that gets shipped in the published image. This is the exact
+   * shape the host hits at boot. If `npm run build` hasn't been run
+   * yet, the test skips with a clear message (so `npm test` doesn't
+   * fail in a fresh checkout).
+   */
+  it('discovers the built-in plugins from the compiled dist/plugins tree', () => {
+    // dist/ is one directory up from src/, next to package.json.
+    const distPluginsDir = resolve(__dirname, '..', '..', 'dist', 'plugins');
+    if (!existsSync(distPluginsDir)) {
+      // Skip with a clear pointer to the fix. We do NOT throw, because
+      // unit tests must remain runnable before the first build.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[discover.spec] dist/plugins/ missing — skipping built-shape check. ` +
+          `Run \`npm run build\` to populate it.`,
+      );
+      return;
+    }
+    const discovered = discoverPlugins(distPluginsDir);
+    const classNames = discovered.map((entry) => entry.pluginClassName);
+    expect(classNames).toEqual(
+      expect.arrayContaining([
+        'AnthropicBillingHeaderPlugin',
+        'DefaultPolicyPlugin',
+        'HeaderTierRouterPlugin',
+      ]),
+    );
+    // Must discover all three, not just the ones with `.ts` source.
+    expect(discovered).toHaveLength(3);
   });
 });
 

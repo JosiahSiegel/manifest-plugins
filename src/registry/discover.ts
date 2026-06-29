@@ -2,14 +2,25 @@
  * Plugin auto-discovery.
  *
  * The `manifest-plugins` registry is built by walking
- * `<pluginsDir>/<name>/plugin.ts` files. Each file is loaded with
- * `require()` (post-`tsc` build) and inspected for:
+ * `<pluginsDir>/<name>/` directories and loading the first plugin file
+ * found, in this order of preference:
+ *
+ *   1. `plugin.js` — the post-`tsc` compiled shape. This is the
+ *      **production runtime shape**: `tsc` emits `.js` and `.d.ts`
+ *      into `dist/`, never `.ts`. The host boots from `dist/` and
+ *      loads via `require()`, so the discoverer MUST accept `.js`
+ *      files. Failing to do so silently ships an empty plugin
+ *      registry and the image falls back to upstream behavior.
+ *   2. `plugin.ts` — the source shape, used during local development
+ *      and unit tests that bypass the build step.
+ *
+ * Both shapes are inspected for:
  *   - a named class export with a `static readonly metadata: PluginMetadata`
  *   - the metadata object reachable from that class via `MyClass.metadata`
  *
  * Adding a new plugin requires only dropping a new file under
- * `src/plugins/<name>/plugin.ts`. The registry re-reads on every
- * process start, so a rebuild + restart picks up new plugins
+ * `src/plugins/<name>/plugin.ts` (and rebuilding). The registry re-reads
+ * on every process start, so a rebuild + restart picks up new plugins
  * without touching `src/index.ts`.
  *
  * Failure modes (all throw `PluginDiscoveryError`):
@@ -17,6 +28,9 @@
  *   - A plugin file has no exported class with `static metadata`.
  *   - Two plugins share the same `metadata.id`.
  *   - Two plugins share the same exported class name.
+ *
+ * Subdirectories with neither `plugin.js` nor `plugin.ts` are ignored;
+ * this keeps the plugins root tolerant of README-only or scratch folders.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join, resolve } from 'path';
@@ -46,8 +60,8 @@ export interface DiscoveredPluginEntry {
 }
 
 /**
- * Find a plugin's `plugin.ts` under `<pluginsDir>/<dir>/plugin.ts`.
- * Returns absolute paths; throws on missing or non-directory root.
+ * Resolve the plugin root. Returns an absolute path; throws on missing
+ * or non-directory roots.
  */
 function resolvePluginsDir(pluginsDir: string): string {
   const abs = resolve(pluginsDir);
@@ -66,23 +80,43 @@ function resolvePluginsDir(pluginsDir: string): string {
 }
 
 /**
- * Pull the (single) class export name from a TS plugin file. The
- * discoverer expects exactly one named class export per file — plugins
- * are objects with one role. We read the file as text and look for
- * `export class <Name>` (and ignore `export const` declarations).
+ * Resolve a plugin file under one plugin directory. Prefer compiled
+ * `plugin.js` because production boots from `dist/`; fall back to
+ * `plugin.ts` for source-mode tests and local development.
+ */
+function resolvePluginFile(pluginDir: string): string | null {
+  const compiledFile = join(pluginDir, 'plugin.js');
+  if (existsSync(compiledFile)) return compiledFile;
+  const sourceFile = join(pluginDir, 'plugin.ts');
+  if (existsSync(sourceFile)) return sourceFile;
+  return null;
+}
+
+/**
+ * Pull the (single) exported plugin class name from either supported
+ * file shape:
+ *   - TS source: `export class MyPlugin`
+ *   - CommonJS output: `exports.MyPlugin = MyPlugin;`
+ *
+ * The discoverer expects exactly one named class export per file —
+ * plugins are objects with one role. Metadata constants are ignored.
  */
 function findExportedClassName(pluginFile: string): string | null {
   const text = readFileSync(pluginFile, 'utf-8');
-  const pattern = /^export\s+class\s+([A-Z][A-Za-z0-9_]*)\b/gm;
+  const pattern = pluginFile.endsWith('.js')
+    ? /^exports\.([A-Z][A-Za-z0-9_]*)\s*=\s*\1\s*;/gm
+    : /^export\s+class\s+([A-Z][A-Za-z0-9_]*)\b/gm;
   let match: RegExpExecArray | null;
   let found: string | null = null;
   while ((match = pattern.exec(text)) !== null) {
+    const className = match[1];
+    if (className === undefined) continue;
     if (found !== null) {
       throw new PluginDiscoveryError(
-        `${pluginFile}: multiple exported classes are not allowed; found '${found}' and '${match[1]}'`,
+        `${pluginFile}: multiple exported classes are not allowed; found '${found}' and '${className}'`,
       );
     }
-    found = match[1] as string;
+    found = className;
   }
   return found;
 }
@@ -135,7 +169,7 @@ function requirePluginClass(
 
 /**
  * Discover all plugins under `pluginsDir` by reading each
- * `<pluginsDir>/<name>/plugin.ts`. Returns an array of discovered
+ * `<pluginsDir>/<name>/plugin.{js,ts}`. Returns an array of discovered
  * entries, ordered by directory name (alphabetical) so the registry
  * is deterministic across machines.
  *
@@ -152,8 +186,8 @@ export function discoverPlugins(pluginsDir: string): DiscoveredPluginEntry[] {
     const childAbs = join(absDir, child);
     const stat = statSync(childAbs);
     if (!stat.isDirectory()) continue;
-    const pluginFile = join(childAbs, 'plugin.ts');
-    if (!existsSync(pluginFile)) continue;
+    const pluginFile = resolvePluginFile(childAbs);
+    if (pluginFile === null) continue;
     entries.push({ dir: child, pluginFile });
   }
   entries.sort((a, b) => a.dir.localeCompare(b.dir));
