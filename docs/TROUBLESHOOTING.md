@@ -134,14 +134,31 @@ For Windows local testing, use WSL2 or run the e2e test from within a Linux cont
 
 ### A new plugin does not appear in `dist/index.js` after `npm run build`
 
-The auto-discoverer at `src/registry/discover.ts` walks `src/plugins/<name>/plugin.ts`
-at module load. Common causes:
+The auto-discoverer at `src/registry/discover.ts` walks `<pluginsDir>/<name>/`
+at module load. It prefers `plugin.js` (the compiled shape that ships in
+`dist/` for the production image) and falls back to `plugin.ts` (the
+source shape used during local development and unit tests). Common
+causes when a plugin doesn't appear:
 
-1. **Wrong file name.** Discoverer looks for exactly `plugin.ts` inside the plugin directory (other files in the directory are ignored).
-2. **No exported class.** The plugin file must `export class <Name>Plugin`. Helpers, types, and constants are fine but the class is required.
-3. **Missing `static metadata`.** The class must declare `static readonly metadata: PluginMetadata`. See [`docs/PLUGIN_AUTHORING.md`](PLUGIN_AUTHORING.md).
-4. **Duplicate `metadata.id` or class name.** The discoverer throws `PluginDiscoveryError` on duplicates. Check that the new plugin's id and class name don't collide with existing plugins.
-5. **TypeScript error.** The plugin file's `tsc` build must succeed before the discoverer runs. Run `node_modules/.bin/tsc --noEmit` and fix any reported errors.
+1. **Missing both `plugin.js` and `plugin.ts`.** The discoverer picks
+   `plugin.js` first; in production `dist/` ships only `.js`. If the
+   file is named something else (e.g. `index.ts`, `plugin.test.ts`,
+   `MyPlugin.ts`) the directory is silently skipped.
+2. **No exported class.** The plugin file must declare exactly one
+   named class export. For `plugin.js` the regex matches
+   `exports.<ClassName> = <ClassName>;` (the self-assignment form tsc
+   emits); for `plugin.ts` the regex matches `export class <Name>Plugin`.
+   Helpers, types, and constants are fine but the class is required.
+3. **Missing `static metadata`.** The class must declare
+   `static readonly metadata: PluginMetadata`. See
+   [`docs/PLUGIN_AUTHORING.md`](PLUGIN_AUTHORING.md).
+4. **Duplicate `metadata.id` or class name.** The discoverer throws
+   `PluginDiscoveryError` on duplicates. Check that the new plugin's id
+   and class name don't collide with existing plugins.
+5. **TypeScript error.** The plugin file's `tsc` build must succeed
+   before the discoverer runs (otherwise `dist/plugins/<name>/plugin.js`
+   isn't emitted). Run `node_modules/.bin/tsc --noEmit` and fix any
+   reported errors.
 
 Verify with:
 

@@ -129,6 +129,7 @@ That test boots the image with PostgreSQL and verifies:
 1. `GET /api/v1/health` returns `200`.
 2. `GET /` serves the Manifest dashboard.
 3. The dashboard asset referenced by the page is reachable.
+4. The built image can require `manifest-plugins`, has `header-tier-router` installed/enabled, and its routing override returns `reason: "header-match"` for a header-tier fixture.
 
 ## Development notes
 

@@ -41,6 +41,15 @@ The build runs `tsc` + `filter-plugins.mjs`. No registry edits are
 needed: the auto-discoverer at `src/registry/discover.ts` finds the
 new plugin at the next process start.
 
+> Source vs. runtime shape: you write `src/plugins/<name>/plugin.ts`,
+> and `tsc` compiles it to `dist/plugins/<name>/plugin.js`. The
+> production image only ships `dist/`, so the auto-discoverer
+> **prefers `plugin.js` and falls back to `plugin.ts`**. Treat the
+> compiled `plugin.js` as the runtime contract; treat the `plugin.ts`
+> source as the authoring surface. This is why the canonical regression
+> check is `dist/plugins/<name>/plugin.js` — see
+> [`PLUGIN_REGISTRY.md`](PLUGIN_REGISTRY.md#auto-discovery).
+
 ## Plugin kinds
 
 There are three plugin kinds, distinguished by lifecycle:
@@ -63,18 +72,31 @@ Each plugin lives in its own directory under `src/plugins/`:
 
 ```
 src/plugins/<name>/
-  plugin.ts         # exports the class + static metadata
+  plugin.ts         # source — what you write
   plugin.spec.ts    # tests (TDD first)
 ```
 
+After `npm run build`, the compiled `plugin.js` (and `plugin.d.ts`)
+lands in `dist/plugins/<name>/` and is what the production runtime
+loads:
+
+```
+dist/plugins/<name>/
+  plugin.js         # what the image ships and the auto-discoverer loads
+  plugin.d.ts       # type declarations for downstream consumers
+```
+
 The auto-discoverer at `src/registry/discover.ts` walks this directory
-on every process start. Adding a plugin requires ONLY dropping a new
+on every process start, preferring `plugin.js` and falling back to
+`plugin.ts`. Adding a plugin requires ONLY dropping a new
 `<name>/plugin.ts` file — `src/index.ts`, `package.json`, and the
-build script pick it up automatically.
+build script pick it up automatically once `npm run build` runs.
 
 Failure modes (all throw `PluginDiscoveryError`):
 
-- The file has no exported class.
+- The directory has neither `plugin.js` nor `plugin.ts` (or the file
+  is named something else, e.g. `index.ts`).
+- The file has no exported class with the right shape.
 - The class has no `static metadata: PluginMetadata`.
 - The `metadata.id` duplicates another plugin's id.
 - The class name duplicates another plugin's class name.

@@ -53,17 +53,40 @@ Each snippet:
 
 The registry is built at module load by `src/registry/discover.ts`:
 
-1. Walk `src/plugins/<name>/plugin.ts` (post-`tsc`: `dist/plugins/<name>/plugin.js`).
-2. For each file, `require()` it and find the named class export.
-3. Read `MyClass.metadata` as the `PluginMetadata` shape.
-4. Throw `PluginDiscoveryError` on:
+1. Walk `<pluginsDir>/<name>/` for each directory under the plugins root.
+2. Prefer the compiled shape `<pluginsDir>/<name>/plugin.js`. This is the
+   **production runtime shape**: `tsc` emits `plugin.js` (and `plugin.d.ts`)
+   into `dist/`, never `plugin.ts`. The host boots from `dist/` and loads
+   via `require()`, so the discoverer MUST accept the compiled shape —
+   otherwise the registry is silently empty and the image boots with no
+   installed plugins.
+3. Fall back to the source shape `<pluginsDir>/<name>/plugin.ts` for local
+   development and unit tests that bypass the build step. This fallback
+   is required so `npm test` works on a fresh checkout (no `dist/` yet).
+4. For each file, `require()` it (or read it as text for class extraction)
+   and find the named class export. For `plugin.js` the regex matches
+   `exports.<ClassName> = <ClassName>;` — the self-assignment form that
+   `tsc` emits. For `plugin.ts` the regex matches `export class <ClassName>`.
+5. Read `MyClass.metadata` as the `PluginMetadata` shape.
+6. Throw `PluginDiscoveryError` on:
    - Missing or non-unique `metadata.id`
    - Missing or non-unique class name
    - Missing `static metadata` field
-   - Missing `plugin.ts` in the expected shape
 
 Adding a new plugin requires only dropping a new directory with a
-`plugin.ts` file — `src/index.ts` picks it up automatically.
+`plugin.ts` source file (or a precompiled `plugin.js`) — `src/index.ts`
+picks it up automatically after the next build.
+
+> Regression history: an earlier version of the discoverer only accepted
+> the source shape `plugin.ts`. In the production image, `dist/` ships
+> `plugin.js` (not `plugin.ts`), so the discoverer returned zero plugins,
+> the host booted with an empty plugin registry, and the image fell
+> back to upstream Manifest's "no providers configured" M101. The
+> `pipeline/e2e-test.sh` plugin-registry smoke (always-on, no flag
+> required) catches this exact regression: it `require()`s
+> `/app/node_modules/manifest-plugins` inside the app container and
+> asserts that `getInstalledPlugins()` is non-empty and that
+> `HeaderTierRouterPlugin.overrideRouting()` is callable.
 
 See `src/registry/discover.ts::discoverPlugins` for the implementation
 and `src/registry/discover.spec.ts` for the contract tests.
@@ -290,7 +313,7 @@ See `src/host/env-toggle.ts` for the implementation and
 
 | Stage | Mechanism | Survives restart? |
 | --- | --- | --- |
-| Module load | `src/registry/discover.ts` walks `src/plugins/*/plugin.ts` | n/a |
+| Module load | `src/registry/discover.ts` walks `<pluginsRoot>/<name>/plugin.js` (preferred, the production runtime shape), falling back to `plugin.ts` (source/test mode) | n/a |
 | `npm run build` | `scripts/filter-plugins.mjs` rewrites `dist/index.js` `enabledByDefault` | Yes (image ships with the toggle) |
 | `setPluginEnabled(id, …)` | Reassigns `plugins` export in memory | No |
 | `MANIFEST_PLUGINS_DISABLED` env | Host snippet calls `applyDisabledListFromEnv(...)` at module load (see [`MANIFEST_PLUGINS_DISABLED` env var](#manifest_plugins_disabled-env-var)) | Yes (process-level) |

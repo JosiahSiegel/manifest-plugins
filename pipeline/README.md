@@ -117,8 +117,9 @@ The e2e test (`pipeline/e2e-test.sh`) is a sibling script — same logic runs lo
 1. `GET /api/v1/health` → 200, `application/json`
 2. `GET /` → 200, `text/html` containing `<title>Manifest</title>`
 3. `GET /assets/<filename>` → 200, `application/javascript` or `text/css`
+4. `docker exec <app> node -e ...` can require `/app/node_modules/manifest-plugins`, sees the `header-tier-router` plugin installed/enabled, and gets `reason: "header-match"` from `HeaderTierRouterPlugin.overrideRouting()` against an in-memory fixture
 
-The first assertion catches backend boot regressions; the second catches missing-frontend-dist regressions (the original 404 bug); the third catches Vite asset-pipeline / hash-mismatch regressions.
+The first assertion catches backend boot regressions; the second catches missing-frontend-dist regressions (the original 404 bug); the third catches Vite asset-pipeline / hash-mismatch regressions; the fourth catches plugin packaging/runtime-discovery regressions where the image serves the dashboard but boots with an empty plugin registry.
 
 You can run it independently:
 
