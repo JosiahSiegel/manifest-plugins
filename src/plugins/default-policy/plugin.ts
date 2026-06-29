@@ -19,11 +19,27 @@
  * `manifest-plugins.config.json` without forking the repo (see
  * `config.example.json` and the README for details).
  */
-import type { RateLimitPolicy, RequestPolicyPlugin } from '../..';
+import type {
+  PluginKind,
+  PluginMetadata,
+  RateLimitPolicy,
+  RequestPolicyPlugin,
+} from '../..';
 
 const DEFAULT_CONCURRENCY_MAX = 10;
 
+export const DEFAULT_POLICY_PLUGIN_KIND: PluginKind = 'policy';
+
+export const DEFAULT_POLICY_PLUGIN_METADATA: PluginMetadata = Object.freeze({
+  id: 'default-policy',
+  name: 'Default policy',
+  version: '0.1.0',
+  description: 'Applies default request policy settings.',
+  kind: DEFAULT_POLICY_PLUGIN_KIND,
+});
+
 export class DefaultPolicyPlugin implements RequestPolicyPlugin {
+  static readonly metadata: PluginMetadata = DEFAULT_POLICY_PLUGIN_METADATA;
   getRateLimitPolicy(): RateLimitPolicy {
     return {
       concurrencyMax: DEFAULT_CONCURRENCY_MAX,

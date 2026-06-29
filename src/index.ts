@@ -19,7 +19,7 @@
  *
  * To add a new plugin:
  *   1. Create `src/plugins/<name>/plugin.ts` implementing the interface(s).
- *   2. Add the plugin instance to the `plugins` array below.
+ *   2. Add the plugin instance to the registry below.
  *   3. `npm test && npm run build` and push.
  *
  * The apply tool (`src/host/cli.ts`) handles the source-code side: it
@@ -30,18 +30,6 @@
  */
 import { AnthropicBillingHeaderPlugin } from './plugins/anthropic-billing-header/plugin';
 import { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
-
-/**
- * The host iterates this array. Each plugin is queried for whatever
- * hooks it implements. Plugins MUST be safe to call with no arguments
- * for hooks they don't implement (the host skips them).
- */
-export const plugins: ReadonlyArray<
-  Partial<RequestTransformPlugin> & Partial<RequestPolicyPlugin>
-> = Object.freeze([
-  new AnthropicBillingHeaderPlugin(),
-  new DefaultPolicyPlugin(),
-]);
 
 // =============================================================================
 // RequestTransformPlugin — per-request hook
@@ -133,6 +121,96 @@ export interface RequestPolicyPlugin {
    * wins, independently.
    */
   getRateLimitPolicy(): RateLimitPolicy | null;
+}
+
+// =============================================================================
+// Plugin registry metadata + runtime toggles
+// =============================================================================
+
+export type PluginKind = 'transform' | 'policy';
+
+export interface PluginMetadata {
+  readonly id: string;
+  readonly name: string;
+  readonly version: string;
+  readonly description: string;
+  readonly kind: PluginKind;
+}
+
+export interface InstalledPluginMetadata extends PluginMetadata {
+  readonly enabledByDefault: boolean;
+  readonly enabled: boolean;
+}
+
+type ManifestPlugin = Partial<RequestTransformPlugin> & Partial<RequestPolicyPlugin>;
+
+interface PluginRegistryEntry {
+  readonly pluginClassName: string;
+  readonly metadata: PluginMetadata;
+  readonly instance: ManifestPlugin;
+  readonly enabledByDefault: boolean;
+}
+
+const anthropicBillingHeaderPlugin = Object.freeze(
+  new AnthropicBillingHeaderPlugin(),
+);
+const defaultPolicyPlugin = Object.freeze(new DefaultPolicyPlugin());
+
+const pluginRegistry: readonly PluginRegistryEntry[] = Object.freeze([
+  Object.freeze({
+    pluginClassName: 'AnthropicBillingHeaderPlugin',
+    metadata: AnthropicBillingHeaderPlugin.metadata,
+    instance: anthropicBillingHeaderPlugin,
+    enabledByDefault: true,
+  }),
+  Object.freeze({
+    pluginClassName: 'DefaultPolicyPlugin',
+    metadata: DefaultPolicyPlugin.metadata,
+    instance: defaultPolicyPlugin,
+    enabledByDefault: true,
+  }),
+]);
+
+/** All installed plugin instances, regardless of their runtime enabled state. */
+export const installedPlugins: readonly ManifestPlugin[] = Object.freeze(
+  pluginRegistry.map((entry) => entry.instance),
+);
+
+const enabledOverrides = new Map<string, boolean>();
+
+function isPluginEnabled(entry: PluginRegistryEntry): boolean {
+  return enabledOverrides.get(entry.metadata.id) ?? entry.enabledByDefault;
+}
+
+function getEnabledPluginInstances(): readonly ManifestPlugin[] {
+  return Object.freeze(
+    pluginRegistry
+      .filter((entry) => isPluginEnabled(entry))
+      .map((entry) => entry.instance),
+  );
+}
+
+/**
+ * Enabled plugin instances consumed by the host. Reassigned when runtime
+ * overrides change so `require('manifest-plugins').plugins` stays current.
+ */
+export let plugins: readonly ManifestPlugin[] = getEnabledPluginInstances();
+
+export function getInstalledPlugins(): readonly InstalledPluginMetadata[] {
+  return Object.freeze(
+    pluginRegistry.map((entry) =>
+      Object.freeze({
+        ...entry.metadata,
+        enabledByDefault: entry.enabledByDefault,
+        enabled: isPluginEnabled(entry),
+      }),
+    ),
+  );
+}
+
+export function setPluginEnabled(pluginId: string, enabled: boolean): void {
+  enabledOverrides.set(pluginId, enabled);
+  plugins = getEnabledPluginInstances();
 }
 
 // =============================================================================

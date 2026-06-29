@@ -32,13 +32,29 @@
  *            https://gist.github.com/NTT123/579183bdd7e028880d06c8befae73b99
  */
 import { createHash } from 'crypto';
-import type { RequestTransformDecision, RequestTransformPlugin } from '../..';
+import type {
+  PluginKind,
+  PluginMetadata,
+  RequestTransformDecision,
+  RequestTransformPlugin,
+} from '../..';
 
 const BILLING_SALT = '59cf53e54c78';
 const DEFAULT_CC_VERSION = '2.1.117';
 const DEFAULT_CCH = '00000';
 
+export const ANTHROPIC_BILLING_HEADER_PLUGIN_KIND: PluginKind = 'transform';
+
+export const ANTHROPIC_BILLING_HEADER_PLUGIN_METADATA: PluginMetadata = Object.freeze({
+  id: 'anthropic-billing-header',
+  name: 'Anthropic billing header',
+  version: '0.1.0',
+  description: 'Injects Anthropic subscription billing headers.',
+  kind: ANTHROPIC_BILLING_HEADER_PLUGIN_KIND,
+});
+
 export class AnthropicBillingHeaderPlugin implements RequestTransformPlugin {
+  static readonly metadata: PluginMetadata = ANTHROPIC_BILLING_HEADER_PLUGIN_METADATA;
   transformRequest(
     decision: RequestTransformDecision,
   ): { headers?: Record<string, string> } | undefined {

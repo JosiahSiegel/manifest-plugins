@@ -4,21 +4,17 @@
  * ==================
  *
  * Post-build step that reads `manifest-plugins.config.json` and rewrites
- * `dist/index.js` to exclude plugins the user has disabled.
+ * `dist/index.js` metadata defaults for plugins the user has disabled.
  *
- * The plugin array in `dist/index.js` is the literal text:
- *   `exports.plugins = Object.freeze([new X(...), new Y(...)]);`
- *
- * We find that block, split it on top-level commas, filter out the entries
- * whose class name appears in the config's `plugins` map with value
- * `false`, and write the file back. Class names not in the config are
- * enabled by default.
+ * The plugin array in `dist/index.js` keeps every installed plugin class so
+ * runtime overrides can re-enable it. A config value of `false` only changes
+ * the plugin's `enabledByDefault` metadata from `true` to `false`.
  *
  * Why post-build instead of compile-time:
  *   - The TS source (`src/index.ts`) is unfiltered, so `npm test` runs
  *     against the full plugin set with 100% coverage.
- *   - The shipped artifact (`dist/index.js`) is filtered, so the Docker
- *     image only carries the plugins the user wants.
+ *   - The shipped artifact (`dist/index.js`) keeps disabled plugins
+ *     discoverable while changing their default enabled state.
  *   - No source-file mutation = no dirty working tree, no git status
  *     noise, no circular imports.
  *
@@ -92,7 +88,7 @@ function validateConfig(config) {
   }
 }
 
-function filterIndexJs(distSource, enabledMap) {
+function parseRegistryClassNames(distSource) {
   // Find the exports.plugins = Object.freeze([...]); block. The array
   // body may span multiple lines and contain nested parentheses from
   // constructor calls. We use a lazy regex match.
@@ -113,22 +109,44 @@ function filterIndexJs(distSource, enabledMap) {
     .split(/,\s*(?=new )/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  // Extract class name from each entry. Match `new [namespace.]ClassName(`
-  // (tsc may rewrite imports to a namespace like `plugin_1.AnthropicBillingHeaderPlugin`).
-  // We extract the class name as the part after the last `.`.
-  const kept = entries.filter((entry) => {
+
+  return entries.map((entry) => {
     const classMatch = entry.match(/^new\s+(?:[\w$]+\.)?([A-Za-z_$][\w$]*)\s*\(/);
     if (!classMatch) {
       throw new Error(
         `Could not parse plugin entry: "${entry}". Update scripts/filter-plugins.mjs.`,
       );
     }
-    const className = classMatch[1];
-    // Default = enabled. Config value of `false` = disabled.
-    return enabledMap[className] !== false;
+    return classMatch[1];
   });
-  const replacement = `exports.plugins = Object.freeze([${kept.join(', ')}]);`;
-  return distSource.replace(pattern, replacement);
+}
+
+function annotateEnabledDefaults(distSource, disabledClassNames) {
+  if (disabledClassNames.length === 0) return distSource;
+  const pluginIds = {
+    AnthropicBillingHeaderPlugin: 'anthropic-billing-header',
+    DefaultPolicyPlugin: 'default-policy',
+  };
+  let next = distSource;
+  for (const className of disabledClassNames) {
+    const pluginId = pluginIds[className];
+    const idIndex = next.indexOf(`id: "${pluginId}"`);
+    if (idIndex === -1) continue;
+    const defaultIndex = next.indexOf('enabledByDefault: true', idIndex);
+    if (defaultIndex === -1) continue;
+    next = `${next.slice(0, defaultIndex)}enabledByDefault: false${next.slice(
+      defaultIndex + 'enabledByDefault: true'.length,
+    )}`;
+  }
+  return next;
+}
+
+function filterIndexJs(distSource, enabledMap) {
+  const registryClassNames = parseRegistryClassNames(distSource);
+  const disabledClassNames = registryClassNames.filter(
+    (className) => enabledMap[className] === false,
+  );
+  return annotateEnabledDefaults(distSource, disabledClassNames);
 }
 
 function main() {
