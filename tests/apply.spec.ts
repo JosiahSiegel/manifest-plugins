@@ -309,6 +309,47 @@ describe('applyPatch direct invocation (covers internal defaults)', () => {
   });
 });
 
+describe('applyPatch preflight anchor drift', () => {
+  it('reports upstream-drift when a preflight anchor marker is missing', async () => {
+    await withTempManifest(async (files) => {
+      const result = await applyProxyServiceHost(files.proxyService, {
+        preflightAnchors: [
+          { name: 'upstream-class', marker: 'class ProxyService {' },
+          { name: 'helper-symbol', marker: 'function getResolvedMaxMessagesPerRequest(' },
+        ],
+      });
+      expectStatus('preflight-drift', result, 'upstream-drift');
+      if (result.status === 'upstream-drift') {
+        expect(result.reason).toContain('preflight anchors missing');
+        expect(result.reason).toContain('helper-symbol');
+        expect(result.reason).not.toContain('upstream-class');
+      }
+    });
+  });
+
+  it('passes the preflight anchor check when every marker is present', async () => {
+    await withTempManifest(async (files) => {
+      const upstream = readFileSync(files.proxyRateLimiter, 'utf-8');
+      expect(upstream).toContain('class ProxyRateLimiter');
+      const result = await applyProxyRateLimiterHost(files.proxyRateLimiter, {
+        preflightAnchors: [
+          { name: 'upstream-class', marker: 'class ProxyRateLimiter' },
+        ],
+      });
+      expectStatus('preflight-pass', result, 'applied');
+    });
+  });
+
+  it('treats an empty preflight anchor list as a no-op', async () => {
+    await withTempManifest(async (files) => {
+      const result = await applyProxyServiceHost(files.proxyService, {
+        preflightAnchors: [],
+      });
+      expectStatus('preflight-empty', result, 'applied');
+    });
+  });
+});
+
 describe('tsc check on patched files', () => {
   it('all three files pass tsc --noEmit against the backend tsconfig', async () => {
     await withTempManifest(async (files) => {

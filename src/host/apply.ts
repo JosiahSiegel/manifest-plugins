@@ -37,6 +37,25 @@ import {
   RATE_LIMITER_OLD,
   buildHelperMarkerNew,
 } from './snippet';
+import {
+  assertAnchors,
+  type AnchorMarker,
+} from '../apply/anchor-drift';
+
+const HOUSEKEEPING_RATE_LIMITER_OLD = `const DEFAULT_CONCURRENCY_MAX = 10;
+const CONCURRENCY_MAX = positiveIntegerEnv('CONCURRENCY_MAX', DEFAULT_CONCURRENCY_MAX);
+`;
+
+const HOUSEKEEPING_PROXY_SERVICE_OLD = `    // Fork: disable message cap by default. Set MAX_MESSAGES_PER_REQUEST or
+    // MANIFEST_MAX_MESSAGES to a positive integer to re-enable.
+    const maxMessagesRaw =
+      process.env['MAX_MESSAGES_PER_REQUEST'] ??
+      this.config.get<string>('MANIFEST_MAX_MESSAGES');
+    this.maxMessagesPerRequest =
+      maxMessagesRaw === undefined || maxMessagesRaw === '' || maxMessagesRaw === '0'
+        ? Infinity
+        : parseMaxMessagesPerRequest(maxMessagesRaw);
+`;
 
 // =============================================================================
 // Shared types
@@ -53,6 +72,13 @@ export interface ApplyResult {
 export interface ApplyOptions {
   /** Dry-run: report what would change without writing. Default: false. */
   dryRun?: boolean;
+  /**
+   * Optional anchor markers to verify BEFORE reading the file. If any
+   * marker is missing, the apply fails fast with `upstream-drift`
+   * without writing the file. Used by the patcher + the apply CLI's
+   * preflight pass to fail loud when upstream restructured.
+   */
+  preflightAnchors?: readonly AnchorMarker[];
 }
 
 interface PatchSpec {
@@ -67,6 +93,10 @@ interface PatchSpec {
    * The exact upstream text to replace.
    */
   oldText: string;
+  /**
+   * Older upstream anchors accepted for back-compat tests and stale checkouts.
+   */
+  oldTextAlternatives?: readonly string[];
   /**
    * The replacement text. May include a function definition that
    * precedes the call site.
@@ -120,13 +150,29 @@ export async function applyPatch(
 ): Promise<ApplyResult> {
   const original = await fs.readFile(spec.filePath, 'utf-8');
 
+  if (options.preflightAnchors && options.preflightAnchors.length > 0) {
+    const report = assertAnchors(original, options.preflightAnchors);
+    if (!report.ok) {
+      return {
+        status: 'upstream-drift',
+        file: spec.filePath,
+        reason:
+          `upstream restructured ${spec.filePath} — preflight anchors missing: ` +
+          report.missing.join(', '),
+      };
+    }
+  }
+
   // --- Idempotency check ---
   if (original.includes(spec.postPatchSymbol)) {
     return { status: 'noop', file: spec.filePath };
   }
 
   // --- Anchor check ---
-  if (!original.includes(spec.oldText)) {
+  const oldText = [spec.oldText, ...(spec.oldTextAlternatives ?? [])].find(
+    (candidate) => original.includes(candidate),
+  );
+  if (oldText === undefined) {
     // The OLD upstream anchor is gone. Two possibilities:
     //   (a) The patch was already applied via a different shape — e.g.
     //       a fork's housekeeping overlay, a previous version of the
@@ -164,9 +210,9 @@ export async function applyPatch(
 
   // --- First apply ---
   let next = original;
-  next = next.replace(spec.oldText, spec.newText);
-  if (spec.helperMarkerNew) {
-    next = next.replace(spec.helperMarkerOld!, spec.helperMarkerNew);
+  next = next.replace(oldText, spec.newText);
+  if (spec.helperMarkerOld !== undefined && spec.helperMarkerNew !== undefined) {
+    next = next.replace(spec.helperMarkerOld, spec.helperMarkerNew);
   }
 
   if (!options.dryRun) {
@@ -225,6 +271,7 @@ export class ProxyRateLimiter implements OnModuleDestroy {
       filePath,
       postPatchSymbol: 'function getResolvedConcurrencyMax(',
       oldText: RATE_LIMITER_OLD,
+      oldTextAlternatives: [HOUSEKEEPING_RATE_LIMITER_OLD],
       newText: RATE_LIMITER_NEW,
       helperMarkerOld,
       helperMarkerNew,
@@ -257,6 +304,7 @@ export async function applyProxyServiceHost(
       filePath,
       postPatchSymbol: 'function getResolvedMaxMessagesPerRequest(',
       oldText: PROXY_SERVICE_OLD,
+      oldTextAlternatives: [HOUSEKEEPING_PROXY_SERVICE_OLD],
       newText: PROXY_SERVICE_NEW,
       helperMarkerOld,
       helperMarkerNew,

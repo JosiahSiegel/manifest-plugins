@@ -185,7 +185,7 @@ export function buildHelperMarkerNew(): string {
  *   3. Falling through to the `DEFAULT_CONCURRENCY_MAX = 10` constant if
  *      the env var is unset or invalid.
  *
- * Replaces the upstream line `const CONCURRENCY_MAX = 10;` with
+ * Replaces the upstream env-backed `CONCURRENCY_MAX` initialization with
  * `const CONCURRENCY_MAX = getResolvedConcurrencyMax();`.
  */
 export const RATE_LIMITER_HOST_SOURCE = `/**
@@ -242,15 +242,17 @@ function getResolvedConcurrencyMax(): number {
 `;
 
 /**
- * The exact text from upstream/main's `proxy-rate-limiter.ts` line 8 that
- * the apply tool replaces. Verbatim — any whitespace difference breaks
- * the patcher.
+ * The exact text from upstream/main's `proxy-rate-limiter.ts` that the
+ * apply tool replaces. Verbatim against the canonical upstream shape —
+ * any whitespace difference breaks the patcher. `apply.ts`'s
+ * `oldTextAlternatives` accepts the housekeeping overlay variant for
+ * forks that already patched the file.
  */
 export const RATE_LIMITER_OLD = `const CONCURRENCY_MAX = 10;
 `;
 
 /**
- * The replacement text. The original `const CONCURRENCY_MAX = 10;` line
+ * The replacement text. The original env-backed `CONCURRENCY_MAX` block
  * is replaced with a call to `getResolvedConcurrencyMax()` (defined in
  * `RATE_LIMITER_HOST_SOURCE`, which the apply tool inserts immediately
  * above this line).
@@ -271,14 +273,9 @@ export const RATE_LIMITER_NEW = `${RATE_LIMITER_HOST_SOURCE}const CONCURRENCY_MA
  *   3. Falling through to `parseMaxMessagesPerRequest(undefined)` (the
  *      upstream default of 1000) if no env var is set.
  *
- * Replaces the upstream constructor block:
- *     this.maxMessagesPerRequest = parseMaxMessagesPerRequest(
- *       this.config.get<string>('MANIFEST_MAX_MESSAGES'),
- *     );
- * with:
- *     this.maxMessagesPerRequest = getResolvedMaxMessagesPerRequest(
- *       this.config,
- *     );
+ * Replaces the current upstream constructor block that resolves
+ * `maxMessagesRaw` from `MAX_MESSAGES_PER_REQUEST` / `MANIFEST_MAX_MESSAGES`
+ * and then parses it into `this.maxMessagesPerRequest`.
  *
  * The new method is added to the class body. The apply tool inserts both
  * the function definition (above the class) and the method call (in
@@ -343,9 +340,11 @@ function getResolvedMaxMessagesPerRequest(
 `;
 
 /**
- * The exact text from upstream/main's `proxy.service.ts` lines 163-165 that
- * the apply tool replaces. Verbatim — any whitespace difference breaks
- * the patcher.
+ * The exact text from upstream/main's `proxy.service.ts` constructor that
+ * the apply tool replaces. Verbatim against the canonical upstream shape
+ * — any whitespace difference breaks the patcher. `apply.ts`'s
+ * `oldTextAlternatives` accepts the housekeeping overlay variant for
+ * forks that already modernized the file.
  */
 export const PROXY_SERVICE_OLD = `    this.maxMessagesPerRequest = parseMaxMessagesPerRequest(
       this.config.get<string>('MANIFEST_MAX_MESSAGES'),
@@ -353,7 +352,7 @@ export const PROXY_SERVICE_OLD = `    this.maxMessagesPerRequest = parseMaxMessa
 `;
 
 /**
- * The replacement text. The original 3-line constructor body is replaced
+ * The replacement text. The original constructor block is replaced
  * with a single call to `getResolvedMaxMessagesPerRequest(this.config)`,
  * which is defined in `PROXY_SERVICE_HOST_SOURCE` (inserted immediately
  * above the class by the apply tool).
