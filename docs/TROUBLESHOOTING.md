@@ -129,3 +129,61 @@ Typo in `manifest-plugins.config.json`. The class name must match an exported pl
 Docker Desktop on Windows translates `/nodejs/bin/node` → `D:/Program Files/Git/nodejs/bin/node` (host path), which doesn't exist on the Windows host. This is a Docker Desktop limitation, not a code bug. The e2e test works correctly on Linux CI and on macOS/Linux Docker hosts.
 
 For Windows local testing, use WSL2 or run the e2e test from within a Linux container.
+
+## Plugin discovery / loading issues
+
+### A new plugin does not appear in `dist/index.js` after `npm run build`
+
+The auto-discoverer at `src/registry/discover.ts` walks `src/plugins/<name>/plugin.ts`
+at module load. Common causes:
+
+1. **Wrong file name.** Discoverer looks for exactly `plugin.ts` inside the plugin directory (other files in the directory are ignored).
+2. **No exported class.** The plugin file must `export class <Name>Plugin`. Helpers, types, and constants are fine but the class is required.
+3. **Missing `static metadata`.** The class must declare `static readonly metadata: PluginMetadata`. See [`docs/PLUGIN_AUTHORING.md`](PLUGIN_AUTHORING.md).
+4. **Duplicate `metadata.id` or class name.** The discoverer throws `PluginDiscoveryError` on duplicates. Check that the new plugin's id and class name don't collide with existing plugins.
+5. **TypeScript error.** The plugin file's `tsc` build must succeed before the discoverer runs. Run `node_modules/.bin/tsc --noEmit` and fix any reported errors.
+
+Verify with:
+
+```bash
+node -e "console.log(require('./dist/index.js').getInstalledPlugins().map(p => p.id))"
+# Expected: [ 'anthropic-billing-header', 'default-policy', 'header-tier-router', '<your-id>' ]
+```
+
+### `npm run new-plugin` exits with code 2
+
+The scaffolder rejects:
+
+- Missing plugin name (`npm run new-plugin` without args).
+- Names that don't match `^[a-z][a-z0-9-]*$` (kebab-case, lowercase, starts with a letter). Reject examples: `MyPlugin`, `has space`, `1leading-digit`.
+- Unknown `--kind` values. Valid: `transform`, `policy`, `routing-override`.
+
+Fix the input and retry.
+
+### `npm run new-plugin` exits with code 3
+
+A plugin directory already exists at the target path. Pick a different name or
+delete the existing directory first.
+
+### Build-time config plugin name doesn't match
+
+`manifest-plugins.config.json` keys must match an exported plugin class name
+exactly. The class name is checked against `dist/plugins/*/plugin.js` (the
+discoverer emits `exports.<ClassName> = ...`). A typo here causes the build
+script to error out:
+
+```
+manifest-plugins.config.json: unknown plugin "AnthropicBillingPlugin" — valid plugins are: AnthropicBillingHeaderPlugin, DefaultPolicyPlugin, HeaderTierRouterPlugin. If you added a new plugin, update PLUGIN_CLASS_NAMES in scripts/filter-plugins.mjs.
+```
+
+(That message will say "update scripts/filter-plugins.mjs" but in practice the
+allowlist is derived from `dist/plugins/` — the error is a stale leftover from
+the pre-discovery implementation and is harmless.)
+
+### Plugin works locally but not in the image
+
+`npm run build` and the Docker image rebuild are separate steps. Common causes:
+
+1. **Image not rebuilt.** `npm run build` only updates `dist/` on the host. Run `bash pipeline/build-and-publish.sh` (or push to trigger CI) to rebuild the image.
+2. **Stale `dist/` in the image build context.** `rm -rf dist` before `npm run build` if `tsc`'s incremental cache (`.tsbuildinfo`) is stale. The error message is `find: 'dist': No such file or directory`.
+3. **Plugin excluded in `manifest-plugins.config.json`** at the image-build repo. Re-enable and rebuild.

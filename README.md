@@ -144,3 +144,21 @@ make verify DIR=../manifest
 ```
 
 For troubleshooting, see [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
+
+## Plugin authoring
+
+Adding a new plugin is a single command:
+
+```bash
+npm run new-plugin -- my-header                  # default kind: transform
+npm run new-plugin -- tier-router --kind=routing-override
+npm run new-plugin -- rate-cap --kind=policy
+```
+
+The scaffolder writes `src/plugins/<name>/plugin.ts` + `plugin.spec.ts` with the
+right interface stubs. The registry auto-discovers plugins from `src/plugins/` on
+every build — no `src/index.ts` edits needed.
+
+For the full authoring guide, see [`docs/PLUGIN_AUTHORING.md`](docs/PLUGIN_AUTHORING.md).
+For the registry data model and runtime toggle surface, see
+[`docs/PLUGIN_REGISTRY.md`](docs/PLUGIN_REGISTRY.md).
