@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "rootDir": "src/overlays/mvp",
+    "outDir": "dist/overlays/mvp",
+    "module": "commonjs",
+    "target": "es2022",
+    "strict": true,
+    "declaration": false,
+    "sourceMap": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/overlays/mvp/**/*.ts"],
+  "exclude": ["src/overlays/mvp/**/*.spec.ts", "node_modules"]
+}

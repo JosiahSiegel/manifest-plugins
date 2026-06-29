@@ -1,0 +1,19 @@
+{
+  "overlays": [
+    {
+      "id": "provider-client-transform-host",
+      "target": "packages/backend/src/routing/proxy/provider-client.ts",
+      "postPatchSymbol": "function applyRequestTransformPlugins("
+    },
+    {
+      "id": "proxy-rate-limiter-policy-host",
+      "target": "packages/backend/src/routing/proxy/proxy-rate-limiter.ts",
+      "postPatchSymbol": "function getResolvedConcurrencyMax("
+    },
+    {
+      "id": "proxy-service-policy-host",
+      "target": "packages/backend/src/routing/proxy/proxy.service.ts",
+      "postPatchSymbol": "function getResolvedMaxMessagesPerRequest("
+    }
+  ]
+}
