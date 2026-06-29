@@ -19,6 +19,11 @@
       "id": "proxy-service-routing-override-host",
       "target": "packages/backend/src/routing/proxy/proxy.service.ts",
       "postPatchSymbol": "function applyProxyRoutingOverridePlugins("
+    },
+    {
+      "id": "dashboard-plugin-manager-mount",
+      "target": "apps/web/index.html",
+      "postPatchSymbol": "id=\"plugin-manager-root\""
     }
   ]
 }

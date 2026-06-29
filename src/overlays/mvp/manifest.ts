@@ -16,6 +16,8 @@
  * `src/host/snippet.ts` — the MVP overlay path is the typed +
  * declarative surface that consumes those snippets in one batch.
  */
+import { mountDashboardPluginManager } from './mount-dashboard';
+
 export interface MvpOverlaySpec {
   /** Stable overlay identifier (matches the on-disk artifact id). */
   readonly id: string;
@@ -53,6 +55,8 @@ export interface MvpOverlaySpec {
  *     upstream does not have the anchor and the overlay reports drift —
  *     this is correct (the upstream shape pre-`2ab748a6` already routed
  *     headers first).
+ *   - `dashboard-plugin-manager-mount`       → plugin admin UI mount in
+ *     `apps/web/index.html`.
  */
 export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
   Object.freeze({
@@ -74,5 +78,11 @@ export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
     id: 'proxy-service-routing-override-host',
     target: 'packages/backend/src/routing/proxy/proxy.service.ts',
     postPatchSymbol: 'function applyProxyRoutingOverridePlugins(',
+  }),
+  Object.freeze({
+    id: 'dashboard-plugin-manager-mount',
+    target: 'apps/web/index.html',
+    postPatchSymbol: 'id="plugin-manager-root"',
+    apply: mountDashboardPluginManager,
   }),
 ]);
