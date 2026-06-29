@@ -17,12 +17,20 @@ import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import {
   applyAll,
+  applyAllFour,
   applyProviderClientHost,
   applyProxyRateLimiterHost,
+  applyProxyRoutingOverrideHost,
   applyProxyServiceHost,
   DEFAULT_MANIFEST_FILES,
   type ApplyResult,
 } from '../src/host/apply';
+import {
+  buildHelperMarkerNew,
+  HELPER_MARKER_OLD,
+  RETURN_NEW,
+  RETURN_OLD,
+} from '../src/host/snippet';
 
 const MANIFEST_REPO = process.env['MANIFEST_REPO'] ?? '../manifest';
 const FILES = DEFAULT_MANIFEST_FILES;
@@ -93,6 +101,97 @@ function withTempManifest(
     providerClient: join(tmp, FILES.providerClient),
     proxyRateLimiter: join(tmp, FILES.proxyRateLimiter),
     proxyService: join(tmp, FILES.proxyService),
+    cleanup: () => rmSync(tmp, { recursive: true, force: true }),
+  };
+  return Promise.resolve(fn(files)).finally(files.cleanup);
+}
+
+/**
+ * Fixture-only shape of `proxy.service.ts` for the new
+ * `applyProxyRoutingOverrideHost` patcher. We don't need to
+ * `git show` upstream here — the patcher doesn't read upstream
+ * directly; it works against whatever bytes are on disk. We
+ * synthesize the upstream shape inline so the test is hermetic
+ * and doesn't depend on the sibling Manifest checkout having a
+ * specific post-`2ab748a6` commit checked out.
+ *
+ * The shape mirrors upstream/main `proxy.service.ts` at commit
+ * `2ab748a6` (2026-06-29), with the explicit-model early-return
+ * block at the signature line `): Promise<ResolvedRouting> {`
+ * down to `if (apiMode !== 'messages' && ... && requestedModel
+ * !== OPENAI_MODEL_ID_AUTO) {`.
+ *
+ * The fixture also carries the pre-existing message-cap anchors
+ * (`parseMaxMessagesPerRequest` import + `getResolvedMaxMessagesPerRequest`
+ * call site) so `applyProxyServiceHost` succeeds against it. The
+ * `applyAllFour` orchestrator runs all four patches; each must
+ * match its own anchor.
+ */
+function synthesizeProxyServiceFixture(): string {
+  return [
+    "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';",
+    "import { OPENAI_MODEL_ID_AUTO, routeForOpenAiModelId } from './openai-model-id';",
+    "import { parseMaxMessagesPerRequest } from './message-limit';",
+    '',
+    '@Injectable()',
+    'export class ProxyService {',
+    '  constructor(',
+    '    private readonly resolveService: ResolveService,',
+    '    private readonly modelDiscovery: ModelDiscoveryService,',
+    '    private readonly providerKeyService: ProviderKeyService,',
+    '    private readonly tierService: TierService,',
+    '    private readonly openaiOauth: OpenaiOauthService,',
+    '    private readonly providerParamSpecs: ProviderParamSpecService,',
+    '  ) {',
+    "    this.maxMessagesPerRequest = parseMaxMessagesPerRequest(",
+    "      this.config.get<string>('MANIFEST_MAX_MESSAGES'),",
+    '    );',
+    '  }',
+    '',
+    '  private async resolveRouting(',
+    '    agentId: string,',
+    '    tenantId: string,',
+    '    body: ProxyRequestOptions[\'body\'],',
+    '    sessionKey: string,',
+    '    specificityOverride: ProxyRequestOptions[\'specificityOverride\'],',
+    '    headers: ProxyRequestOptions[\'headers\'],',
+    '    apiMode: ProxyApiMode,',
+    '  ): Promise<ResolvedRouting> {',
+    "    const requestedModel = typeof body.model === 'string' ? body.model : undefined;",
+    '    // Anthropic Messages requests require a provider-native model field; only',
+    '    // OpenAI-compatible surfaces use /v1/models IDs as route overrides.',
+    "    if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {",
+    '      return {',
+    "        tier: 'default' as const,",
+    '        route: routeForOpenAiModelId(requestedModel, []),',
+    "        fallback_routes: null,",
+    '      };',
+    '    }',
+    '    return { tier: \'default\', route: null };',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+}
+
+interface RoutingOverrideTempFiles {
+  root: string;
+  proxyService: string;
+  cleanup: () => void;
+}
+
+function withSynthProxyService(
+  fn: (files: RoutingOverrideTempFiles) => Promise<void> | void,
+): Promise<void> {
+  const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-routing-override-'));
+  const relPath =
+    'packages/backend/src/routing/proxy/proxy.service.ts';
+  const target = join(tmp, relPath);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, synthesizeProxyServiceFixture(), 'utf-8');
+  const files: RoutingOverrideTempFiles = {
+    root: tmp,
+    proxyService: target,
     cleanup: () => rmSync(tmp, { recursive: true, force: true }),
   };
   return Promise.resolve(fn(files)).finally(files.cleanup);
@@ -285,6 +384,174 @@ describe('per-file wrappers', () => {
   });
 });
 
+describe('applyProxyRoutingOverrideHost (proxy.service.ts routing-override hook)', () => {
+  it('patches the upstream-shaped proxy.service.ts and inserts the host helper before the explicit-model branch', async () => {
+    await withSynthProxyService(async (files) => {
+      const result = await applyProxyRoutingOverrideHost(files.proxyService);
+      expectStatus('applyProxyRoutingOverrideHost', result, 'applied');
+
+      const patched = readFileSync(files.proxyService, 'utf-8');
+      // Helper function exists.
+      expect(patched).toContain('function applyProxyRoutingOverridePlugins(');
+      // HeaderTierService import was added.
+      expect(patched).toContain(
+        "import { HeaderTierService } from '../header-tiers/header-tier.service';",
+      );
+      // HeaderTierService was injected into the constructor.
+      expect(patched).toContain(
+        'private readonly headerTierService: HeaderTierService,',
+      );
+      // The plugin call appears BEFORE the explicit-model early-return.
+      const pluginIdx = patched.indexOf('applyProxyRoutingOverridePlugins(');
+      const earlyReturnIdx = patched.indexOf(
+        "if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {",
+      );
+      expect(pluginIdx).toBeGreaterThanOrEqual(0);
+      expect(earlyReturnIdx).toBeGreaterThanOrEqual(0);
+      expect(pluginIdx).toBeLessThan(earlyReturnIdx);
+      // The plugin call awaits the host fetches (headerTiers +
+      // discoveredModels). This is the structural contract: the
+      // plugin never sees DB / Nest providers, so the host must
+      // resolve them before invoking.
+      expect(patched).toContain('await this.headerTierService.list(agentId)');
+      expect(patched).toContain(
+        'await this.modelDiscovery.getModelsForAgent(tenantId, agentId)',
+      );
+    });
+  });
+
+  it('is idempotent — running twice on the same file reports noop', async () => {
+    await withSynthProxyService(async (files) => {
+      const first = await applyProxyRoutingOverrideHost(files.proxyService);
+      expectStatus('applyProxyRoutingOverrideHost', first, 'applied');
+
+      const second = await applyProxyRoutingOverrideHost(files.proxyService);
+      expectStatus('applyProxyRoutingOverrideHost', second, 'noop');
+    });
+  });
+
+  it('reports upstream-drift when the explicit-model anchor (2ab748a6 signature) is missing', async () => {
+    await withSynthProxyService(async (files) => {
+      // Strip the entire explicit-model block so the anchor is gone.
+      const original = readFileSync(files.proxyService, 'utf-8');
+      const stripped = original.replace(
+        "    const requestedModel = typeof body.model === 'string' ? body.model : undefined;\n    // Anthropic Messages requests require a provider-native model field; only\n    // OpenAI-compatible surfaces use /v1/models IDs as route overrides.\n    if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {\n",
+        '',
+      );
+      writeFileSync(files.proxyService, stripped, 'utf-8');
+
+      const result = await applyProxyRoutingOverrideHost(files.proxyService);
+      expectStatus('applyProxyRoutingOverrideHost', result, 'upstream-drift');
+      if (result.status === 'upstream-drift') {
+        expect(result.reason).toContain('expected upstream anchor');
+      }
+    });
+  });
+
+  it('reports upstream-drift when the HeaderTierService import anchor is missing', async () => {
+    await withSynthProxyService(async (files) => {
+      // Remove the existing ProviderParamSpec import so the import
+      // anchor is gone.
+      const original = readFileSync(files.proxyService, 'utf-8');
+      const stripped = original.replace(
+        "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';\n",
+        '',
+      );
+      writeFileSync(files.proxyService, stripped, 'utf-8');
+
+      const result = await applyProxyRoutingOverrideHost(files.proxyService);
+      expectStatus('applyProxyRoutingOverrideHost', result, 'upstream-drift');
+    });
+  });
+
+  it('reports upstream-drift when the providerParamSpecs constructor anchor is missing', async () => {
+    await withSynthProxyService(async (files) => {
+      // Rewrite the constructor so the existing providerParamSpecs
+      // closing line is gone. Use a different param name.
+      const original = readFileSync(files.proxyService, 'utf-8');
+      const stripped = original.replace(
+        '    private readonly providerParamSpecs: ProviderParamSpecService,\n  ) {',
+        '    private readonly providerSpecs: ProviderParamSpecService,\n  ) {',
+      );
+      writeFileSync(files.proxyService, stripped, 'utf-8');
+
+      const result = await applyProxyRoutingOverrideHost(files.proxyService);
+      expectStatus('applyProxyRoutingOverrideHost', result, 'upstream-drift');
+    });
+  });
+
+  it('dryRun: reports applied but does not modify the file', async () => {
+    await withSynthProxyService(async (files) => {
+      const before = readFileSync(files.proxyService, 'utf-8');
+
+      const result = await applyProxyRoutingOverrideHost(files.proxyService, {
+        dryRun: true,
+      });
+      expectStatus('applyProxyRoutingOverrideHost', result, 'applied');
+
+      const after = readFileSync(files.proxyService, 'utf-8');
+      expect(after).toBe(before);
+    });
+  });
+});
+
+describe('applyAllFour includes the routing-override patcher (four-file patcher)', () => {
+  it('patches all four files against the upstream shapes', async () => {
+    await withTempManifest(async (files) => {
+      // Stage a synthesized proxy.service.ts shape with the
+      // 2ab748a6 anchor alongside the real provider-client.ts,
+      // proxy-rate-limiter.ts, and the real (existing) proxy.service.ts
+      // fixture the upstream tests already populated. We want the
+      // synthesized routing-override content for proxy.service.ts so
+      // applyProxyRoutingOverrideHost has an anchor to match.
+      const synthProxyService = synthesizeProxyServiceFixture();
+      writeFileSync(files.proxyService, synthProxyService, 'utf-8');
+
+      const all = await applyAllFour(files.root);
+
+      expectStatus('providerClient', all.providerClient, 'applied');
+      expectStatus('proxyRateLimiter', all.proxyRateLimiter, 'applied');
+      expectStatus('proxyService', all.proxyService, 'applied');
+      expectStatus(
+        'proxyRoutingOverride',
+        all.proxyRoutingOverride,
+        'applied',
+      );
+      expect(all.fullyApplied).toBe(true);
+      expect(all.hasDrift).toBe(false);
+
+      const patched = readFileSync(files.proxyService, 'utf-8');
+      expect(patched).toContain('function applyProxyRoutingOverridePlugins(');
+    });
+  });
+
+  it('reports the routing-override drift independently when proxy.service.ts is missing the 2ab748a6 anchor', async () => {
+    await withTempManifest(async (files) => {
+      // Write a proxy.service.ts WITHOUT the 2ab748a6 anchor so the
+      // routing-override patcher reports drift but the other three
+      // patches still apply.
+      const strippedProxyService = synthesizeProxyServiceFixture().replace(
+        "    const requestedModel = typeof body.model === 'string' ? body.model : undefined;\n    // Anthropic Messages requests require a provider-native model field; only\n    // OpenAI-compatible surfaces use /v1/models IDs as route overrides.\n    if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {\n",
+        '',
+      );
+      writeFileSync(files.proxyService, strippedProxyService, 'utf-8');
+
+      const all = await applyAllFour(files.root);
+
+      expectStatus('providerClient', all.providerClient, 'applied');
+      expectStatus('proxyRateLimiter', all.proxyRateLimiter, 'applied');
+      expectStatus('proxyService', all.proxyService, 'applied');
+      expectStatus(
+        'proxyRoutingOverride',
+        all.proxyRoutingOverride,
+        'upstream-drift',
+      );
+      expect(all.fullyApplied).toBe(false);
+      expect(all.hasDrift).toBe(true);
+    });
+  });
+});
+
 describe('applyPatch direct invocation (covers internal defaults)', () => {
   it('uses default empty options when called with no second argument', async () => {
     // Covers the `options: ApplyOptions = {}` default parameter on
@@ -297,10 +564,10 @@ describe('applyPatch direct invocation (covers internal defaults)', () => {
       const result = await applyPatch({
         filePath: files.providerClient,
         postPatchSymbol: 'function applyRequestTransformPlugins(',
-        oldText: require('../src/host/snippet').RETURN_OLD,
-        newText: require('../src/host/snippet').RETURN_NEW,
-        helperMarkerOld: require('../src/host/snippet').HELPER_MARKER_OLD,
-        helperMarkerNew: require('../src/host/snippet').buildHelperMarkerNew(),
+        oldText: RETURN_OLD,
+        newText: RETURN_NEW,
+        helperMarkerOld: HELPER_MARKER_OLD,
+        helperMarkerNew: buildHelperMarkerNew(),
       });
       expectStatus('applyPatch direct', result, 'applied');
     });

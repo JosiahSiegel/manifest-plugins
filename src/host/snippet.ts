@@ -359,3 +359,233 @@ export const PROXY_SERVICE_OLD = `    this.maxMessagesPerRequest = parseMaxMessa
  */
 export const PROXY_SERVICE_NEW = `    this.maxMessagesPerRequest = getResolvedMaxMessagesPerRequest(this.config);
 `;
+
+// =============================================================================
+// Proxy-service routing override host (injected into proxy.service.ts)
+// =============================================================================
+
+/**
+ * The host helper inserted into upstream `proxy.service.ts::resolveRouting()`.
+ * Runs BEFORE the upstream router selects a provider/model, so a plugin can
+ * override the routing decision when an inbound HTTP header (e.g.
+ * `x-manifest-tier`) matches a configured `header_tiers` row.
+ *
+ * Behavior:
+ *   - Plugins receive a fully-resolved context (`agentId`, `tenantId`,
+ *     `apiMode`, `body`, `headers`, `requestedModel`, `headerTiers`,
+ *     `discoveredModels`). The host does all the DB / Nest work because
+ *     plugins run in a separate npm package and have no Nest access.
+ *   - First non-null `route` from any plugin wins. The host returns that
+ *     object directly as the request's `ResolvedRouting`, short-circuiting
+ *     both the upstream `2ab748a6` explicit-model early-return and the
+ *     upstream `resolveHeaderTier` silent fall-through.
+ *   - Plugin errors are non-fatal — the host catches and logs them and
+ *     continues with the upstream default routing path.
+ *
+ * Why `require()` and not `import`? The host snippet is pasted into
+ * upstream's `proxy.service.ts`. Adding a top-level `import` would fail
+ * `tsc` whenever the plugins package is not installed (e.g. on upstream
+ * itself, or CI without the fork's plugin layer). `require()` inside
+ * try/catch degrades to a no-op when the module is missing, so the
+ * upstream source stays compilable in either state.
+ */
+export const PROXY_ROUTING_OVERRIDE_HOST_SOURCE = `/**
+ * Fork: apply registered routing-override plugins before the upstream
+ * router selects a provider/model. Plugins live in the sibling
+ * \`manifest-plugins\` repo and are loaded via \`require('manifest-plugins')\`.
+ * If the package is not installed (e.g. on upstream or in CI without
+ * the fork's plugin layer), this is a no-op.
+ *
+ * Plugin contract: each entry in \`require('manifest-plugins').plugins\`
+ * may implement \`overrideRouting(ctx)\` returning a routing object or
+ * \`null\`. The host walks the plugin array in order and returns the
+ * first non-null result. Plugin errors are caught and logged; one broken
+ * plugin must not break the request.
+ */
+function applyProxyRoutingOverridePlugins(
+  agentId: string,
+  tenantId: string,
+  apiMode: string,
+  body: Record<string, unknown>,
+  headers: Record<string, string | string[] | undefined> | undefined,
+  requestedModel: string | undefined,
+  headerTiers: ReadonlyArray<{
+    id: string;
+    name: string;
+    header_key: string;
+    header_value: string;
+    enabled: boolean;
+    sort_order: number;
+    badge_color: string | null;
+    override_route: {
+      provider: string;
+      authType: string;
+      model: string;
+      keyLabel?: string;
+    } | null;
+    fallback_routes: ReadonlyArray<{
+      provider: string;
+      authType: string;
+      model: string;
+      keyLabel?: string;
+    }> | null;
+    output_modality: string | null;
+    response_mode: string | null;
+  }>,
+  discoveredModels: ReadonlyArray<{
+    id: string;
+    provider: string;
+    authType?: string;
+  }>,
+): {
+  tier?: string;
+  route: { provider: string; authType: string; model: string; keyLabel?: string } | null;
+  fallback_routes?: ReadonlyArray<{
+    provider: string;
+    authType: string;
+    model: string;
+    keyLabel?: string;
+  }> | null;
+  response_mode?: string | null;
+  output_modality?: string | null;
+  confidence?: number;
+  score?: number;
+  reason?: string;
+  header_tier_id?: string;
+  header_tier_name?: string;
+  header_tier_color?: string | null;
+  explicit_model_override?: boolean;
+} | null {
+  let pkg: { plugins?: unknown } | undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    pkg = require('manifest-plugins') as { plugins?: unknown };
+  } catch {
+    return null;
+  }
+  if (!pkg || !Array.isArray(pkg.plugins)) return null;
+  for (const plugin of pkg.plugins) {
+    if (!plugin || typeof (plugin as { overrideRouting?: unknown }).overrideRouting !== 'function') continue;
+    try {
+      const out = (plugin as {
+        overrideRouting: (ctx: unknown) => unknown;
+      }).overrideRouting({
+        agentId,
+        tenantId,
+        apiMode,
+        body,
+        headers: headers ?? {},
+        requestedModel,
+        headerTiers,
+        discoveredModels,
+      });
+      if (out && typeof out === 'object' && (out as { route?: unknown }).route !== undefined) {
+        return out as {
+          tier?: string;
+          route: { provider: string; authType: string; model: string; keyLabel?: string } | null;
+          fallback_routes?: ReadonlyArray<{
+            provider: string;
+            authType: string;
+            model: string;
+            keyLabel?: string;
+          }> | null;
+          response_mode?: string | null;
+          output_modality?: string | null;
+          confidence?: number;
+          score?: number;
+          reason?: string;
+          header_tier_id?: string;
+          header_tier_name?: string;
+          header_tier_color?: string | null;
+          explicit_model_override?: boolean;
+        };
+      }
+    } catch (err) {
+      const name =
+        (plugin as { constructor?: { name?: string } }).constructor?.name ?? 'plugin';
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(\`[manifest-plugins] \${name} overrideRouting failed: \${msg}\`);
+    }
+  }
+  return null;
+}
+
+`;
+
+/**
+ * The exact text from upstream/main's `proxy.service.ts` constructor
+ * closing block that the apply tool replaces to inject the new
+ * `HeaderTierService` dependency.
+ *
+ * The patcher extends the constructor with `headerTierService` after
+ * `providerParamSpecs`. If upstream renames the param or reorders the
+ * constructor, update this anchor.
+ */
+export const PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD =
+  '    private readonly providerParamSpecs: ProviderParamSpecService,\n  ) {\n';
+
+export const PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW =
+  '    private readonly providerParamSpecs: ProviderParamSpecService,\n    private readonly headerTierService: HeaderTierService,\n  ) {\n';
+
+/**
+ * The exact import line in upstream/main's `proxy.service.ts` that the
+ * apply tool uses as the anchor for inserting the new
+ * `HeaderTierService` import.
+ *
+ * The patcher inserts the new import immediately below this line. If
+ * upstream removes or reorders the existing import, update this anchor.
+ */
+export const PROXY_ROUTING_OVERRIDE_IMPORT_OLD =
+  "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';\n";
+
+export const PROXY_ROUTING_OVERRIDE_IMPORT_NEW =
+  "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';\n" +
+  "import { HeaderTierService } from '../header-tiers/header-tier.service';\n";
+
+/**
+ * The exact text from upstream/main's `proxy.service.ts::resolveRouting()`
+ * (lines 459-465, the signature of commit `2ab748a6`) that the apply
+ * tool replaces to insert the routing-override hook BEFORE the
+ * explicit-model early-return.
+ *
+ * Pre-`2ab748a6` checkouts do not have these lines; the patcher will
+ * report `upstream-drift` (correct: pre-`2ab748a6` upstream did not need
+ * this hook because it always passed `headers` into `resolveService.resolve`).
+ */
+export const PROXY_ROUTING_OVERRIDE_OLD = `  ): Promise<ResolvedRouting> {
+    const requestedModel = typeof body.model === 'string' ? body.model : undefined;
+    // Anthropic Messages requests require a provider-native model field; only
+    // OpenAI-compatible surfaces use /v1/models IDs as route overrides.
+    if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {
+`;
+
+/**
+ * The replacement text for the resolveRouting body. The host calls
+ * `applyProxyRoutingOverridePlugins(...)` FIRST (with the headerTiers +
+ * discoveredModels it just fetched via the Nest-injected services), and
+ * if a plugin returns a non-null routing object the host returns it
+ * directly — short-circuiting the explicit-model branch AND the
+ * `resolveHeaderTier` silent fall-through. Otherwise the original
+ * `2ab748a6` block runs unchanged.
+ *
+ * `requestedModel` is parsed here once and shared with the plugin so
+ * the plugin does not need to re-parse `body.model`.
+ */
+export const PROXY_ROUTING_OVERRIDE_NEW = `  ): Promise<ResolvedRouting> {
+    const requestedModel = typeof body.model === 'string' ? body.model : undefined;
+    const pluginOverride = applyProxyRoutingOverridePlugins(
+      agentId,
+      tenantId,
+      apiMode,
+      body,
+      headers,
+      requestedModel,
+      await this.headerTierService.list(agentId),
+      await this.modelDiscovery.getModelsForAgent(tenantId, agentId),
+    );
+    if (pluginOverride) return pluginOverride;
+    // Anthropic Messages requests require a provider-native model field; only
+    // OpenAI-compatible surfaces use /v1/models IDs as route overrides.
+    if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {
+`;
