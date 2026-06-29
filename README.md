@@ -60,7 +60,7 @@ docker run --rm -p 2099:2099 \
 open http://localhost:2099
 ```
 
-The image listens on port `2099` (matching upstream Manifest). See [`pipeline/`](pipeline/) for the full operator guide.
+The image defaults to container port `2099` (matching upstream Manifest), but self-hosters can use any port by setting `PORT` and matching the Docker port mapping. See [Ports](#ports) and [`pipeline/`](pipeline/) for the full operator guide.
 
 ### Build it yourself (with custom plugins)
 
@@ -86,6 +86,46 @@ Each patch is byte-exact against upstream and **idempotent** — running `make a
 To build a Docker image with the plugins baked in, see [Building an image](#building-an-image).
 
 ## Usage
+
+### Ports
+
+The image default is `PORT=2099`, mirroring upstream Manifest. That default is not special — it is just the baked-in fallback. Self-hosters can use any port as long as the container `PORT` and Docker mapping agree.
+
+Default:
+
+```bash
+docker run --rm -p 2099:2099 \
+  -e DATABASE_URL=... \
+  -e BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+  ghcr.io/josiahsiegel/manifest-with-plugins:latest
+```
+
+Custom port (example: `38238`):
+
+```bash
+docker run --rm -p 38238:38238 \
+  -e PORT=38238 \
+  -e DATABASE_URL=... \
+  -e BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+  ghcr.io/josiahsiegel/manifest-with-plugins:latest
+```
+
+If your reverse proxy maps a different host port to the container port, use the normal Docker form:
+
+```bash
+# host 8080 → container 2099
+docker run --rm -p 8080:2099 \
+  -e PORT=2099 \
+  -e DATABASE_URL=... \
+  -e BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+  ghcr.io/josiahsiegel/manifest-with-plugins:latest
+```
+
+The e2e test also accepts `PORT=...` so port flexibility stays covered:
+
+```bash
+PORT=38238 make e2e IMAGE=ghcr.io/josiahsiegel/manifest-with-plugins:latest
+```
 
 ### Selecting plugins at build time
 

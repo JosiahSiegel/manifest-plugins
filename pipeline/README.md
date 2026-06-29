@@ -29,7 +29,26 @@ docker run --rm -p 2099:2099 \
   ghcr.io/josiahsiegel/manifest-with-plugins:latest
 ```
 
-Open `http://localhost:2099` to access the dashboard.
+Open `http://localhost:2099` to access the dashboard. To use a different container port, set `PORT` and map the same port:
+
+```bash
+docker run --rm -p 38238:38238 \
+  -e PORT=38238 \
+  -e DATABASE_URL=postgresql://myuser:mypassword@host:5432/manifest \
+  -e BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+  ghcr.io/josiahsiegel/manifest-with-plugins:latest
+```
+
+Or map a different host port to the default container port:
+
+```bash
+# host 8080 → container 2099
+docker run --rm -p 8080:2099 \
+  -e PORT=2099 \
+  -e DATABASE_URL=postgresql://myuser:mypassword@host:5432/manifest \
+  -e BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+  ghcr.io/josiahsiegel/manifest-with-plugins:latest
+```
 
 ### Build it yourself
 

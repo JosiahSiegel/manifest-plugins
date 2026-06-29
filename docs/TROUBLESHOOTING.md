@@ -44,6 +44,36 @@ The e2e test failed an assertion. Read the failure output:
 
 ## Runtime failures
 
+### I want to self-host on a different port
+
+Use any port by setting `PORT` to the container port and matching the Docker mapping:
+
+```bash
+# container listens on 38238, host exposes 38238
+docker run --rm -p 38238:38238 \
+  -e PORT=38238 \
+  -e DATABASE_URL=... \
+  -e BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+  ghcr.io/josiahsiegel/manifest-with-plugins:latest
+```
+
+Or keep the container at the default `2099` and map a different host port:
+
+```bash
+# host 8080 → container 2099
+docker run --rm -p 8080:2099 \
+  -e PORT=2099 \
+  -e DATABASE_URL=... \
+  -e BETTER_AUTH_SECRET=$(openssl rand -hex 32) \
+  ghcr.io/josiahsiegel/manifest-with-plugins:latest
+```
+
+The e2e test supports custom ports too:
+
+```bash
+PORT=38238 make e2e IMAGE=ghcr.io/josiahsiegel/manifest-with-plugins:latest
+```
+
 ### Dashboard returns `404 Not Found` (Nest's default JSON)
 
 The frontend dist is missing from the runtime image. This is the regression the e2e test was added to prevent — if you're seeing it in a published image, the e2e test was bypassed.

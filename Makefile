@@ -9,7 +9,7 @@
 #   make install      install dev deps (npm install)
 #   make build        compile the plugins package (tsc + filter)
 #   make test         run jest with coverage
-#   make e2e IMAGE=tag run the end-to-end dashboard test
+#   make e2e IMAGE=tag run the end-to-end dashboard test (PORT=... supported)
 #   make apply DIR=…  apply the plugin host to a Manifest checkout
 #   make verify DIR=… verify the plugin host is applied to a Manifest checkout
 #   make pipeline …   build a manifest-with-plugins image via the pipeline
