@@ -22,9 +22,9 @@
  * file is already in the desired shape).
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,6 +32,7 @@ const repoRoot = resolve(__dirname, '..');
 
 const CONFIG_PATH = resolve(repoRoot, 'manifest-plugins.config.json');
 const DIST_INDEX = resolve(repoRoot, 'dist/index.js');
+const DIST_PLUGINS = resolve(repoRoot, 'dist/plugins');
 
 /**
  * Plugins shipped by the registry. Adding a new plugin requires adding
@@ -92,31 +93,40 @@ function validateConfig(config) {
   }
 }
 
-function parseRegistryClassNames(distSource) {
-  // Find the registry array. tsc emits `const pluginRegistry = Object.freeze([...])`
-  // where each entry is `Object.freeze({ pluginClassName: 'X', ... })`. We
-  // use a lazy regex match on the `pluginClassName: 'X'` markers to stay
-  // agnostic to the rest of the shape (single-line vs multi-line,
-  // presence of additional registry fields, etc.).
-  const pattern = /pluginRegistry\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\)/;
-  const match = distSource.match(pattern);
-  if (!match) {
+function parseRegistryClassNames(_distSource) {
+  // Walk `dist/plugins/*/plugin.js` and extract the class name from
+  // each. tsc emits `exports.<ClassName> = ...` for every named
+  // class export in a TS plugin file. This is deterministic and
+  // survives any future refactor of `src/index.ts`'s registry shape.
+  if (!existsSync(DIST_PLUGINS)) {
     throw new Error(
-      'dist/index.js does not contain the expected `pluginRegistry = Object.freeze([...])` block. ' +
+      `${DIST_PLUGINS} does not exist. Run \`npm run build\` first.`,
+    );
+  }
+  const out = [];
+  for (const child of readdirSync(DIST_PLUGINS)) {
+    if (child.startsWith('.')) continue;
+    const pluginFile = join(DIST_PLUGINS, child, 'plugin.js');
+    if (!existsSync(pluginFile)) continue;
+    const text = readFileSync(pluginFile, 'utf-8');
+    // Match `exports.<ClassName> = ...` declarations (tsc emits
+    // exactly one for the named class export).
+    const match = text.match(/exports\.([A-Z][A-Za-z0-9_]*)\s*=/);
+    if (match === null) {
+      throw new Error(
+        `${pluginFile} does not declare an exported class via 'exports.<ClassName> = ...'. ` +
+          'The build output shape may have changed; update scripts/filter-plugins.mjs.',
+      );
+    }
+    out.push(match[1]);
+  }
+  if (out.length === 0) {
+    throw new Error(
+      `${DIST_PLUGINS} contains no plugin.js files. ` +
         'The build output shape may have changed; update scripts/filter-plugins.mjs.',
     );
   }
-  const arrayBody = match[1];
-  const classMatches = [
-    ...arrayBody.matchAll(/pluginClassName:\s*['"]([^'"]+)['"]/g),
-  ];
-  if (classMatches.length === 0) {
-    throw new Error(
-      'dist/index.js pluginRegistry block does not contain any pluginClassName markers. ' +
-        'Update scripts/filter-plugins.mjs.',
-    );
-  }
-  return classMatches.map((m) => m[1]);
+  return out;
 }
 
 function annotateEnabledDefaults(distSource, disabledClassNames) {

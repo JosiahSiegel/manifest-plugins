@@ -38,9 +38,8 @@
  * `git pull` of upstream, run `npm run apply -- /path/to/manifest` to
  * re-inject the hosts. No fork repo or housekeeping overlay needed.
  */
-import { AnthropicBillingHeaderPlugin } from './plugins/anthropic-billing-header/plugin';
-import { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
-import { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';
+import { discoverPlugins } from './registry/discover';
+import { join } from 'path';
 
 // =============================================================================
 // RequestTransformPlugin — per-request hook
@@ -292,32 +291,26 @@ interface PluginRegistryEntry {
   readonly enabledByDefault: boolean;
 }
 
-const anthropicBillingHeaderPlugin = Object.freeze(
-  new AnthropicBillingHeaderPlugin(),
-);
-const defaultPolicyPlugin = Object.freeze(new DefaultPolicyPlugin());
-const headerTierRouterPlugin = Object.freeze(new HeaderTierRouterPlugin());
+/**
+ * Discover every plugin under `src/plugins/` at module load. Adding a
+ * new plugin requires only dropping a new directory with a `plugin.ts`
+ * file — the registry re-reads on every build / process start.
+ */
+function loadPluginRegistry(): readonly PluginRegistryEntry[] {
+  const discovered = discoverPlugins(join(__dirname, 'plugins'));
+  return Object.freeze(
+    discovered.map((entry) =>
+      Object.freeze({
+        pluginClassName: entry.pluginClassName,
+        metadata: entry.metadata,
+        instance: entry.instance,
+        enabledByDefault: true,
+      }),
+    ),
+  );
+}
 
-const pluginRegistry: readonly PluginRegistryEntry[] = Object.freeze([
-  Object.freeze({
-    pluginClassName: 'AnthropicBillingHeaderPlugin',
-    metadata: AnthropicBillingHeaderPlugin.metadata,
-    instance: anthropicBillingHeaderPlugin,
-    enabledByDefault: true,
-  }),
-  Object.freeze({
-    pluginClassName: 'DefaultPolicyPlugin',
-    metadata: DefaultPolicyPlugin.metadata,
-    instance: defaultPolicyPlugin,
-    enabledByDefault: true,
-  }),
-  Object.freeze({
-    pluginClassName: 'HeaderTierRouterPlugin',
-    metadata: HeaderTierRouterPlugin.metadata,
-    instance: headerTierRouterPlugin,
-    enabledByDefault: true,
-  }),
-]);
+const pluginRegistry: readonly PluginRegistryEntry[] = loadPluginRegistry();
 
 /** All installed plugin instances, regardless of their runtime enabled state. */
 export const installedPlugins: readonly ManifestPlugin[] = Object.freeze(

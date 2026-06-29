@@ -217,6 +217,19 @@ describe('filter-plugins build-time config contract', () => {
       const filterScript = readFileSync('scripts/filter-plugins.mjs', 'utf-8');
       writeFile(root, 'scripts/filter-plugins.mjs', filterScript);
       writeFile(root, 'dist/index.js', FILTER_DIST_FIXTURE);
+      // The new `parseRegistryClassNames` walks `dist/plugins/*/plugin.js`
+      // for `exports.<ClassName> = ...` declarations. Stage one such
+      // file per fixture plugin so the walker finds them.
+      writeFile(
+        root,
+        'dist/plugins/anthropic-billing-header/plugin.js',
+        'exports.AnthropicBillingHeaderPlugin = class AnthropicBillingHeaderPlugin {};\n',
+      );
+      writeFile(
+        root,
+        'dist/plugins/default-policy/plugin.js',
+        'exports.DefaultPolicyPlugin = class DefaultPolicyPlugin {};\n',
+      );
       writeFile(
         root,
         'manifest-plugins.config.json',
