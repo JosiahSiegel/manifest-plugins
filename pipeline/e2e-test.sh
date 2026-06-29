@@ -9,8 +9,12 @@
 #   2. GET /                   → HTTP 200, content-type text/html
 #                                (i.e. the SolidJS dashboard loads, not
 #                                Nest's default 404 for an unhandled route)
-#   3. GET /assets/<filename>   → HTTP 200, content-type application/javascript
+#   3. GET /assets/   → HTTP 200, content-type application/javascript
 #                                (i.e. the dashboard's JS bundle is reachable)
+#   4. (MVP_UI=1 only) GET /api/v1/plugins → HTTP 200, JSON body with a
+#                                top-level "plugins" array. When MVP_UI=1
+#                                is set, a 404 or non-JSON response on this
+#                                endpoint fails the script.
 #
 # This is the canonical validation that the image is a drop-in replacement
 # for the upstream Manifest image. Symbol-only checks (does the compiled
@@ -20,8 +24,8 @@
 # Usage:
 #   bash pipeline/e2e-test.sh <image:tag>
 #
-# Required tools: docker, curl, openssl, postgres client (only used
-# implicitly via docker exec).
+# Required tools: docker, curl, openssl, jq (for MVP_UI plugin route
+# assertion), postgres client (only used implicitly via docker exec).
 #
 # Exit codes:
 #   0  all checks passed
@@ -29,6 +33,7 @@
 #   2  container did not become healthy within the timeout
 #   3  one or more HTTP checks returned a non-200 status / wrong type
 #   4  unexpected runtime error during the test
+#   5  MVP_UI=1 was set but /api/v1/plugins is missing or non-JSON
 
 set -uo pipefail
 
@@ -43,12 +48,18 @@ if [[ $# -lt 1 ]]; then
   echo "Env vars:" >&2
   echo "  PORT                    port to publish (default: 2099)" >&2
   echo "  HEALTH_TIMEOUT_SECONDS  how long to wait for /api/v1/health (default: 60)" >&2
+  echo "  MVP_UI                  when 1, additionally assert /api/v1/plugins returns" >&2
+  echo "                          HTTP 200 with a JSON body containing a plugins array." >&2
+  echo "                          This is the gate for MVP-mode builds." >&2
+  echo "  PLUGINS_PATH            override the plugins API path (default: /api/v1/plugins)" >&2
   exit 64
 fi
 
 IMAGE="$1"
 PORT="${PORT:-2099}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-60}"
+MVP_UI="${MVP_UI:-0}"
+PLUGINS_PATH="${PLUGINS_PATH:-/api/v1/plugins}"
 
 # ---- preflight --------------------------------------------------------------
 
@@ -63,6 +74,22 @@ fi
 if ! command -v openssl >/dev/null 2>&1; then
   echo "error: openssl not on PATH" >&2
   exit 4
+fi
+# MVP_UI requires jq to assert the plugins JSON array; we fail fast
+# here (before the docker image check) so the user sees a clear
+# error instead of a confusing 200-vs-non-JSON failure mid-test.
+# Probe both presence AND functionality: a non-executable or stub
+# `jq` on PATH would otherwise pass `command -v` and fail later with
+# an unhelpful exit code.
+if [[ "$MVP_UI" == "1" ]]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "error: MVP_UI=1 requires 'jq' on PATH to validate /api/v1/plugins response" >&2
+    exit 4
+  fi
+  if ! jq --version >/dev/null 2>&1; then
+    echo "error: MVP_UI=1 found 'jq' on PATH but it is not functional (jq --version failed)" >&2
+    exit 4
+  fi
 fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -238,10 +265,33 @@ else
   log "(skipped asset check — no /assets/* file found in dashboard HTML)"
 fi
 
+# (d) (MVP_UI=1 only) /api/v1/plugins — assert the upstream Manifest
+# `PluginsController` is reachable and returns a JSON object with a
+# `plugins` array. When MVP_UI is set, a 404 or non-JSON response
+# fails the script with exit code 5. This is the MVP gate: the build
+# is claiming to ship MVP UI, so the upstream must actually expose it.
+if [[ "$MVP_UI" == "1" ]]; then
+  capture "http://127.0.0.1:${PORT}${PLUGINS_PATH}"
+  [[ "$RESP_CODE" == "200" ]] \
+    || fail "GET ${PLUGINS_PATH} → $RESP_CODE (expected 200 — MVP_UI=1 requires the plugins API to be reachable; upstream Manifest must ship a PluginsController for this build)" 5
+  [[ "$RESP_TYPE" == application/json* ]] \
+    || fail "GET ${PLUGINS_PATH} content-type: $RESP_TYPE (expected application/json)" 5
+  # Assert the JSON body has a top-level "plugins" array. We use jq
+  # because shell JSON parsing is fragile; this is the canonical
+  # check the pipeline's MVP gate relies on.
+  if ! jq -e 'type == "object" and (.plugins | type == "array")' "$RESP_BODY" >/dev/null 2>&1; then
+    fail "GET ${PLUGINS_PATH} JSON body does not contain a top-level 'plugins' array: $(cat "$RESP_BODY")" 5
+  fi
+  log "GET ${PLUGINS_PATH} → 200 (MVP_UI=1: JSON body has plugins array)"
+fi
+
 # ---- success --------------------------------------------------------------
 
 echo
 echo "PASS: $IMAGE"
 echo "  serves the Manifest dashboard on http://127.0.0.1:${PORT}/"
+if [[ "$MVP_UI" == "1" ]]; then
+  echo "  MVP_UI=1: /api/v1/plugins reachable with JSON body"
+fi
 echo "  (containers will be torn down automatically)"
 echo
