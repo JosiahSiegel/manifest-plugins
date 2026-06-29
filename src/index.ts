@@ -38,8 +38,10 @@
  * `git pull` of upstream, run `npm run apply -- /path/to/manifest` to
  * re-inject the hosts. No fork repo or housekeeping overlay needed.
  */
-import { discoverPlugins } from './registry/discover';
+import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
+import { applyDisabledListFromEnv } from './host/env-toggle';
+import { discoverPlugins } from './registry/discover';
 
 // =============================================================================
 // RequestTransformPlugin — per-request hook
@@ -381,3 +383,62 @@ export { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';
  * callers that want to pre-flight the env value.
  */
 export { applyDisabledListFromEnv, parseDisabledList } from './host/env-toggle';
+
+// =============================================================================
+// Persisted state boot (MANIFEST_PLUGINS_STATE_FILE)
+// =============================================================================
+
+import { loadPluginState, savePluginState, type PluginStateFile } from './registry/state';
+
+const DEFAULT_STATE_FILE = '/app/data/plugin-state.json';
+
+export function getPersistedStateFile(): string {
+  return process.env['MANIFEST_PLUGINS_STATE_FILE'] ?? DEFAULT_STATE_FILE;
+}
+
+/**
+ * Apply the persisted state on top of the in-memory `enabledOverrides` map.
+ * Called once at module load. The `MANIFEST_PLUGINS_DISABLED` env var is
+ * a precedence-OVERRIDE — when both are set, the env var wins (so a
+ * container restart with env-var-only config keeps working).
+ *
+ * Idempotent: re-running is a no-op when no env var and no state file.
+ */
+function bootPersistedState(): void {
+  const stateFile = getPersistedStateFile();
+  // If the state file is at the default path AND it does not exist
+  // AND no env var is set, this is a no-op. Operators who want a
+  // fresh state file just `npm run plugins:disable <id>` once.
+  const persisted = loadPluginState(stateFile);
+  for (const [id, enabled] of Object.entries(persisted)) {
+    setPluginEnabled(id, enabled);
+  }
+  // The env var wins — applied LAST so it overrides any persisted value.
+  applyDisabledListFromEnv(process.env['MANIFEST_PLUGINS_DISABLED']);
+}
+
+bootPersistedState();
+
+/**
+ * Reset the persisted state: delete the state file AND clear the
+ * in-memory overrides so every plugin returns to its
+ * `enabledByDefault` value. Used by the CLI's `reset` subcommand.
+ * No-op when the state file does not exist.
+ */
+export function resetPersistedPluginState(): void {
+  const stateFile = getPersistedStateFile();
+  // Clear in-memory first so the next getInstalledPlugins() reflects defaults.
+  for (const entry of pluginRegistry) {
+    enabledOverrides.delete(entry.metadata.id);
+  }
+  plugins = getEnabledPluginInstances();
+  // Then drop the file. If the env var is set, re-apply its precedence.
+  try {
+    if (existsSync(stateFile)) {
+      unlinkSync(stateFile);
+    }
+  } catch {
+    // ignore — file is best-effort cleanup
+  }
+  applyDisabledListFromEnv(process.env['MANIFEST_PLUGINS_DISABLED']);
+}
