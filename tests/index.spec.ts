@@ -1,8 +1,13 @@
-import { plugins, AnthropicBillingHeaderPlugin, DefaultPolicyPlugin } from '../src/index';
+import {
+  plugins,
+  AnthropicBillingHeaderPlugin,
+  DefaultPolicyPlugin,
+  XManifestTierPlugin,
+} from '../src/index';
 
 describe('plugin registry', () => {
-  it('exports the two default plugins', () => {
-    expect(plugins).toHaveLength(2);
+  it('exports the three default plugins', () => {
+    expect(plugins).toHaveLength(3);
   });
 
   it('includes the AnthropicBillingHeaderPlugin', () => {
@@ -11,6 +16,10 @@ describe('plugin registry', () => {
 
   it('includes the DefaultPolicyPlugin', () => {
     expect(plugins).toContainEqual(expect.any(DefaultPolicyPlugin));
+  });
+
+  it('includes the XManifestTierPlugin', () => {
+    expect(plugins).toContainEqual(expect.any(XManifestTierPlugin));
   });
 
   it('freezes the registry to prevent runtime mutation', () => {
