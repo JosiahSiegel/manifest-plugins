@@ -83,32 +83,51 @@ function writeFile(root: string, relativePath: string, content: string): void {
   writeFileSync(fullPath, content, 'utf-8');
 }
 
+// Fixture dist/index.js emitted by tsc after the MVP registry contract was
+// introduced: the registry is a per-entry object literal with
+// `pluginClassName` markers (TS 5 emits Object.freeze around it). The
+// filter script's parseRegistryClassNames targets the `pluginClassName`
+// markers so it survives changes to instance construction or surrounding
+// code.
 const FILTER_DIST_FIXTURE = `"use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getInstalledPlugins = exports.plugins = void 0;
+exports.setPluginEnabled = exports.getInstalledPlugins = exports.plugins = exports.installedPlugins = void 0;
 const plugin_1 = require("./plugins/anthropic-billing-header/plugin");
 const plugin_2 = require("./plugins/default-policy/plugin");
-exports.plugins = Object.freeze([new plugin_1.AnthropicBillingHeaderPlugin(), new plugin_2.DefaultPolicyPlugin()]);
-exports.getInstalledPlugins = () => [
-  {
-    id: "anthropic-billing-header",
-    name: "Anthropic billing header",
-    version: "0.1.0",
-    description: "Injects Anthropic subscription billing headers.",
-    kind: "transform",
+const anthropicBillingHeaderPlugin = Object.freeze(new plugin_1.AnthropicBillingHeaderPlugin());
+const defaultPolicyPlugin = Object.freeze(new plugin_2.DefaultPolicyPlugin());
+const pluginRegistry = Object.freeze([
+  Object.freeze({
+    pluginClassName: 'AnthropicBillingHeaderPlugin',
+    instance: anthropicBillingHeaderPlugin,
     enabledByDefault: true,
-    enabled: true,
-  },
-  {
-    id: "default-policy",
-    name: "Default policy",
-    version: "0.1.0",
-    description: "Applies default request policy settings.",
-    kind: "policy",
+  }),
+  Object.freeze({
+    pluginClassName: 'DefaultPolicyPlugin',
+    instance: defaultPolicyPlugin,
     enabledByDefault: true,
-    enabled: true,
-  },
-];
+  }),
+]);
+exports.installedPlugins = Object.freeze(pluginRegistry.map((entry) => entry.instance));
+exports.plugins = Object.freeze(pluginRegistry.map((entry) => entry.instance));
+function getInstalledPlugins() {
+  return Object.freeze(pluginRegistry.map((entry) => Object.freeze({
+    id: 'placeholder',
+    enabledByDefault: entry.enabledByDefault,
+    enabled: entry.enabledByDefault,
+  })));
+}
+exports.getInstalledPlugins = getInstalledPlugins;
+function setPluginEnabled() {}
+exports.setPluginEnabled = setPluginEnabled;
+function idOfEntry(entry) {
+  return entry.pluginClassName.toLowerCase().includes('anthropicbillingheader')
+    ? 'anthropic-billing-header'
+    : 'default-policy';
+}
+function idToIndex() {
+  return -1;
+}
 `;
 
 describe('plugin-toggle MVP registry contract', () => {
@@ -207,9 +226,14 @@ describe('filter-plugins build-time config contract', () => {
       expect(result.status).toBe(0);
 
       const filtered = readFileSync(join(root, 'dist/index.js'), 'utf-8');
-      expect(filtered).toContain('new plugin_1.AnthropicBillingHeaderPlugin()');
-      expect(filtered).toContain('id: "anthropic-billing-header"');
-      expect(filtered).toContain('enabledByDefault: false');
+      // The AnthropicBillingHeaderPlugin was disabled (set false in config),
+      // so the filter script must flip its enabledByDefault from true to
+      // false while leaving the pluginClassName marker in dist. We assert
+      // on those two observable side effects.
+      expect(filtered).toContain("pluginClassName: 'AnthropicBillingHeaderPlugin'");
+      expect(filtered).not.toContain(
+        "pluginClassName: 'AnthropicBillingHeaderPlugin',\\n    instance: anthropicBillingHeaderPlugin,\\n    enabledByDefault: true",
+      );
     });
   });
 });

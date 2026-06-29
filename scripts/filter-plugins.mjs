@@ -89,36 +89,30 @@ function validateConfig(config) {
 }
 
 function parseRegistryClassNames(distSource) {
-  // Find the exports.plugins = Object.freeze([...]); block. The array
-  // body may span multiple lines and contain nested parentheses from
-  // constructor calls. We use a lazy regex match.
-  const pattern = /exports\.plugins\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\);/;
+  // Find the registry array. tsc emits `const pluginRegistry = Object.freeze([...])`
+  // where each entry is `Object.freeze({ pluginClassName: 'X', ... })`. We
+  // use a lazy regex match on the `pluginClassName: 'X'` markers to stay
+  // agnostic to the rest of the shape (single-line vs multi-line,
+  // presence of additional registry fields, etc.).
+  const pattern = /pluginRegistry\s*=\s*Object\.freeze\(\[([\s\S]*?)\]\)/;
   const match = distSource.match(pattern);
   if (!match) {
     throw new Error(
-      'dist/index.js does not contain the expected `exports.plugins = Object.freeze([...]);` block. ' +
+      'dist/index.js does not contain the expected `pluginRegistry = Object.freeze([...])` block. ' +
         'The build output shape may have changed; update scripts/filter-plugins.mjs.',
     );
   }
   const arrayBody = match[1];
-  // Split on top-level commas. Each element is `new ClassName(...)` (no
-  // commas inside, since class constructors here take no positional args
-  // other than possibly nested objects — and we don't pass any in the
-  // current registry).
-  const entries = arrayBody
-    .split(/,\s*(?=new )/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-
-  return entries.map((entry) => {
-    const classMatch = entry.match(/^new\s+(?:[\w$]+\.)?([A-Za-z_$][\w$]*)\s*\(/);
-    if (!classMatch) {
-      throw new Error(
-        `Could not parse plugin entry: "${entry}". Update scripts/filter-plugins.mjs.`,
-      );
-    }
-    return classMatch[1];
-  });
+  const classMatches = [
+    ...arrayBody.matchAll(/pluginClassName:\s*['"]([^'"]+)['"]/g),
+  ];
+  if (classMatches.length === 0) {
+    throw new Error(
+      'dist/index.js pluginRegistry block does not contain any pluginClassName markers. ' +
+        'Update scripts/filter-plugins.mjs.',
+    );
+  }
+  return classMatches.map((m) => m[1]);
 }
 
 function annotateEnabledDefaults(distSource, disabledClassNames) {
