@@ -292,9 +292,12 @@ interface PluginRegistryEntry {
 }
 
 /**
- * Discover every plugin under `src/plugins/` at module load. Adding a
- * new plugin requires only dropping a new directory with a `plugin.ts`
- * file — the registry re-reads on every build / process start.
+ * Discover every plugin under `<__dirname>/plugins/` at module load.
+ * Adding a new plugin requires only dropping a new directory with a
+ * `plugin.ts` source file (which `tsc` compiles to `plugin.js`); the
+ * discoverer prefers the compiled `plugin.js` and falls back to the
+ * source `plugin.ts`, so the registry re-reads on every build / process
+ * start and works for both local development and the production image.
  */
 function loadPluginRegistry(): readonly PluginRegistryEntry[] {
   const discovered = discoverPlugins(join(__dirname, 'plugins'));
