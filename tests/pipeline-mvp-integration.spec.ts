@@ -648,6 +648,21 @@ describe('pipeline/e2e-test.sh integration', () => {
     }
   });
 
+  it('always runs a self-contained plugin registry smoke inside the app container', () => {
+    // Regression lock for the production image failure: the dashboard
+    // could serve successfully while `manifest-plugins` discovered zero
+    // runtime plugins from `dist/`. The always-on e2e smoke must require
+    // the shipped package inside the app container and prove the
+    // HeaderTierRouterPlugin is installed + executable.
+    const script = readScript('e2e-test.sh');
+    expect(script).toMatch(/plugin registry smoke/);
+    expect(script).toMatch(/docker exec "\$APP_NAME" node -e/);
+    expect(script).toMatch(/require\("\/app\/node_modules\/manifest-plugins"\)/);
+    expect(script).toMatch(/plugin\.id === "header-tier-router"/);
+    expect(script).toMatch(/typeof plugin\.overrideRouting === "function"/);
+    expect(script).toMatch(/result\.reason !== "header-match"/);
+  });
+
   it('TIER_ROUTING_SMOKE documents the tier-routing gate (regression fix for upstream 2ab748a6)', () => {
     // Shell-text assertion: the e2e script must document and
     // implement a tier-routing smoke that proves `x-manifest-tier`

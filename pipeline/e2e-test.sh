@@ -11,7 +11,11 @@
 #                                Nest's default 404 for an unhandled route)
 #   3. GET /assets/   → HTTP 200, content-type application/javascript
 #                                (i.e. the dashboard's JS bundle is reachable)
-#   4. (MVP_UI=1 only) GET /api/v1/plugins → HTTP 200, JSON body with a
+#   4. Runtime plugin registry smoke inside the app container: requiring
+#      `manifest-plugins` must expose enabled plugins, and
+#      HeaderTierRouterPlugin.overrideRouting() must return a header-match
+#      routing override for an in-memory header-tier fixture.
+#   5. (MVP_UI=1 only) GET /api/v1/plugins → HTTP 200, JSON body with a
 #                                top-level "plugins" array. When MVP_UI=1
 #                                is set, a 404 or non-JSON response on this
 #                                endpoint fails the script.
@@ -272,7 +276,65 @@ else
   log "(skipped asset check — no /assets/* file found in dashboard HTML)"
 fi
 
-# (d) (MVP_UI=1 only) /api/v1/plugins — assert the upstream Manifest
+# (d) Runtime plugin registry smoke — assert the built image can require
+# `manifest-plugins` from the same node_modules path the patched host uses,
+# and that the routing override plugin is both installed and executable.
+#
+# This is intentionally self-contained: no seeded database rows, no providers,
+# no real upstream request. It would have caught the production regression where
+# `dist/` discovery looked for `plugin.ts`, found zero plugins, and booted with
+# an empty registry even though the dashboard served successfully.
+if docker exec "$APP_NAME" node -e '
+const pkg = require("/app/node_modules/manifest-plugins");
+const installed = pkg.getInstalledPlugins();
+if (!Array.isArray(installed)) throw new Error("getInstalledPlugins() did not return an array");
+if (!installed.some((plugin) => plugin.id === "header-tier-router")) {
+  throw new Error(`header-tier-router missing from installed plugins: ${JSON.stringify(installed)}`);
+}
+if (!Array.isArray(pkg.plugins) || pkg.plugins.length === 0) {
+  throw new Error("enabled plugin registry is empty");
+}
+const router = pkg.plugins.find((plugin) => typeof plugin.overrideRouting === "function");
+if (!router) throw new Error("no enabled plugin exposes overrideRouting()");
+const route = { provider: "anthropic", authType: "api_key", model: "claude-sonnet-4-5" };
+const result = router.overrideRouting({
+  agentId: "agent-smoke",
+  tenantId: "tenant-smoke",
+  apiMode: "chat_completions",
+  body: { model: "openai/gpt-4o-mini" },
+  headers: { "x-manifest-tier": "smoke-test" },
+  requestedModel: "openai/gpt-4o-mini",
+  discoveredModels: [{ id: route.model, provider: route.provider, authType: route.authType }],
+  headerTiers: [{
+    id: "smoke-tier",
+    name: "Smoke Test",
+    header_key: "x-manifest-tier",
+    header_value: "smoke-test",
+    enabled: true,
+    sort_order: 0,
+    badge_color: "#f59e0b",
+    override_route: route,
+    fallback_routes: null,
+    output_modality: "text",
+    response_mode: "buffered",
+  }],
+});
+if (!result || result.reason !== "header-match" || result.header_tier_id !== "smoke-tier") {
+  throw new Error(`HeaderTierRouterPlugin returned unexpected result: ${JSON.stringify(result)}`);
+}
+if (!result.route || result.route.model !== route.model) {
+  throw new Error(`HeaderTierRouterPlugin returned wrong route: ${JSON.stringify(result)}`);
+}
+if (result.explicit_model_override !== false) {
+  throw new Error(`HeaderTierRouterPlugin set explicit_model_override incorrectly: ${JSON.stringify(result)}`);
+}
+' >/dev/null; then
+  log "plugin registry smoke      → pass (header-tier-router installed + overrideRouting returns header-match)"
+else
+  fail "plugin registry smoke failed — manifest-plugins is missing, empty, or header-tier-router is not executable in the built image" 3
+fi
+
+# (e) (MVP_UI=1 only) /api/v1/plugins — assert the upstream Manifest
 # `PluginsController` is reachable and returns a JSON object with a
 # `plugins` array. When MVP_UI is set, a 404 or non-JSON response
 # fails the script with exit code 5. This is the MVP gate: the build
@@ -394,7 +456,7 @@ if [[ "$TIER_ROUTING_SMOKE" == "1" ]]; then
          "body.model=$TIER_BODY_MODEL won over x-manifest-tier=$TIER_HEADER_NAME. " \
          "Fix: verify the routing-override host hook " \
          "(proxy-service-routing-override-host overlay) was applied to this " \
-         "image and that the XManifestTierPlugin is enabled in the plugin registry." 6
+         "image and that the HeaderTierRouterPlugin is enabled in the plugin registry." 6
   fi
 fi
 
