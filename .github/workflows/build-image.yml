@@ -161,9 +161,39 @@ jobs:
           EXTERNAL_PLUGINS_LOCAL: ${{ secrets.EXTERNAL_PLUGINS_LOCAL }}
           PLUGINS_PAT: ${{ secrets.PLUGINS_PAT }}
         run: |
-          printf '%s' "$EXTERNAL_PLUGINS_LOCAL" > external-plugins.local.json
-          echo "::add-mask::$(cat external-plugins.local.json | head -c 100)"
-          echo "Wrote external-plugins.local.json (content masked in logs)"
+          # Write the secret, stripping a UTF-8 BOM and CR characters that
+          # can sneak in via copy-paste. We do NOT un-escape backslashes —
+          # the secret must be valid JSON as-is. Common mistake: storing the
+          # markdown/shell-escaped form (\" instead of "). We validate below
+          # and print a precise, actionable error if so.
+          printf '%s' "$EXTERNAL_PLUGINS_LOCAL" \
+            | sed '1s/^\xEF\xBB\xBF//' \
+            | tr -d '\r' \
+            > external-plugins.local.json
+
+          # Validate it parses as JSON. If not, fail with a clear message.
+          if ! node -e 'JSON.parse(require("fs").readFileSync("external-plugins.local.json","utf8"))' 2>/tmp/json-err; then
+            echo "::error::EXTERNAL_PLUGINS_LOCAL secret is not valid JSON."
+            echo ""
+            echo "Most common cause: the secret value contains ESCAPED quotes (\\\") "
+            echo "instead of plain quotes (\")."
+            echo ""
+            echo "Store the secret as a SINGLE LINE of plain (unescaped) JSON, e.g.:"
+            echo '  {"plugins":[{"name":"anthropic-billing-header","source":"git+ssh://git@github.com/OWNER/REPO.git","ref":"v0.6.0","private":true,"enabledByDefault":true}]}'
+            echo ""
+            echo "Parser error was:"
+            sed 's/^/  /' /tmp/json-err || true
+            echo ""
+            # First 8 bytes as hex helps diagnose BOM / leading garbage
+            # (content itself stays masked by the add-mask below).
+            echo "First 8 bytes (hex) of the written file:"
+            head -c 8 external-plugins.local.json | xxd | sed 's/^/  /' || true
+            exit 1
+          fi
+
+          echo "::add-mask::$(head -c 200 external-plugins.local.json)"
+          echo "Wrote and validated external-plugins.local.json (content masked)"
+
           # GIT_TOKEN is exported into GITHUB_ENV so the subsequent
           # build-and-publish.sh step inherits it.
           echo "GIT_TOKEN=$PLUGINS_PAT" >> "$GITHUB_ENV"
