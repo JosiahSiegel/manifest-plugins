@@ -227,15 +227,19 @@ describe('plugin admin HTTP API', () => {
     expect(findPlugin(plugins, 'default-policy')?.enabled).toBe(false);
   });
 
-  it('GET /api/anything-else returns the admin 404 fallback', async () => {
-    // Given: a fresh admin server.
+  it('GET /api/anything-else falls through to Express default 404 (no catch-all)', async () => {
+    // Given: a fresh admin server. The admin app does NOT have a
+    // catch-all `/api` 404 handler — that would intercept NestJS
+    // routes when the admin app is mounted as a sub-app via
+    // `expressApp.use(adminApp)`. Express's default 404 handler
+    // returns a plain text body.
     const app = createApp();
 
     // When: an unknown path under /api is requested.
     const response = await request(app).get('/api/anything-else').expect(404);
 
-    // Then: the 404 fallback fires.
-    expect(response.body).toEqual({ error: 'not found' });
+    // Then: Express's default 404 fires (text/html, not JSON).
+    expect(response.headers['content-type']).toMatch(/text\/html/);
   });
 
   it('GET /api/plugins/health returns ok', async () => {
