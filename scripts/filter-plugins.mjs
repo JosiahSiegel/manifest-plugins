@@ -41,7 +41,6 @@ const DIST_PLUGINS = resolve(repoRoot, 'dist/plugins');
  * instantiation.
  */
 const PLUGIN_CLASS_NAMES = [
-  'AnthropicBillingHeaderPlugin',
   'DefaultPolicyPlugin',
   'HeaderTierRouterPlugin',
 ];
@@ -132,7 +131,6 @@ function parseRegistryClassNames(_distSource) {
 function annotateEnabledDefaults(distSource, disabledClassNames) {
   if (disabledClassNames.length === 0) return distSource;
   const pluginIds = {
-    AnthropicBillingHeaderPlugin: 'anthropic-billing-header',
     DefaultPolicyPlugin: 'default-policy',
     HeaderTierRouterPlugin: 'header-tier-router',
   };

@@ -373,20 +373,20 @@ if [[ "$ADMIN_UI" == "1" ]]; then
     || fail "GET /api/plugins → $RESP_CODE (expected 200 — ADMIN_UI=1 requires the plugin admin API to be mounted into the backend app)" 7
   [[ "$RESP_TYPE" == application/json* ]] \
     || fail "GET /api/plugins content-type: $RESP_TYPE (expected application/json)" 7
-  if ! jq -e 'type == "object" and (.plugins | type == "array") and (.plugins | length == 3)' "$RESP_BODY" >/dev/null 2>&1; then
-    fail "GET /api/plugins JSON body does not contain exactly 3 plugins: $(cat "$RESP_BODY")" 7
+  if ! jq -e 'type == "object" and (.plugins | type == "array") and (.plugins | length == 2)' "$RESP_BODY" >/dev/null 2>&1; then
+    fail "GET /api/plugins JSON body does not contain exactly 2 plugins: $(cat "$RESP_BODY")" 7
   fi
-  log "GET /api/plugins             → 200 (ADMIN_UI=1: JSON body has 3 plugins)"
+  log "GET /api/plugins             → 200 (ADMIN_UI=1: JSON body has 2 plugins)"
 
-  capture "http://127.0.0.1:${PORT}/api/plugins/anthropic-billing-header"
+  capture "http://127.0.0.1:${PORT}/api/plugins/header-tier-router"
   [[ "$RESP_CODE" == "200" ]] \
-    || fail "GET /api/plugins/anthropic-billing-header → $RESP_CODE (expected 200)" 7
+    || fail "GET /api/plugins/header-tier-router → $RESP_CODE (expected 200)" 7
   [[ "$RESP_TYPE" == application/json* ]] \
-    || fail "GET /api/plugins/anthropic-billing-header content-type: $RESP_TYPE (expected application/json)" 7
-  if ! jq -e 'type == "object" and (.plugin.id == "anthropic-billing-header") and (.plugin.name | type == "string") and (.plugin.version | type == "string") and (.plugin.kind | type == "string")' "$RESP_BODY" >/dev/null 2>&1; then
-    fail "GET /api/plugins/anthropic-billing-header JSON body does not contain plugin metadata: $(cat "$RESP_BODY")" 7
+    || fail "GET /api/plugins/header-tier-router content-type: $RESP_TYPE (expected application/json)" 7
+  if ! jq -e 'type == "object" and (.plugin.id == "header-tier-router") and (.plugin.name | type == "string") and (.plugin.version | type == "string") and (.plugin.kind | type == "string")' "$RESP_BODY" >/dev/null 2>&1; then
+    fail "GET /api/plugins/header-tier-router JSON body does not contain plugin metadata: $(cat "$RESP_BODY")" 7
   fi
-  log "GET /api/plugins/anthropic-billing-header → 200 (metadata present)"
+  log "GET /api/plugins/header-tier-router → 200 (metadata present)"
 
   capture "http://127.0.0.1:${PORT}/api/plugins/health"
   [[ "$RESP_CODE" == "200" ]] \

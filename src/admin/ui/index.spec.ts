@@ -16,6 +16,12 @@
  * The component source uses `React.createElement` (not JSX) because the
  * project's `tsconfig.json` has no `jsx` flag (and we cannot modify it);
  * the spec file does the same so both compile under the existing config.
+ *
+ * NOTE: The UI is generic — it renders whatever plugins the API returns.
+ * The fixture below uses only the two in-tree plugins (default-policy,
+ * header-tier-router). External plugins like anthropic-billing-header
+ * can be added by the operator via external-plugins.local.json — the UI
+ * shows them transparently.
  */
 import '@testing-library/jest-dom';
 import { act, cleanup, screen, waitFor } from '@testing-library/react';
@@ -42,15 +48,6 @@ function jsonResponse(body: unknown, status = 200): FetchResponseLike {
 }
 
 const SAMPLE_PLUGINS: readonly PluginMetadata[] = [
-  {
-    id: 'anthropic-billing-header',
-    name: 'Anthropic billing header',
-    version: '0.1.0',
-    description: 'Adds the Anthropic billing header.',
-    kind: 'transform',
-    enabledByDefault: true,
-    enabled: true,
-  },
   {
     id: 'default-policy',
     name: 'Default policy',
@@ -130,7 +127,7 @@ describe('PluginManager UI', () => {
   });
 
   it('renders plugin names + checkboxes after the fetch resolves', async () => {
-    // Given: a fetch that resolves with three plugins.
+    // Given: a fetch that resolves with the two in-tree plugins.
     const fetchMock = createAlwaysResolvingFetch();
     const target = document.createElement('div');
     document.body.appendChild(target);
@@ -141,18 +138,17 @@ describe('PluginManager UI', () => {
 
     // Then: each plugin name and a checkbox is rendered, with the right
     // initial checked state.
-    expect(screen.getByText('Anthropic billing header')).toBeTruthy();
     expect(screen.getByText('Default policy')).toBeTruthy();
     expect(screen.getByText('Header tier router')).toBeTruthy();
-    const billingCheckbox = screen.getByTestId(
-      'plugin-toggle-anthropic-billing-header',
+    const policyCheckbox = screen.getByTestId(
+      'plugin-toggle-default-policy',
     ) as HTMLInputElement;
     const routerCheckbox = screen.getByTestId(
       'plugin-toggle-header-tier-router',
     ) as HTMLInputElement;
-    expect(billingCheckbox.tagName).toBe('INPUT');
-    expect(billingCheckbox.type).toBe('checkbox');
-    expect(billingCheckbox.checked).toBe(true);
+    expect(policyCheckbox.tagName).toBe('INPUT');
+    expect(policyCheckbox.type).toBe('checkbox');
+    expect(policyCheckbox.checked).toBe(true);
     expect(routerCheckbox.checked).toBe(false);
   });
 
@@ -229,10 +225,10 @@ describe('PluginManager UI', () => {
 
     // When: the checkbox is clicked (initial value: checked=true), the
     // optimistic update flips it to false, and the PATCH fails.
-    const billingCheckbox = screen.getByTestId(
-      'plugin-toggle-anthropic-billing-header',
+    const policyCheckbox = screen.getByTestId(
+      'plugin-toggle-default-policy',
     ) as HTMLInputElement;
-    expect(billingCheckbox.checked).toBe(true);
+    expect(policyCheckbox.checked).toBe(true);
 
     // Suppress the expected unhandled rejection from the PATCH promise
     // (the component catches it internally with .catch; we still drain
@@ -241,7 +237,7 @@ describe('PluginManager UI', () => {
     process.on('unhandledRejection', rejectionHandler);
     try {
       await act(async () => {
-        billingCheckbox.click();
+        policyCheckbox.click();
         // Allow the optimistic update to flush, then the .catch handler.
         await Promise.resolve();
         await Promise.resolve();
@@ -256,7 +252,7 @@ describe('PluginManager UI', () => {
     }
 
     // Then: the checkbox is reverted to checked=true.
-    expect(billingCheckbox.checked).toBe(true);
+    expect(policyCheckbox.checked).toBe(true);
   });
 
   it('polls /api/plugins again after 5 seconds', async () => {

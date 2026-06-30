@@ -11,7 +11,7 @@
  *   - Named class exports (no `default` required).
  *   - `static metadata` with a unique `id` is required.
  *   - Throws loudly on duplicate class names AND duplicate `metadata.id`.
- *   - Discovers the 3 built-in plugins from the real `src/plugins/` AND
+ *   - Discovers the 2 built-in plugins from the real `src/plugins/` AND
  *     from the compiled `dist/plugins/` mirror (this is the runtime
  *     shape; if it breaks, the production image boots with zero plugins).
  */
@@ -68,18 +68,14 @@ function writeBrokenPlugin(
 }
 
 describe('discoverPlugins (filesystem enumeration)', () => {
-  it('discovers the three built-in plugins from src/plugins/', () => {
+  it('discovers the two built-in plugins from src/plugins/', () => {
     const discovered = discoverPlugins(PLUGINS_SRC_DIR);
 
     const classNames = discovered.map((entry) => entry.pluginClassName);
     expect(classNames).toEqual(
-      expect.arrayContaining([
-        'AnthropicBillingHeaderPlugin',
-        'DefaultPolicyPlugin',
-        'HeaderTierRouterPlugin',
-      ]),
+      expect.arrayContaining(['DefaultPolicyPlugin', 'HeaderTierRouterPlugin']),
     );
-    expect(discovered).toHaveLength(3);
+    expect(discovered).toHaveLength(2);
   });
 
   it('returns plugin entries with a non-empty id, kind, and instance', () => {

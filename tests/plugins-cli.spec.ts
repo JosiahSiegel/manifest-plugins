@@ -60,15 +60,17 @@ describe('plugins-cli operator CLI', () => {
     expect(result.stderr).toMatch(/unknown subcommand/);
   });
 
-  it('`list` enumerates the three shipped plugins + an ENABLED column', () => {
+  it('`list` enumerates the shipped plugins + an ENABLED column', () => {
     const tempFile = makeTempStateFile();
     try {
       const result = runCli(['list'], {
         MANIFEST_PLUGINS_STATE_FILE: tempFile,
       });
       expect(result.status).toBe(0);
-      // The three known plugins from this repo's `src/plugins/`.
-      expect(result.stdout).toContain('anthropic-billing-header');
+      // The two in-tree plugins from this repo's `src/plugins/`.
+      // External plugins (e.g. anthropic-billing-header) are NOT listed
+      // here unless the operator fetched them via external-plugins.local.json
+      // and the auto-discovery picked them up at build time.
       expect(result.stdout).toContain('default-policy');
       expect(result.stdout).toContain('header-tier-router');
       // The header row must include the ENABLED column so the column
@@ -78,7 +80,6 @@ describe('plugins-cli operator CLI', () => {
     // reference, not a string literal). The CLI must resolve the
     // constant to its value so the KIND column shows the real
     // kind instead of "unknown". Regression lock.
-    expect(result.stdout).toMatch(/transform/);
     expect(result.stdout).toMatch(/policy/);
     expect(result.stdout).toMatch(/routing-override/);
     } finally {
@@ -90,13 +91,13 @@ describe('plugins-cli operator CLI', () => {
     const tempFile = makeTempStateFile();
     try {
       const result = runCli(
-        ['enable', 'anthropic-billing-header'],
+        ['enable', 'default-policy'],
         { MANIFEST_PLUGINS_STATE_FILE: tempFile },
       );
       expect(result.status).toBe(0);
       expect(existsSync(tempFile)).toBe(true);
       const parsed = JSON.parse(readFileSync(tempFile, 'utf-8'));
-      expect(parsed).toEqual({ 'anthropic-billing-header': true });
+      expect(parsed).toEqual({ 'default-policy': true });
     } finally {
       rmSync(join(tempFile, '..'), { recursive: true, force: true });
     }

@@ -1,17 +1,12 @@
 import {
   plugins,
-  AnthropicBillingHeaderPlugin,
   DefaultPolicyPlugin,
   HeaderTierRouterPlugin,
 } from '../src/index';
 
 describe('plugin registry', () => {
-  it('exports the three default plugins', () => {
-    expect(plugins).toHaveLength(3);
-  });
-
-  it('includes the AnthropicBillingHeaderPlugin', () => {
-    expect(plugins).toContainEqual(expect.any(AnthropicBillingHeaderPlugin));
+  it('exports the two built-in plugins', () => {
+    expect(plugins).toHaveLength(2);
   });
 
   it('includes the DefaultPolicyPlugin', () => {

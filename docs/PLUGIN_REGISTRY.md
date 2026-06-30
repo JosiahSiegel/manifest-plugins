@@ -172,7 +172,6 @@ import { getInstalledPlugins } from 'manifest-plugins';
 
 const installed = getInstalledPlugins();
 // [
-//   { id: 'anthropic-billing-header', kind: 'transform', enabled: true, … },
 //   { id: 'default-policy',          kind: 'policy',    enabled: true, … },
 //   { id: 'header-tier-router',       kind: 'routing-override', enabled: false, … },
 // ]
