@@ -195,7 +195,6 @@ describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
     expect(system[1]).toEqual({
       type: 'text',
       text: 'You are Claude Code, Anthropic\'s official CLI for Claude.',
-      cache_control: { type: 'ephemeral', ttl: '1h' },
     });
   });
 
