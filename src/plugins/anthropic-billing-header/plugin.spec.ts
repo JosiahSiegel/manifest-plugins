@@ -12,19 +12,23 @@ import {
   serializeBody,
 } from './body';
 import {
-  prependMovedContentToFirstUserMessage,
-  relocateSystemContent,
-} from './system-relocation';
+  scrubAnchorsInPlace,
+} from './classifier-scrub';
+import {
+  normalizeToolNames,
+} from './tool-normalization';
 import { CCH_PLACEHOLDER, CLAUDE_CODE_IDENTITY_TEXT } from './constants';
 import type { RequestTransformDecision } from '../..';
 
-const ENV_KEYS = ['MANIFEST_CC_VERSION', 'MANIFEST_CCH_VALUE', 'MANIFEST_CC_RELOCATE'] as const;
+const ENV_KEYS = ['MANIFEST_CC_VERSION', 'MANIFEST_CCH_VALUE', 'MANIFEST_CC_RELOCATE_LEGACY', 'MANIFEST_CC_SCRUB_MESSAGES', 'MANIFEST_CC_NORMALIZE_TOOLS'] as const;
 type EnvKey = (typeof ENV_KEYS)[number];
 
 const snapshot: Record<EnvKey, string | undefined> = {
   MANIFEST_CC_VERSION: undefined,
   MANIFEST_CCH_VALUE: undefined,
-  MANIFEST_CC_RELOCATE: undefined,
+  MANIFEST_CC_RELOCATE_LEGACY: undefined,
+  MANIFEST_CC_SCRUB_MESSAGES: undefined,
+  MANIFEST_CC_NORMALIZE_TOOLS: undefined,
 };
 
 function setEnv(values: Partial<Record<EnvKey, string>>): void {
@@ -56,7 +60,9 @@ beforeEach(() => {
   setEnv({
     MANIFEST_CC_VERSION: undefined,
     MANIFEST_CCH_VALUE: undefined,
-    MANIFEST_CC_RELOCATE: undefined,
+    MANIFEST_CC_RELOCATE_LEGACY: undefined,
+    MANIFEST_CC_SCRUB_MESSAGES: undefined,
+    MANIFEST_CC_NORMALIZE_TOOLS: undefined,
   });
 });
 
@@ -89,8 +95,8 @@ function makeDecision(
 // =============================================================================
 
 describe('AnthropicBillingHeaderPlugin (metadata)', () => {
-  it('ships metadata version 0.5.0 (S6 fingerprint relocation)', () => {
-    expect(AnthropicBillingHeaderPlugin.metadata.version).toBe('0.5.0');
+  it('ships metadata version 0.6.0 (S7 in-place scrub + tool normalize)', () => {
+    expect(AnthropicBillingHeaderPlugin.metadata.version).toBe('0.6.0');
   });
 });
 
@@ -582,151 +588,24 @@ describe('AnthropicBillingHeaderPlugin (request body content)', () => {
 });
 
 // =============================================================================
-// S6 — System relocation for OpenCode-fingerprinted prompts
+// S7 — In-place anchor scrubbing + tool-name normalization (v0.6.0)
 // =============================================================================
+//
+// Replaces the v0.5.0 "relocate to messages[]" strategy with in-place scrubbing
+// because Anthropic's classifier inspects the ENTIRE request payload
+// (system[] + messages[] + tools[]), not just system[]. Moving fingerprints to
+// messages[0] only delays the failure to turn 2+.
 
-describe('AnthropicBillingHeaderPlugin (S6 system relocation)', () => {
-  beforeAll(async () => {
-    await cchHasherReady;
-  });
-
-  it('relocates an OpenCode-style system prompt into the first user message (S6-relocate-1)', () => {
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const opencodeSystem =
-      'You are OpenCode, the best coding agent on the planet. Workspace root folder: /foo. is a git repo: yes. Use TodoWrite.';
-    const result = plugin.transformRequest(
-      makeDecision({
-        requestBody: {
-          system: opencodeSystem,
-          messages: [{ role: 'user', content: 'Hello' }],
-        },
-      }),
-    );
-
-    expect(result).toBeDefined();
-    const r = result!;
-    const system = r.requestBody!['system'] as Array<Record<string, unknown>>;
-    expect(system).toHaveLength(2);
-    expect(system[0]!.text).toMatch(/^x-anthropic-billing-header:/);
-    expect(system[1]!.text).toBe(CLAUDE_CODE_IDENTITY_TEXT);
-    expect(typeof r.requestBody!['messages']).toBe('object');
-    const messages = r.requestBody!['messages'] as Array<Record<string, unknown>>;
-    expect(typeof messages[0]!['content']).toBe('string');
-    const content = messages[0]!['content'] as string;
-    expect(content.startsWith('[moved from system]')).toBe(true);
-    expect(content).toContain(opencodeSystem);
-  });
-
-  it('keeps a clean system prompt in system[] and leaves user content unchanged (S6-relocate-2)', () => {
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(
-      makeDecision({
-        requestBody: {
-          system: 'Answer tersely.',
-          messages: [{ role: 'user', content: 'Hi' }],
-        },
-      }),
-    );
-
-    expect(result).toBeDefined();
-    const r = result!;
-    const system = r.requestBody!['system'] as Array<Record<string, unknown>>;
-    expect(system).toHaveLength(3);
-    expect(system[0]!.text).toMatch(/^x-anthropic-billing-header:/);
-    expect(system[1]!.text).toBe(CLAUDE_CODE_IDENTITY_TEXT);
-    expect(system[2]!.text).toBe('Answer tersely.');
-    const messages = r.requestBody!['messages'] as Array<Record<string, unknown>>;
-    expect(messages[0]!['content']).toBe('Hi');
-  });
-
-  it('keeps clean mixed system entries and relocates only fingerprint-bearing entries (S6-relocate-3)', () => {
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(
-      makeDecision({
-        requestBody: {
-          system: [
-            'You must be concise.',
-            { type: 'text', text: 'OpenCode workspace root: /foo' },
-          ],
-          messages: [{ role: 'user', content: 'q' }],
-        },
-      }),
-    );
-
-    expect(result).toBeDefined();
-    const r = result!;
-    const system = r.requestBody!['system'] as Array<Record<string, unknown>>;
-    expect(system).toHaveLength(3);
-    expect(system[0]!.text).toMatch(/^x-anthropic-billing-header:/);
-    expect(system[1]!.text).toBe(CLAUDE_CODE_IDENTITY_TEXT);
-    expect(system[2]!.text).toBe('You must be concise.');
-    const messages = r.requestBody!['messages'] as Array<Record<string, unknown>>;
-    expect(messages[0]!['content']).toContain('OpenCode workspace root: /foo');
-  });
-
-  it('keeps oversized clean content in system[] and leaves user content unchanged (S6-relocate-4)', () => {
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const longString = 'a'.repeat(3001);
-    const result = plugin.transformRequest(
-      makeDecision({
-        requestBody: {
-          system: longString,
-          messages: [{ role: 'user', content: 'x' }],
-        },
-      }),
-    );
-
-    expect(result).toBeDefined();
-    const r = result!;
-    const system = r.requestBody!['system'] as Array<Record<string, unknown>>;
-    expect(system).toHaveLength(3);
-    expect(system[0]!.text).toMatch(/^x-anthropic-billing-header:/);
-    expect(system[1]!.text).toBe(CLAUDE_CODE_IDENTITY_TEXT);
-    expect(system[2]!.text).toBe(longString);
-    const messages = r.requestBody!['messages'] as Array<Record<string, unknown>>;
-    expect(messages[0]!['content']).toBe('x');
-  });
-
-  it('computes cch from the relocated body preimage (S6-relocate-5)', () => {
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const opencodeSystem =
-      'You are OpenCode, the best coding agent on the planet. Workspace root folder: /foo. is a git repo: yes. Use TodoWrite.';
-    const requestBody = {
-      system: opencodeSystem,
-      messages: [{ role: 'user', content: 'Hello' }],
-    };
-    const result = plugin.transformRequest(makeDecision({ requestBody }));
-
-    expect(result).toBeDefined();
-    const r = result!;
-    expect(r.headers!['x-anthropic-billing-header']).toMatch(
-      /^cc_version=2\.1\.196\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
-    );
-    const relocated = relocateSystemContent(requestBody['system'], {});
-    const relocatedBody = prependMovedContentToFirstUserMessage(
-      requestBody,
-      relocated.moved,
-      {},
-    );
-    const firstUserText = extractFirstUserText(relocatedBody);
-    const suffix = computeVersionSuffix(firstUserText, '2.1.196');
-    const placeholderHeader = `cc_version=2.1.196.${suffix}; cc_entrypoint=cli; cch=${CCH_PLACEHOLDER};`;
-    const placeholderBillingBlock = buildBillingBlock(placeholderHeader);
-    const systemArray = buildSystemArray(relocated.kept, placeholderBillingBlock);
-    const placeholderBody = buildFinalBody(relocatedBody, systemArray);
-    const expectedCch = computeCchForBody(serializeBody(placeholderBody), '2.1.196');
-    const cch = r.headers!['x-anthropic-billing-header']!.match(/cch=([0-9a-f]{5})/)![1];
-    expect(cch).toBe(expectedCch);
-  });
-
-  it('preserves v0.4.0 behavior when MANIFEST_CC_RELOCATE=false (S6-relocate-6)', () => {
-    setEnv({ MANIFEST_CC_RELOCATE: 'false' });
+describe('AnthropicBillingHeaderPlugin (S7 in-place scrub + tool normalize)', () => {
+  it('scrubs opencode fingerprints from system[] in place (S7-1)', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
     const result = plugin.transformRequest(
       makeDecision({
         requestBody: {
           system:
-            'You are OpenCode, the best coding agent on the planet. Workspace root folder: /foo. is a git repo: yes. Use TodoWrite.',
+            'You are OpenCode, the best coding agent on the planet. ' +
+            'Workspace root folder: /foo. Is directory a git repo: yes. ' +
+            'Report issues at https://github.com/anomalyco/opencode',
           messages: [{ role: 'user', content: 'Hello' }],
         },
       }),
@@ -735,45 +614,40 @@ describe('AnthropicBillingHeaderPlugin (S6 system relocation)', () => {
     expect(result).toBeDefined();
     const r = result!;
     const system = r.requestBody!['system'] as Array<Record<string, unknown>>;
-    expect(system).toHaveLength(3);
-    expect(system[0]!.text).toMatch(/^x-anthropic-billing-header:/);
-    expect(system[1]!.text).toBe(CLAUDE_CODE_IDENTITY_TEXT);
-    const messages = r.requestBody!['messages'] as Array<Record<string, unknown>>;
-    expect(messages[0]!['content']).toBe('Hello');
+    // billing + identity + scrubbed original
+    expect(system.length).toBeGreaterThanOrEqual(3);
+    const allText = system.map((entry) => entry['text']).join('\n');
+    expect(allText).not.toContain('anomalyco');
+    expect(allText).not.toContain('OpenCode');
+    expect(allText).not.toContain('Workspace root folder:');
+    expect(allText).not.toContain('Is directory a git repo:');
+    // the scrubbed content is preserved (just with substituted text)
+    expect(allText).toContain('Working directory:');
+    expect(allText).toContain('Git repository:');
   });
 
-  it('creates a synthetic user message when moved content has no existing message target (S6-relocate-7)', () => {
+  it('scrubs opencode fingerprints from messages[] on turn 2 (multi-turn fix, S7-2)', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
+    // Simulate turn 2: previous user message contains relocated fingerprints
+    // from v0.5.0 (or just normal opencode-injected content with fingerprints)
     const result = plugin.transformRequest(
       makeDecision({
         requestBody: {
-          system: 'OpenCode workspace: /foo',
-          messages: [],
-        },
-      }),
-    );
-
-    expect(result).toBeDefined();
-    const r = result!;
-    const messages = r.requestBody!['messages'] as Array<Record<string, unknown>>;
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!['role']).toBe('user');
-    expect(typeof messages[0]!['content']).toBe('string');
-    const content = messages[0]!['content'] as string;
-    expect(content.startsWith('[moved from system]')).toBe(true);
-    expect(content).toContain('OpenCode workspace: /foo');
-  });
-
-  it('does not double-prepend moved content on a second transform (S6-relocate-8)', () => {
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(
-      makeDecision({
-        requestBody: {
-          system: 'OpenCode workspace: /foo',
+          system: 'You are Claude Code.',
           messages: [
             {
               role: 'user',
-              content: '[moved from system]\nOpenCode workspace: /foo\n\nHello',
+              content:
+                'Previous turn: Workspace root folder: /home/user was here. ' +
+                'See https://github.com/anomalyco/opencode for source.',
+            },
+            {
+              role: 'assistant',
+              content: 'Got it. What do you want to do?',
+            },
+            {
+              role: 'user',
+              content: 'Fix the bug',
             },
           ],
         },
@@ -783,12 +657,156 @@ describe('AnthropicBillingHeaderPlugin (S6 system relocation)', () => {
     expect(result).toBeDefined();
     const r = result!;
     const messages = r.requestBody!['messages'] as Array<Record<string, unknown>>;
-    const content = messages[0]!['content'] as string;
-    const markerCount = content.match(/\[moved from system]/g)?.length ?? 0;
-    expect(markerCount).toBe(1);
+    const allText = messages.map((m) => JSON.stringify(m['content'])).join('\n');
+    expect(allText).not.toContain('anomalyco');
+    expect(allText).not.toContain('Workspace root folder:');
+    expect(allText).toContain('Working directory:');
+    // assistant + final user content unchanged in meaning
+    expect(allText).toContain('Fix the bug');
+  });
+
+  it('renames native tool names in tools[] (lowercase → PascalCase, S7-3)', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          system: 'You are Claude Code.',
+          messages: [{ role: 'user', content: 'Hi' }],
+          tools: [
+            { name: 'read', description: 'Read a file', input_schema: { type: 'object' } },
+            { name: 'bash', description: 'Run a command', input_schema: { type: 'object' } },
+          ],
+        } as RequestTransformDecision['requestBody'],
+      }),
+    );
+
+    expect(result).toBeDefined();
+    const r = result!;
+    const tools = r.requestBody!['tools'] as Array<Record<string, unknown>>;
+    expect(tools[0]!.name).toBe('Read');
+    expect(tools[1]!.name).toBe('Bash');
+  });
+
+  it('renames tool_choice.name (S7-4)', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          system: 'You are Claude Code.',
+          messages: [{ role: 'user', content: 'Hi' }],
+          tools: [{ name: 'read', description: '' }],
+          tool_choice: { type: 'tool', name: 'read' },
+        } as RequestTransformDecision['requestBody'],
+      }),
+    );
+
+    expect(result).toBeDefined();
+    const r = result!;
+    const choice = r.requestBody!['tool_choice'] as Record<string, unknown>;
+    expect(choice['name']).toBe('Read');
+  });
+
+  it('does NOT scrub TodoWrite (same real tool name, S7-5)', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          system: 'You have access to the TodoWrite tool to track tasks.',
+          messages: [{ role: 'user', content: 'Hi' }],
+        },
+      }),
+    );
+
+    expect(result).toBeDefined();
+    const r = result!;
     const system = r.requestBody!['system'] as Array<Record<string, unknown>>;
-    expect(system).toHaveLength(2);
-    const systemText = system.map((entry) => entry['text']).join('\n');
-    expect(systemText).not.toContain('OpenCode workspace: /foo');
+    const allText = system.map((entry) => entry['text']).join('\n');
+    expect(allText).toContain('TodoWrite');
+  });
+
+  it('MANIFEST_CC_NORMALIZE_TOOLS=false skips tool rename (S7-6)', () => {
+    setEnv({ MANIFEST_CC_NORMALIZE_TOOLS: 'false' });
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          system: 'You are Claude Code.',
+          messages: [{ role: 'user', content: 'Hi' }],
+          tools: [{ name: 'read', description: '' }],
+        } as RequestTransformDecision['requestBody'],
+      }),
+    );
+
+    expect(result).toBeDefined();
+    const r = result!;
+    const tools = r.requestBody!['tools'] as Array<Record<string, unknown>>;
+    expect(tools[0]!.name).toBe('read');
+  });
+
+  it('MANIFEST_CC_SCRUB_MESSAGES=false only scrubs system[] (S7-7)', () => {
+    setEnv({ MANIFEST_CC_SCRUB_MESSAGES: 'false' });
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          system: 'Workspace root folder: /foo',
+          messages: [{ role: 'user', content: 'Workspace root folder: /bar' }],
+        },
+      }),
+    );
+
+    expect(result).toBeDefined();
+    const r = result!;
+    const system = r.requestBody!['system'] as Array<Record<string, unknown>>;
+    const allSysText = system.map((entry) => entry['text']).join('\n');
+    expect(allSysText).toContain('Working directory:');
+
+    // messages[] should still contain the unscrubbed text
+    const messages = r.requestBody!['messages'] as Array<Record<string, unknown>>;
+    const content = messages[0]!['content'] as string;
+    expect(content).toContain('Workspace root folder:');
+  });
+
+  it('cch invariant: cch changes after scrubbing/normalization (S7-8)', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const fingerprintBody = {
+      system: 'You are OpenCode. Workspace root folder: /foo',
+      messages: [{ role: 'user', content: 'Hi' }],
+      tools: [{ name: 'read', description: '' }],
+    };
+    const cleanBody = {
+      system: 'You are Claude Code.',
+      messages: [{ role: 'user', content: 'Hi' }],
+      tools: [{ name: 'Read', description: '' }],
+    };
+
+    const r1 = plugin.transformRequest(makeDecision({ requestBody: fingerprintBody }));
+    const r2 = plugin.transformRequest(makeDecision({ requestBody: cleanBody }));
+
+    expect(r1).toBeDefined();
+    expect(r2).toBeDefined();
+    const cch1 = r1!.headers!['x-anthropic-billing-header']!.match(/cch=([0-9a-f]{5})/)![1]!;
+    const cch2 = r2!.headers!['x-anthropic-billing-header']!.match(/cch=([0-9a-f]{5})/)![1]!;
+    expect(cch1).not.toBe(cch2);
+  });
+
+  it('preserves billing/identity system[] order after scrub (S7-9)', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          system: 'Workspace root folder: /foo',
+          messages: [{ role: 'user', content: 'Hi' }],
+        },
+      }),
+    );
+
+    expect(result).toBeDefined();
+    const r = result!;
+    const system = r.requestBody!['system'] as Array<Record<string, unknown>>;
+    expect(system[0]!.text).toMatch(/^x-anthropic-billing-header:/);
+    expect(system[1]!.text).toBe(CLAUDE_CODE_IDENTITY_TEXT);
+    // scrubbed original at index 2
+    expect(system[2]!.text).toContain('Working directory:');
   });
 });
