@@ -278,15 +278,22 @@ describe('discoverPlugins (compiled JS shape — post-tsc runtime)', () => {
     }
     const discovered = discoverPlugins(distPluginsDir);
     const classNames = discovered.map((entry) => entry.pluginClassName);
+    // The dist tree contains the two in-tree plugins. External plugins
+    // (e.g. anthropic-billing-header) are only present when an operator
+    // has configured external-plugins.local.json + run the loader; the
+    // distPluginsDir walk here is a structural assertion, not a fixture
+    // count. PR #17 removed anthropic-billing-header from this repo; PR
+    // #18 added the build-order fix so external plugins reach dist when
+    // the loader runs.
     expect(classNames).toEqual(
       expect.arrayContaining([
-        'AnthropicBillingHeaderPlugin',
         'DefaultPolicyPlugin',
         'HeaderTierRouterPlugin',
       ]),
     );
-    // Must discover all three, not just the ones with `.ts` source.
-    expect(discovered).toHaveLength(3);
+    // Must discover both in-tree plugins. External plugins may add to
+    // this count when present.
+    expect(discovered.length).toBeGreaterThanOrEqual(2);
   });
 });
 
