@@ -1,0 +1,13 @@
+{
+  "_comment": "Local override for external-plugins.json. Copy this file to 'external-plugins.local.json' and edit. The local file takes precedence over the repo-shipped external-plugins.json when present, letting you add private plugin repos without committing private URLs to the public repo. This file is gitignored once renamed to external-plugins.local.json.",
+  "_schema": "./docs/EXTERNAL_PLUGINS.md",
+  "_note": "After adding a plugin entry, also add the plugin's directory to your local .git/info/exclude (NOT .gitignore) so fetched files don't show up as untracked: `src/plugins/<name>/`",
+  "_example_entry": {
+    "name": "anthropic-billing-header",
+    "source": "git+ssh://git@github.com/JosiahSiegel/manifest-plugin-anthropic-billing-header.git",
+    "ref": "v0.6.0",
+    "private": true,
+    "enabledByDefault": true
+  },
+  "plugins": []
+}
