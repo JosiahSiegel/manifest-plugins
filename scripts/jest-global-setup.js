@@ -3,23 +3,44 @@
 // Jest global setup: runs once before any test file.
 // ============================================================================
 //
-// Materializes external plugins into src/plugins/ so the auto-discovery in
-// src/registry/discover.ts picks them up. This is the test-time counterpart
-// of the build-time step `node scripts/fetch-external-plugins.mjs`.
+// By default, unit tests run against the in-tree plugin set only. External
+// plugins are an operator concern (deployed via the loader at build time),
+// not a contributor concern (unit tests must remain deterministic regardless
+// of operator-side configuration).
 //
-// Runs the fetch script via child_process so the .mjs file is the single
-// source of truth for both paths.
+// To opt in to fetching external plugins for a test run, set:
+//   JEST_FETCH_EXTERNAL_PLUGINS=1 npm test
+//
+// When opted in, this delegates to the same script the build pipeline uses
+// (scripts/fetch-external-plugins.mjs) so there's a single source of truth
+// for the loader behavior.
 
 const { execFileSync } = require('node:child_process');
-const { existsSync } = require('node:fs');
+const { existsSync, readdirSync } = require('node:fs');
 const { join } = require('node:path');
+
+const IN_TREE_PLUGIN_DIRS = new Set(['default-policy', 'header-tier-router']);
 
 module.exports = async function jestGlobalSetup() {
   const root = join(__dirname, '..');
-  const manifestPath = join(root, 'external-plugins.json');
+  const pluginsDir = join(root, 'src', 'plugins');
 
-  if (!existsSync(manifestPath)) {
-    // No external-plugins.json; nothing to fetch.
+  // Always start from a clean in-tree baseline. If a previous build or
+  // opt-in run left external plugin sources under src/plugins/, wipe
+  // them so unit tests see a deterministic two-plugin registry.
+  if (existsSync(pluginsDir)) {
+    for (const child of readdirSync(pluginsDir)) {
+      if (IN_TREE_PLUGIN_DIRS.has(child)) continue;
+      execFileSync('node', [
+        '-e',
+        `require('fs').rmSync(${JSON.stringify(join(pluginsDir, child))}, ` +
+          `{ recursive: true, force: true })`,
+      ]);
+      console.log(`jest-global-setup: removed external plugin source ${child}/`);
+    }
+  }
+
+  if (process.env.JEST_FETCH_EXTERNAL_PLUGINS !== '1') {
     return;
   }
 
