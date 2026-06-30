@@ -362,8 +362,13 @@ export function setPluginEnabled(pluginId: string, enabled: boolean): void {
 // =============================================================================
 // Re-exports for plugin authors
 // =============================================================================
+//
+// Built-in plugins are re-exported here for direct import by plugin authors
+// who want to compose or test them. External plugins (e.g.
+// anthropic-billing-header — see docs/EXTERNAL_PLUGINS.md) are NOT re-exported
+// because their source doesn't live in this repo; consumers fetch them via
+// the external-plugins loader and `require('manifest-plugins').loadPlugin(...)`.
 
-export { AnthropicBillingHeaderPlugin } from './plugins/anthropic-billing-header/plugin';
 export { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
 export { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';
 

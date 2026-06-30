@@ -32,7 +32,6 @@ interface LoadedModule {
   }[];
   readonly getPersistedStateFile: () => string;
   readonly resetPersistedPluginState: () => void;
-  readonly AnthropicBillingHeaderPlugin: new (...args: never[]) => unknown;
   readonly DefaultPolicyPlugin: new (...args: never[]) => unknown;
   readonly HeaderTierRouterPlugin: new (...args: never[]) => unknown;
 }
@@ -68,7 +67,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
   it('applies a persisted false entry by removing the plugin from the runtime array', () => {
     writeFileSync(
       stateFile,
-      JSON.stringify({ 'anthropic-billing-header': false }) + '\n',
+      JSON.stringify({ 'default-policy': false }) + '\n',
       'utf-8',
     );
 
@@ -78,11 +77,8 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    expect(mod!.plugins).toHaveLength(2);
-    expect(mod!.plugins).not.toContainEqual(
-      expect.any(mod!.AnthropicBillingHeaderPlugin),
-    );
-    expect(mod!.plugins).toContainEqual(expect.any(mod!.DefaultPolicyPlugin));
+    expect(mod!.plugins).toHaveLength(1);
+    expect(mod!.plugins).not.toContainEqual(expect.any(mod!.DefaultPolicyPlugin));
     expect(mod!.plugins).toContainEqual(expect.any(mod!.HeaderTierRouterPlugin));
   });
 
@@ -114,7 +110,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    expect(mod!.plugins).toHaveLength(3);
+    expect(mod!.plugins).toHaveLength(2);
     const installed = mod!.getInstalledPlugins();
     for (const p of installed) {
       expect(p.enabled).toBe(true);
@@ -136,7 +132,6 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     writeFileSync(
       stateFile,
       JSON.stringify({
-        'anthropic-billing-header': false,
         'default-policy': false,
         'header-tier-router': false,
       }) + '\n',
@@ -149,7 +144,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    // Boot has dropped all three plugins from the runtime array.
+    // Boot has dropped both plugins from the runtime array.
     expect(mod!.plugins).toHaveLength(0);
 
     mod!.resetPersistedPluginState();
@@ -162,6 +157,6 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       expect(p.enabledByDefault).toBe(true);
     }
     // Every plugin is back in the runtime array.
-    expect(mod!.plugins).toHaveLength(3);
+    expect(mod!.plugins).toHaveLength(2);
   });
 });

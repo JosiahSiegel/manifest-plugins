@@ -199,12 +199,12 @@ shallow-vs-replacement rules:
 | `requestBody` | **Wholesale replacement** (object → object, or `undefined` to keep current). The plugin's object lands on the wire byte-for-byte; the host does NOT shallow-merge with the existing body. |
 
 > ⚠ `requestBody` replacement is load-bearing: plugins that mutate the
-> body (e.g. `anthropic-billing-header` injecting a Claude Code identity
-> block at the start of `system[]`) MUST see their output on the wire
-> byte-for-byte. Shallow-merging would preserve the upstream's existing
-> top-level key order and let later keys (like `messages`) come before
-> `system`, breaking downstream consumers that hash the body in key order
-> (e.g. Anthropic's `cch` attestation). If your plugin only wants to
+> body (e.g. one that injects an identity block at the start of `system[]`)
+> MUST see their output on the wire byte-for-byte. Shallow-merging would
+> preserve the upstream's existing top-level key order and let later keys
+> (like `messages`) come before `system`, breaking downstream consumers
+> that hash the body in key order (e.g. Anthropic's `cch` attestation).
+> If your plugin only wants to
 > ADD a field, return the full new body — there is no merge helper.
 
 Authoring pattern (full body replacement):

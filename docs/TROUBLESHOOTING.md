@@ -164,7 +164,7 @@ Verify with:
 
 ```bash
 node -e "console.log(require('./dist/index.js').getInstalledPlugins().map(p => p.id))"
-# Expected: [ 'anthropic-billing-header', 'default-policy', 'header-tier-router', '<your-id>' ]
+# Expected: [ 'default-policy', 'header-tier-router', '<your-id>' ]
 ```
 
 ### `npm run new-plugin` exits with code 2

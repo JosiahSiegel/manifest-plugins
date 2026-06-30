@@ -64,15 +64,17 @@ describe('host snippet: existing anchors (pre-existing fixtures, regression cove
   });
 
   it('HOST_HELPER_SOURCE REPLACES requestBody wholesale (not shallow-merges) so plugins can control JSON key order', () => {
-    // Required for `anthropic-billing-header` v0.3.0+ to prepend a
-    // `system[]` block with the Claude Code identity at the start of
-    // the request body (Anthropic's classifier keys on system[0]
-    // content). Shallow-merging would keep the upstream's existing
-    // keys at the start of the serialized object and let later keys
-    // (like `messages`) come before `system`, breaking the byte-exact
-    // cch preimage. The contract here is: when a plugin returns a
-    // requestBody, the host uses that exact object — no merge with
-    // the previous result.requestBody.
+    // Plugins that mutate the body (e.g. one that prepends a `system[]`
+    // block with a classifier-aware identity string at the start of the
+    // request body) need the host to use their returned body verbatim so
+    // the JSON key order matches the wire format the server expects.
+    // Shallow-merging would keep the upstream's existing keys at the
+    // start of the serialized object and let later keys (like
+    // `messages`) come before `system`, breaking any byte-sensitive
+    // body attestation the plugin computes (e.g. Anthropic's cch). The
+    // contract here is: when a plugin returns a requestBody, the host
+    // uses that exact object — no merge with the previous
+    // result.requestBody.
     expect(HOST_HELPER_SOURCE).not.toContain(
       '{ ...result.requestBody, ...(out.requestBody',
     );

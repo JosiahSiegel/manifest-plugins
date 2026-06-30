@@ -31,7 +31,6 @@ type PluginJson = {
 };
 
 const EXPECTED_PLUGIN_IDS = [
-  'anthropic-billing-header',
   'default-policy',
   'header-tier-router',
 ];
@@ -99,15 +98,15 @@ describe('plugin admin HTTP API', () => {
     // When: the installed plugins list is requested.
     const response = await request(app).get('/api/plugins').expect(200);
 
-    // Then: all three installed plugins are returned.
+    // Then: all installed plugins are returned.
     const plugins = readPlugins(response.body);
-    expect(plugins).toHaveLength(3);
+    expect(plugins).toHaveLength(EXPECTED_PLUGIN_IDS.length);
     expect(plugins.map((plugin) => plugin.id).sort()).toEqual(EXPECTED_PLUGIN_IDS);
   });
 
   it('GET /api/plugins reflects direct runtime enablement changes', async () => {
-    // Given: the billing-header plugin was disabled through the runtime API.
-    setPluginEnabled('anthropic-billing-header', false);
+    // Given: the default-policy plugin was disabled through the runtime API.
+    setPluginEnabled('default-policy', false);
     const app = createApp();
 
     // When: the installed plugins list is requested.
@@ -115,25 +114,22 @@ describe('plugin admin HTTP API', () => {
 
     // Then: the response reflects the in-memory override.
     const plugins = readPlugins(response.body);
-    expect(findPlugin(plugins, 'anthropic-billing-header')?.enabled).toBe(false);
+    expect(findPlugin(plugins, 'default-policy')?.enabled).toBe(false);
   });
 
-  it('GET /api/plugins/anthropic-billing-header returns one plugin', async () => {
+  it('GET /api/plugins/default-policy returns one plugin', async () => {
     // Given: a fresh admin server.
     const app = createApp();
 
     // When: a known plugin is requested by id.
-    const response = await request(app)
-      .get('/api/plugins/anthropic-billing-header')
-      .expect(200);
+    const response = await request(app).get('/api/plugins/default-policy').expect(200);
 
     // Then: the plugin metadata is returned.
     expect(response.body).toEqual({
       plugin: expect.objectContaining({
-        id: 'anthropic-billing-header',
-        name: 'Anthropic billing header',
-        version: '0.6.0',
-        kind: 'transform',
+        id: 'default-policy',
+        name: 'Default policy',
+        kind: 'policy',
         enabledByDefault: true,
         enabled: true,
       }),
@@ -151,33 +147,33 @@ describe('plugin admin HTTP API', () => {
     expect(response.body).toEqual({ error: 'plugin not found', id: 'nonexistent' });
   });
 
-  it('PATCH /api/plugins/anthropic-billing-header persists and reflects enabled false', async () => {
+  it('PATCH /api/plugins/default-policy persists and reflects enabled false', async () => {
     // Given: a fresh admin server using a per-test state file.
     const app = createApp();
 
-    // When: the billing-header plugin is disabled over HTTP.
+    // When: the default-policy plugin is disabled over HTTP.
     const response = await request(app)
-      .patch('/api/plugins/anthropic-billing-header')
+      .patch('/api/plugins/default-policy')
       .send({ enabled: false })
       .expect(200);
 
     // Then: the response, persisted file, and runtime metadata agree.
     expect(response.body.plugin.enabled).toBe(false);
     expect(JSON.parse(readFileSync(stateFilePath, 'utf-8'))).toMatchObject({
-      'anthropic-billing-header': false,
+      'default-policy': false,
     });
     expect(
-      getInstalledPlugins().find((plugin) => plugin.id === 'anthropic-billing-header')?.enabled,
+      getInstalledPlugins().find((plugin) => plugin.id === 'default-policy')?.enabled,
     ).toBe(false);
   });
 
-  it('PATCH /api/plugins/anthropic-billing-header rejects a string enabled value', async () => {
+  it('PATCH /api/plugins/default-policy rejects a string enabled value', async () => {
     // Given: a fresh admin server.
     const app = createApp();
 
     // When: the enabled field is not a boolean.
     const response = await request(app)
-      .patch('/api/plugins/anthropic-billing-header')
+      .patch('/api/plugins/default-policy')
       .send({ enabled: 'no' })
       .expect(400);
 
@@ -185,15 +181,12 @@ describe('plugin admin HTTP API', () => {
     expect(response.body).toEqual({ error: 'body must be { enabled: boolean }' });
   });
 
-  it('PATCH /api/plugins/anthropic-billing-header rejects an empty body', async () => {
+  it('PATCH /api/plugins/default-policy rejects an empty body', async () => {
     // Given: a fresh admin server.
     const app = createApp();
 
     // When: no enabled field is sent.
-    const response = await request(app)
-      .patch('/api/plugins/anthropic-billing-header')
-      .send({})
-      .expect(400);
+    const response = await request(app).patch('/api/plugins/default-policy').send({}).expect(400);
 
     // Then: the request is rejected as a bad body.
     expect(response.body).toEqual({ error: 'body must be { enabled: boolean }' });

@@ -25,8 +25,8 @@
  *
  * Usage examples:
  *   node scripts/plugins-cli.mjs list
- *   node scripts/plugins-cli.mjs disable anthropic-billing-header
- *   node scripts/plugins-cli.mjs enable anthropic-billing-header
+ *   node scripts/plugins-cli.mjs disable default-policy
+ *   node scripts/plugins-cli.mjs enable default-policy
  *   node scripts/plugins-cli.mjs reset
  */
 
@@ -156,8 +156,8 @@ function usage() {
     '',
     'Examples:',
     '  node scripts/plugins-cli.mjs list',
-    '  node scripts/plugins-cli.mjs disable anthropic-billing-header',
-    '  node scripts/plugins-cli.mjs enable anthropic-billing-header',
+    '  node scripts/plugins-cli.mjs disable default-policy',
+    '  node scripts/plugins-cli.mjs enable default-policy',
     '  node scripts/plugins-cli.mjs reset',
     '',
   ].join('\n'));

@@ -9,7 +9,7 @@
  * All three write to the SAME state file. The format is intentionally
  * minimal — a flat map of plugin-id → enabled boolean:
  *
- *   { "anthropic-billing-header": true, "default-policy": false }
+ *   { "default-policy": true, "header-tier-router": false }
  *
  * Atomicity: writes go through `write-temp-then-rename` so a process
  * crash mid-write cannot leave a half-written file. The rename is
