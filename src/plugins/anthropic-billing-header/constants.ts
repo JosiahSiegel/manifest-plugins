@@ -67,3 +67,37 @@ export const MESSAGES_BETA_QUERY_PARAM = 'beta=true';
  * identical anchor.
  */
 export const BILLING_HEADER_BLOCK_PREFIX = 'x-anthropic-billing-header:';
+
+// =============================================================================
+// HTTP fingerprint headers
+// =============================================================================
+//
+// Real Claude Code emits a specific set of HTTP headers that Anthropic's
+// classifier cross-references against the billing header. If these are
+// missing or mismatched, the request is classified as third-party.
+// The plugin injects them via the `headers` return field; the host
+// shallow-merges them into the outgoing request headers.
+//
+// Source: live MITM captures from CC v2.1.100–v2.1.196
+// (askalf/dario discussions #8/#13, BYK/loreai, hermes-claude-auth PR #10).
+
+/**
+ * `User-Agent` header. Real CC emits `claude-cli/<version> (external, cli)`.
+ * The `(external, cli)` suffix identifies the request as coming from the
+ * interactive TUI; Anthropic's classifier checks this against `cc_entrypoint`.
+ */
+export const CC_USER_AGENT = `claude-cli/${DEFAULT_CC_VERSION} (external, cli)`;
+
+/**
+ * `anthropic-beta` header. The set must match CC's current beta flags.
+ * `claude-code-20250219` is the primary first-party gate.
+ * `oauth-2025-04-20` enables OAuth bearer-token auth on `/v1/messages`.
+ */
+export const CC_ANTHROPIC_BETA =
+  'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14';
+
+/** `x-app` header. Tells the server this is a Claude Code CLI invocation. */
+export const CC_X_APP = 'cli';
+
+/** `anthropic-version` header (hardcoded in CC since 2023). */
+export const CC_ANTHROPIC_VERSION = '2023-06-01';
