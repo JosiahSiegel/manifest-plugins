@@ -118,12 +118,14 @@ describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
     expect(result).toHaveProperty('requestBody');
   });
 
-  it('appends beta=true to /v1/messages URL only', () => {
+  it('appends ?beta=true to /v1/messages URL with correct separator', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
     const result = plugin.transformRequest(makeDecision())!;
 
-    expect(result.url).toContain('beta=true');
-    expect(result.url).toMatch(/^https:\/\/api\.anthropic\.com\/v1\/messages/);
+    // Exact URL must be the endpoint with a proper ?beta=true query.
+    // Regression: v0.3.0 produced ".../v1/messagesbeta=true" (missing ?)
+    // causing upstream not_found_error.
+    expect(result.url).toBe('https://api.anthropic.com/v1/messages?beta=true');
   });
 
   it('does not duplicate beta=true when already present', () => {
@@ -133,6 +135,15 @@ describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
     )!;
 
     expect(result.url).toBe('https://api.anthropic.com/v1/messages?beta=true');
+  });
+
+  it('appends beta=true with & when other query params exist', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({ url: 'https://api.anthropic.com/v1/messages?stream=true' }),
+    )!;
+
+    expect(result.url).toBe('https://api.anthropic.com/v1/messages?stream=true&beta=true');
   });
 
   it('leaves non-/v1/messages URLs untouched', () => {
