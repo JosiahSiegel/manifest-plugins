@@ -1,4 +1,4 @@
-# `anthropic-billing-header` plugin (v0.3.0)
+# `anthropic-billing-header` plugin (v0.5.0)
 
 Injects Anthropic's `x-anthropic-billing-header` HTTP header AND mutates the
 request body so that OAuth subscription requests (Claude Pro / Max) count
@@ -6,7 +6,7 @@ against the subscription pool — not the third-party "extra usage" pool.
 
 ## Why
 
-Anthropic has **three independent detection vectors** for OAuth
+Anthropic has **four independent detection vectors** for OAuth
 subscriptions that all have to pass. As of June 2026:
 
 1. **`x-anthropic-billing-header`** — must have a recent `cc_version` AND
@@ -17,22 +17,35 @@ subscriptions that all have to pass. As of June 2026:
    `"You are Claude Code, Anthropic's official CLI for Claude."`.
    Without it, Sonnet/Opus return HTTP 400.
 3. **`?beta=true` query string** on `/v1/messages` for OAuth requests.
+4. **System-prompt content classifier** (since April 4, 2026) — when
+   `system[]` accumulates >~4–4.5k chars of non-Claude-Code orchestration
+   content, Anthropic flips the request into the overage/extra-usage
+   billing lane even on a valid subscription. The classifier is
+   multi-feature (volume + lexical fingerprints), so truncating the
+   prompt alone is not enough — fingerprint-bearing blocks must be
+   moved out of `system[]`.
 
 The error message `"You're out of extra usage. Add more at claude.ai/settings/usage
 and keep going."` is the standard symptom for any of these failing.
 
-The 0.1.0 → 0.2.0 → 0.3.0 evolution:
+The 0.1.0 → 0.5.0 evolution:
 
 | Version | Failure mode | Fix |
 | --- | --- | --- |
 | 0.1.0 | Stale `cc_version` (2.1.117), static `cch=SHA-256(message)[:5]` | (Original plugin) |
 | 0.2.0 | New `cch=xxHash64(body)` requirement + current `cc_version=2.1.196` | Replaced cch algorithm; added hash-wasm |
-| 0.3.0 | OAuth system identity check (March 2026) + body-attestation preimage transform (v2.1.172+) + seed rotation (`0x6E…` → `0x4D…`) | This version |
+| 0.3.0 | OAuth system identity check (March 2026) + body-attestation preimage transform (v2.1.172+) + seed rotation (`0x6E…` → `0x4D…`) | Added identity block + preimage transform |
+| 0.4.0 | Billing header order requirement (`system[0]` = billing, `system[1]` = identity) + Claude Code fingerprint headers | Reordered system[]; added User-Agent, anthropic-beta, x-app, anthropic-version headers |
+| 0.5.0 | System-content classifier flips to overage lane when system[] >4–4.5k chars of non-Claude-Code content (opencode's 8k+ `anthropic.txt` plus AGENTS.md puts every request past threshold) | Surgical relocation: opencode-fingerprinted blocks are moved from `system[]` to the first user message; clean blocks stay in `system[]` to preserve prompt-cache prefixes |
 
 ## What it does
 
 For each authenticated subscription call to `/v1/messages`, the plugin:
 
+0. **Relocates opencode-fingerprinted system[] entries to the first user
+   message** so Anthropic's content classifier routes against the
+   subscription pool, not the overage pool. (Opt-out via
+   `MANIFEST_CC_RELOCATE=false`.)
 1. Computes the `cc_version` suffix (SHA-256 salt + sampled message chars + version).
 2. Resolves the correct xxHash64 seed for the current Claude Code version
    (current seed is `0x4D659218E32A3268`, used by v2.1.138+).
@@ -90,6 +103,7 @@ https://api.anthropic.com/v1/messages?beta=true
 | --- | --- | --- |
 | `MANIFEST_CC_VERSION` | `2.1.196` | Claude Code version stamped into `cc_version`. Bump when Anthropic ships a new release. |
 | `MANIFEST_CCH_VALUE` | (empty) | Override the body-attested `cch`. Empty → body attestation. Set to a 5-hex value to pin it (e.g. during seed rotation). |
+| `MANIFEST_CC_RELOCATE` | `true` | When `true` (or unset), the plugin surgically relocates opencode-fingerprinted `system[]` blocks to the first user message to keep Anthropic's content classifier from flipping the request into the overage lane. Set to `false` to disable relocation (v0.4.0 behavior). |
 
 If Anthropic rotates the seed, update `SEED_CURRENT` in `cch.ts` to the
 new constant (extract from the Bun binary using the oracle-pair method
@@ -131,3 +145,31 @@ neither needs the header or risk being flagged.
 2. **Seed rotation**. When Anthropic rotates the seed, the plugin's
    emitted cch will fail upstream validation. Update `SEED_CURRENT`
    in `cch.ts` and bump the plugin version.
+3. **System-prompt content classifier**. The classifier is
+   multi-feature (volume + lexical fingerprints). The 0.5.0
+   relocation handles the known opencode fingerprints. If Anthropic
+   adds new fingerprints to its classifier, update
+   `OPENCODE_SYSTEM_FINGERPRINTS` in `body.ts`.
+
+## Relocation behavior (v0.5.0+)
+
+When `MANIFEST_CC_RELOCATE` is enabled (default), the plugin classifies
+each entry of `system[]` against these fingerprint patterns:
+
+| Regex | What it catches |
+| --- | --- |
+| `/\bopencode\b/i` | Any literal "opencode" / "OpenCode" reference |
+| `/anomalyco/` | The fork that owns the opencode source repo |
+| `/Workspace root folder/` | The env-block marker opencode emits |
+| `/<directories>/` | The workspace XML marker |
+| `/is a git repo:/i` | The git-status env-block marker |
+| `/TodoWrite/` | Opencode's todo-tool name |
+
+Entries that match ANY of these patterns are moved (with a
+`[moved from system]` marker) to the first user message. Clean entries
+remain in `system[]` so prompt-cache prefixes stay cache-eligible. If
+no entries match, the request is unchanged from v0.4.0.
+
+The relocation runs **before** the cch body build, so the cch
+attestation reflects the relocated body bytes (not the original).
+This is verified by the S6-relocate-5 test in `plugin.spec.ts`.

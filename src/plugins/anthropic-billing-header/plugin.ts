@@ -99,7 +99,6 @@ import type {
 } from '../..';
 
 import {
-  BILLING_HEADER_BLOCK_PREFIX,
   CC_ANTHROPIC_BETA,
   CC_ANTHROPIC_VERSION,
   CC_ENTRYPOINT,
@@ -107,28 +106,38 @@ import {
   CC_X_APP,
   CCH_PLACEHOLDER,
   DEFAULT_CC_VERSION,
-  MESSAGES_BETA_QUERY_PARAM,
 } from './constants';
 import {
   buildBillingBlock,
-  buildBillingHeaderValue,
   buildFinalBody,
   buildSystemArray,
   computeVersionSuffix,
   extractFirstUserText,
   serializeBody,
+  type SystemBlock,
   withBetaQuery,
 } from './body';
+import {
+  prependMovedContentToFirstUserMessage,
+  relocateSystemContent,
+} from './system-relocation';
 import { cchHasherReady, computeCchForBody } from './cch';
 
 export { cchHasherReady };
 
 export const ANTHROPIC_BILLING_HEADER_PLUGIN_KIND: PluginKind = 'transform';
 
+function readRelocateEnabled(): boolean {
+  const raw = process.env['MANIFEST_CC_RELOCATE'];
+  if (raw === undefined) return true;
+  const v = raw.trim().toLowerCase();
+  return v !== 'false' && v !== '0' && v !== 'no' && v !== 'off';
+}
+
 export const ANTHROPIC_BILLING_HEADER_PLUGIN_METADATA: PluginMetadata = Object.freeze({
   id: 'anthropic-billing-header',
   name: 'Anthropic billing header',
-  version: '0.4.0',
+  version: '0.5.0',
   description:
     'Injects Anthropic subscription billing header + body fingerprint (xxHash64 cch, billing-first system[], fingerprint HTTP headers, beta=true).',
   kind: ANTHROPIC_BILLING_HEADER_PLUGIN_KIND,
@@ -139,71 +148,77 @@ export class AnthropicBillingHeaderPlugin implements RequestTransformPlugin {
   transformRequest(
     decision: RequestTransformDecision,
   ): RequestTransformResult | undefined {
-    if (decision.endpointKey !== 'anthropic') return undefined;
-    if (decision.authType !== 'subscription') return undefined;
+    // Gate: only Anthropic + subscription OAuth
+    const isAnthropic = decision.endpointKey === 'anthropic';
+    const isSubscription = decision.authType === 'subscription';
+    if (!isAnthropic || !isSubscription) return undefined;
 
-    const firstUserText = extractFirstUserText(decision.requestBody);
+    const rawSystem = decision.requestBody['system'];
+
+    // S6: Relocate opencode-fingerprinted system[] entries to the first user
+    // message so Anthropic's billing classifier routes the request against the
+    // subscription pool instead of the extra-usage pool.
+    let bodyForSigning: Readonly<Record<string, unknown>> = decision.requestBody;
+    let systemSource: unknown = rawSystem;
+    if (readRelocateEnabled()) {
+      let relocated: { readonly kept: readonly SystemBlock[]; readonly moved: string };
+      try {
+        relocated = relocateSystemContent(rawSystem, {});
+      } catch {
+        relocated = { kept: [], moved: '' };
+      }
+      systemSource = relocated.kept;
+      if (relocated.moved !== '') {
+        try {
+          bodyForSigning = prependMovedContentToFirstUserMessage(
+            decision.requestBody,
+            relocated.moved,
+            {},
+          );
+        } catch {
+          bodyForSigning = decision.requestBody;
+          systemSource = rawSystem;
+        }
+      }
+    }
+
+    const firstUserText = extractFirstUserText(bodyForSigning);
     const version = process.env['MANIFEST_CC_VERSION'] || DEFAULT_CC_VERSION;
     const suffix = computeVersionSuffix(firstUserText, version);
 
-    // Step 1: build the placeholder header value with cch=00000 so we can
-    // produce the placeholder system block. The cch values inside the body
-    // and the HTTP header must agree.
-    const placeholderHeader = `cc_version=${version}.${suffix}; cc_entrypoint=${CC_ENTRYPOINT}; cch=${CCH_PLACEHOLDER};`;
-    const placeholderBillingBlock = buildBillingBlock(placeholderHeader);
+    // Placeholder cch=00000 to compute the body bytes the real cch hashes.
+    const placeholderHeaderValue = `cc_version=${version}.${suffix}; cc_entrypoint=${CC_ENTRYPOINT}; cch=${CCH_PLACEHOLDER};`;
+    const placeholderBillingBlock = buildBillingBlock(placeholderHeaderValue);
+    const placeholderSystemArray = buildSystemArray(systemSource, placeholderBillingBlock);
 
-    // Step 2: normalize system + identity + billing header into system[].
-    const rawSystem = decision.requestBody['system'] as unknown;
-    const systemArray = buildSystemArray(rawSystem, placeholderBillingBlock);
+    const placeholderBody = buildFinalBody(bodyForSigning, placeholderSystemArray);
+    const serializedBody = serializeBody(placeholderBody);
 
-    // Step 3: assemble final body in Claude Code's key order.
-    const finalBody = buildFinalBody(decision.requestBody, systemArray);
-
-    // Step 4: serialize WITHOUT whitespace so the cch preimage matches
-    // exactly what Claude Code emits.
-    const serializedBody = serializeBody(finalBody);
-
-    // Step 5: compute cch over the placeholder-body preimage.
     const envCch = process.env['MANIFEST_CCH_VALUE'];
-    const cchOverride =
-      envCch !== undefined && envCch.length > 0
-        ? envCch.replace(/^cch=/, '')
-        : undefined;
-    const cch = cchOverride ?? computeCchForBody(serializedBody, version);
+    const cchOverride = envCch?.trim().replace(/^cch=/, '');
+    const cch = cchOverride && /^[0-9a-f]{5}$/.test(cchOverride)
+      ? cchOverride
+      : computeCchForBody(serializedBody, version);
 
-    // Step 6: rebuild system[] with the computed cch. In the new order
-    // (billing-first), systemArray = [billing(placeholder), identity, ...originals].
-    // Replace systemArray[0] (billing) with the final billing block;
-    // keep systemArray[1] (identity) and all originals as-is.
-    const finalHeaderValue = buildBillingHeaderValue(
-      version,
-      suffix,
-      cch,
-      CC_ENTRYPOINT,
-    );
+    const finalHeaderValue = `cc_version=${version}.${suffix}; cc_entrypoint=${CC_ENTRYPOINT}; cch=${cch};`;
     const finalBillingBlock = buildBillingBlock(finalHeaderValue);
-    const finalSystemArray: typeof systemArray = [
-      finalBillingBlock,
-      systemArray[1]!,
-      ...systemArray.slice(2),
-    ];
-    const finalFinalBody = buildFinalBody(decision.requestBody, finalSystemArray);
-    const finalSerialized = serializeBody(finalFinalBody);
 
-    // Step 7: append `?beta=true` idempotently. No-op for non-Anthropic
-    // endpoints or already-flagged URLs.
+    // Replace only systemArray[0] with the final billing block (placeholder
+    // → final), preserving the relocated/non-relocated original system entries
+    // verbatim.
+    const finalSystemArray = placeholderSystemArray.map((block, idx) =>
+      idx === 0 ? finalBillingBlock : block,
+    );
+
+    const finalFinalBody = buildFinalBody(bodyForSigning, finalSystemArray);
+    void serializeBody(finalFinalBody);
+
     const finalUrl = withBetaQuery(decision.url);
-
-    // Suppress lint on the prefix sentinel (kept for future test/debug use).
-    void BILLING_HEADER_BLOCK_PREFIX;
-    // Discard the second serialization — kept purely to validate the
-    // deterministic body shape; the real body lives in `finalFinalBody`.
-    void finalSerialized;
-    void MESSAGES_BETA_QUERY_PARAM;
 
     return {
       url: finalUrl,
       headers: {
+        ...decision.headers,
         'x-anthropic-billing-header': finalHeaderValue,
         'user-agent': CC_USER_AGENT,
         'anthropic-beta': CC_ANTHROPIC_BETA,

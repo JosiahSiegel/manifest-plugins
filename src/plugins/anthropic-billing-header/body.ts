@@ -79,7 +79,7 @@ export function extractFirstUserText(
  * identity block (system[1]) and original blocks use `cache_control`
  * with optional `ttl` (real CC emits `{ type: "ephemeral", ttl: "1h" }`).
  */
-interface SystemBlock {
+export interface SystemBlock {
   type: 'text';
   text: string;
   cache_control?: { type: 'ephemeral'; ttl?: string };
@@ -94,7 +94,7 @@ function isIdentityBlock(block: SystemBlock): boolean {
 }
 
 /** Convert whatever form of `system` upstream provided into a SystemBlock[]. */
-function normalizeSystemBlocks(
+export function normalizeSystemBlocks(
   rawSystem: unknown,
 ): SystemBlock[] {
   if (typeof rawSystem === 'string') {
@@ -127,7 +127,7 @@ function normalizeSystemBlocks(
 }
 
 /** Drop any existing identity or billing-header block (idempotent). */
-function stripExistingFingerprint(blocks: SystemBlock[]): SystemBlock[] {
+export function stripExistingFingerprint(blocks: SystemBlock[]): SystemBlock[] {
   return blocks.filter(
     (b) => !isIdentityBlock(b) && !isBillingHeaderBlock(b),
   );
@@ -246,3 +246,4 @@ export function withBetaQuery(url: string): string {
   const separator = tail.length === 0 ? '?' : '&';
   return `${head}${tail}${separator}beta=true`;
 }
+
