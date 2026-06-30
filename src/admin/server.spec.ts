@@ -132,7 +132,7 @@ describe('plugin admin HTTP API', () => {
       plugin: expect.objectContaining({
         id: 'anthropic-billing-header',
         name: 'Anthropic billing header',
-        version: '0.4.0',
+        version: '0.5.0',
         kind: 'transform',
         enabledByDefault: true,
         enabled: true,
