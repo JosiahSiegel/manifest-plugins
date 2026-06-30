@@ -43,15 +43,24 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-const MANIFEST_PATH = join(ROOT, 'external-plugins.json');
+const REPO_MANIFEST_PATH = join(ROOT, 'external-plugins.json');
+const LOCAL_MANIFEST_PATH = join(ROOT, 'external-plugins.local.json');
 const PLUGINS_DIR = join(ROOT, 'src', 'plugins');
 
 function readManifest() {
-  if (!existsSync(MANIFEST_PATH)) {
-    return { plugins: [] };
+  // Local manifest overrides repo manifest. This lets operators add private
+  // plugins without committing private repo URLs to the public repo.
+  // The local file is gitignored (see .gitignore).
+  if (existsSync(LOCAL_MANIFEST_PATH)) {
+    console.log(
+      `fetch-external-plugins: using local override: ${LOCAL_MANIFEST_PATH.replace(ROOT + '\\', '').replace(ROOT + '/', '')}`,
+    );
+    return JSON.parse(readFileSync(LOCAL_MANIFEST_PATH, 'utf8'));
   }
-  const raw = readFileSync(MANIFEST_PATH, 'utf8');
-  return JSON.parse(raw);
+  if (existsSync(REPO_MANIFEST_PATH)) {
+    return JSON.parse(readFileSync(REPO_MANIFEST_PATH, 'utf8'));
+  }
+  return { plugins: [] };
 }
 
 function ensureDir(dir) {

@@ -27,6 +27,12 @@ junit.xml
 # referenced in external-plugins.json. Add a new entry here when you add
 # a new external plugin.
 
+# Local override for external-plugins.json. Lets operators add private
+# plugin repos without committing private URLs to the public repo.
+# Copy external-plugins.local.example.json to external-plugins.local.json
+# and edit.
+external-plugins.local.json
+
 # Local config
 .env
 .env.local
