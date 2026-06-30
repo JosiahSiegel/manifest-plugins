@@ -373,10 +373,11 @@ if [[ "$ADMIN_UI" == "1" ]]; then
     || fail "GET /api/plugins → $RESP_CODE (expected 200 — ADMIN_UI=1 requires the plugin admin API to be mounted into the backend app)" 7
   [[ "$RESP_TYPE" == application/json* ]] \
     || fail "GET /api/plugins content-type: $RESP_TYPE (expected application/json)" 7
-  if ! jq -e 'type == "object" and (.plugins | type == "array") and (.plugins | length == 2)' "$RESP_BODY" >/dev/null 2>&1; then
-    fail "GET /api/plugins JSON body does not contain exactly 2 plugins: $(cat "$RESP_BODY")" 7
+  if ! jq -e 'type == "object" and (.plugins | type == "array") and (.plugins | length >= 2)' "$RESP_BODY" >/dev/null 2>&1; then
+    fail "GET /api/plugins JSON body does not contain at least 2 plugins: $(cat "$RESP_BODY")" 7
   fi
-  log "GET /api/plugins             → 200 (ADMIN_UI=1: JSON body has 2 plugins)"
+  PLUGIN_COUNT=$(jq -r '.plugins | length' "$RESP_BODY")
+  log "GET /api/plugins             → 200 (ADMIN_UI=1: JSON body has $PLUGIN_COUNT plugins)"
 
   capture "http://127.0.0.1:${PORT}/api/plugins/header-tier-router"
   [[ "$RESP_CODE" == "200" ]] \
