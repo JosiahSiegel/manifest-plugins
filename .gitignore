@@ -20,6 +20,13 @@ Thumbs.db
 .cache/
 junit.xml
 
+# External plugins (fetched at build time from external-plugins.json).
+# In-tree plugins (default-policy, header-tier-router) are tracked.
+# External plugins materialize here only during builds; never committed.
+# Per-plugin ignore rules below list each external plugin currently
+# referenced in external-plugins.json. Add a new entry here when you add
+# a new external plugin.
+
 # Local config
 .env
 .env.local
