@@ -589,3 +589,30 @@ export const PROXY_ROUTING_OVERRIDE_NEW = `  ): Promise<ResolvedRouting> {
     // OpenAI-compatible surfaces use /v1/models IDs as route overrides.
     if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {
 `;
+
+// =============================================================================
+// Admin Express app mount (injected into main.ts)
+// =============================================================================
+
+export const ADMIN_MOUNT_OLD = `  const port = Number(process.env['PORT'] ?? 3001);
+  const host = process.env['BIND_ADDRESS'] ?? '127.0.0.1';
+  await app.listen(port, host);
+`;
+
+export const ADMIN_MOUNT_NEW = `  // Fork: mount the plugin admin Express app on the same port as the
+  // dashboard. The admin app handles /api/plugins/* and /admin/admin.js.
+  // The require() is best-effort: if the package is missing (upstream
+  // or CI without the fork's plugin layer), this is a no-op.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const admin = require('manifest-plugins');
+    if (admin && typeof admin.createAdminServer === 'function') {
+      expressApp.use(admin.createAdminServer());
+    }
+  } catch {
+    // admin app missing or failed to load; continue without it
+  }
+  const port = Number(process.env['PORT'] ?? 3001);
+  const host = process.env['BIND_ADDRESS'] ?? '127.0.0.1';
+  await app.listen(port, host);
+`;

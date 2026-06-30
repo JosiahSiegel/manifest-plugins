@@ -19,6 +19,10 @@
 #                                top-level "plugins" array. When MVP_UI=1
 #                                is set, a 404 or non-JSON response on this
 #                                endpoint fails the script.
+#   6. (ADMIN_UI=1 only) GET /api/plugins, /api/plugins/:id,
+#                                /api/plugins/health, /admin/admin.js, and /
+#                                prove the plugin admin API, bundle, and
+#                                dashboard mount are reachable on one port.
 #
 # This is the canonical validation that the image is a drop-in replacement
 # for the upstream Manifest image. Symbol-only checks (does the compiled
@@ -38,6 +42,8 @@
 #   3  one or more HTTP checks returned a non-200 status / wrong type
 #   4  unexpected runtime error during the test
 #   5  MVP_UI=1 was set but /api/v1/plugins is missing or non-JSON
+#   7  ADMIN_UI=1 was set but the plugin admin API, bundle, or dashboard
+#      mount is missing
 
 set -uo pipefail
 
@@ -55,6 +61,9 @@ if [[ $# -lt 1 ]]; then
   echo "  MVP_UI                  when 1, additionally assert /api/v1/plugins returns" >&2
   echo "                          HTTP 200 with a JSON body containing a plugins array." >&2
   echo "                          This is the gate for MVP-mode builds." >&2
+  echo "  ADMIN_UI                when 1, additionally assert /api/plugins," >&2
+  echo "                          /api/plugins/:id, /api/plugins/health," >&2
+  echo "                          /admin/admin.js, and the dashboard mount work." >&2
   echo "  PLUGINS_PATH            override the plugins API path (default: /api/v1/plugins)" >&2
   echo "  TIER_ROUTING_SMOKE      when 1, additionally assert that configured" >&2
   echo "                          header_tiers rules (e.g. x-manifest-tier)" >&2
@@ -69,6 +78,7 @@ IMAGE="$1"
 PORT="${PORT:-2099}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-60}"
 MVP_UI="${MVP_UI:-0}"
+ADMIN_UI="${ADMIN_UI:-0}"
 PLUGINS_PATH="${PLUGINS_PATH:-/api/v1/plugins}"
 TIER_ROUTING_SMOKE="${TIER_ROUTING_SMOKE:-0}"
 
@@ -86,19 +96,19 @@ if ! command -v openssl >/dev/null 2>&1; then
   echo "error: openssl not on PATH" >&2
   exit 4
 fi
-# MVP_UI requires jq to assert the plugins JSON array; we fail fast
+# MVP_UI and ADMIN_UI require jq to assert JSON response shapes; we fail fast
 # here (before the docker image check) so the user sees a clear
 # error instead of a confusing 200-vs-non-JSON failure mid-test.
 # Probe both presence AND functionality: a non-executable or stub
 # `jq` on PATH would otherwise pass `command -v` and fail later with
 # an unhelpful exit code.
-if [[ "$MVP_UI" == "1" ]]; then
+if [[ "$MVP_UI" == "1" || "$ADMIN_UI" == "1" ]]; then
   if ! command -v jq >/dev/null 2>&1; then
-    echo "error: MVP_UI=1 requires 'jq' on PATH to validate /api/v1/plugins response" >&2
+    echo "error: MVP_UI=1 or ADMIN_UI=1 requires 'jq' on PATH to validate plugin JSON responses" >&2
     exit 4
   fi
   if ! jq --version >/dev/null 2>&1; then
-    echo "error: MVP_UI=1 found 'jq' on PATH but it is not functional (jq --version failed)" >&2
+    echo "error: MVP_UI=1 or ADMIN_UI=1 found 'jq' on PATH but it is not functional (jq --version failed)" >&2
     exit 4
   fi
 fi
@@ -354,7 +364,64 @@ if [[ "$MVP_UI" == "1" ]]; then
   log "GET ${PLUGINS_PATH} → 200 (MVP_UI=1: JSON body has plugins array)"
 fi
 
-# (e) (TIER_ROUTING_SMOKE=1 only) /v1/chat/completions with x-manifest-tier
+# (f) (ADMIN_UI=1 only) plugin admin UI — assert the admin Express app
+# is mounted into the backend process and the dashboard index contains
+# the React island mount point. Failure exit code: 7.
+if [[ "$ADMIN_UI" == "1" ]]; then
+  capture "http://127.0.0.1:${PORT}/api/plugins"
+  [[ "$RESP_CODE" == "200" ]] \
+    || fail "GET /api/plugins → $RESP_CODE (expected 200 — ADMIN_UI=1 requires the plugin admin API to be mounted into the backend app)" 7
+  [[ "$RESP_TYPE" == application/json* ]] \
+    || fail "GET /api/plugins content-type: $RESP_TYPE (expected application/json)" 7
+  if ! jq -e 'type == "object" and (.plugins | type == "array") and (.plugins | length == 3)' "$RESP_BODY" >/dev/null 2>&1; then
+    fail "GET /api/plugins JSON body does not contain exactly 3 plugins: $(cat "$RESP_BODY")" 7
+  fi
+  log "GET /api/plugins             → 200 (ADMIN_UI=1: JSON body has 3 plugins)"
+
+  capture "http://127.0.0.1:${PORT}/api/plugins/anthropic-billing-header"
+  [[ "$RESP_CODE" == "200" ]] \
+    || fail "GET /api/plugins/anthropic-billing-header → $RESP_CODE (expected 200)" 7
+  [[ "$RESP_TYPE" == application/json* ]] \
+    || fail "GET /api/plugins/anthropic-billing-header content-type: $RESP_TYPE (expected application/json)" 7
+  if ! jq -e 'type == "object" and (.plugin.id == "anthropic-billing-header") and (.plugin.name | type == "string") and (.plugin.version | type == "string") and (.plugin.kind | type == "string")' "$RESP_BODY" >/dev/null 2>&1; then
+    fail "GET /api/plugins/anthropic-billing-header JSON body does not contain plugin metadata: $(cat "$RESP_BODY")" 7
+  fi
+  log "GET /api/plugins/anthropic-billing-header → 200 (metadata present)"
+
+  capture "http://127.0.0.1:${PORT}/api/plugins/health"
+  [[ "$RESP_CODE" == "200" ]] \
+    || fail "GET /api/plugins/health → $RESP_CODE (expected 200)" 7
+  [[ "$RESP_TYPE" == application/json* ]] \
+    || fail "GET /api/plugins/health content-type: $RESP_TYPE (expected application/json)" 7
+  if ! jq -e 'type == "object" and .status == "ok"' "$RESP_BODY" >/dev/null 2>&1; then
+    fail "GET /api/plugins/health JSON body is not {status:\"ok\"}: $(cat "$RESP_BODY")" 7
+  fi
+  log "GET /api/plugins/health      → 200 ({status: ok})"
+
+  capture "http://127.0.0.1:${PORT}/admin/admin.js"
+  [[ "$RESP_CODE" == "200" ]] \
+    || fail "GET /admin/admin.js → $RESP_CODE (expected 200 — admin UI bundle is missing or admin Express app is not mounted)" 7
+  case "$RESP_TYPE" in
+    *javascript*) ;;
+    *) fail "GET /admin/admin.js content-type: $RESP_TYPE (expected javascript)" 7 ;;
+  esac
+  if (( RESP_BYTES <= 100000 )); then
+    fail "GET /admin/admin.js downloaded $RESP_BYTES bytes (expected > 100000 — bundle may be missing or truncated)" 7
+  fi
+  log "GET /admin/admin.js          → 200 ($RESP_BYTES bytes, $RESP_TYPE)"
+
+  capture "http://127.0.0.1:${PORT}/"
+  [[ "$RESP_CODE" == "200" ]] \
+    || fail "GET / → $RESP_CODE during ADMIN_UI=1 mount check (expected 200)" 7
+  [[ "$RESP_TYPE" == text/html* ]] \
+    || fail "GET / content-type during ADMIN_UI=1 mount check: $RESP_TYPE (expected text/html)" 7
+  if ! grep -q 'id="plugin-manager-root"' "$RESP_BODY"; then
+    fail "GET / returned dashboard HTML without id=\"plugin-manager-root\" — dashboard overlay did not land" 7
+  fi
+  log "GET /                       → 200 (ADMIN_UI=1: dashboard contains plugin manager mount)"
+fi
+
+# (g) (TIER_ROUTING_SMOKE=1 only) /v1/chat/completions with x-manifest-tier
 # — assert that configured `header_tiers` rules (e.g. `x-manifest-tier`)
 # win over `body.model`. Regression fix for upstream commit 2ab748a6
 # (PR #2350, 2026-06-29), which added an explicit-model early-return
@@ -467,6 +534,9 @@ echo "PASS: $IMAGE"
 echo "  serves the Manifest dashboard on http://127.0.0.1:${PORT}/"
 if [[ "$MVP_UI" == "1" ]]; then
   echo "  MVP_UI=1: /api/v1/plugins reachable with JSON body"
+fi
+if [[ "$ADMIN_UI" == "1" ]]; then
+  echo "  ADMIN_UI=1: plugin admin API, bundle, and dashboard mount reachable"
 fi
 if [[ "$TIER_ROUTING_SMOKE" == "1" ]]; then
   echo "  TIER_ROUTING_SMOKE=1: x-manifest-tier override honored"

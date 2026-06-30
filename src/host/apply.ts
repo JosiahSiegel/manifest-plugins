@@ -26,6 +26,8 @@
  */
 import { promises as fs } from 'fs';
 import {
+  ADMIN_MOUNT_NEW,
+  ADMIN_MOUNT_OLD,
   HELPER_MARKER_OLD,
   HOST_HELPER_SOURCE,
   PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW,
@@ -339,6 +341,28 @@ export async function applyProxyServiceHost(
  * idempotency check, and its own upstream-drift detection. If any
  * sub-edit fails, the caller can still see which one drifted.
  */
+export async function applyAdminMount(
+  filePath: string,
+  options: ApplyOptions = {},
+): Promise<ApplyResult> {
+  // Mounts the plugin admin Express app on the backend's expressApp
+  // instance. The patch adds a try { require('manifest-plugins') } +
+  // expressApp.use(admin.createAdminServer()) call immediately before
+  // `app.listen(port, host)`. After the patch, the dashboard's
+  // `<script src="/admin/admin.js">` and the React UI's `fetch('/api/plugins')`
+  // both resolve on the same port as the backend (2099) — no separate
+  // sidecar, no reverse proxy. Idempotent via the `postPatchSymbol`.
+  return applyPatch(
+    {
+      filePath,
+      postPatchSymbol: 'expressApp.use(admin.createAdminServer())',
+      oldText: ADMIN_MOUNT_OLD,
+      newText: ADMIN_MOUNT_NEW,
+    },
+    options,
+  );
+}
+
 export async function applyProxyRoutingOverrideHost(
   filePath: string,
   options: ApplyOptions = {},
@@ -416,12 +440,19 @@ export interface ManifestFileSpec {
   providerClient: string;
   proxyRateLimiter: string;
   proxyService: string;
+  /**
+   * Path to the Manifest backend's `main.ts`. Used by `applyAllFour` to
+   * install the admin Express mount. Optional for `applyAll` (the
+   * 3-file patcher) which leaves it untouched.
+   */
+  main?: string;
 }
 
 export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
   providerClient: 'packages/backend/src/routing/proxy/provider-client.ts',
   proxyRateLimiter: 'packages/backend/src/routing/proxy/proxy-rate-limiter.ts',
   proxyService: 'packages/backend/src/routing/proxy/proxy.service.ts',
+  main: 'packages/backend/src/main.ts',
 };
 
 export interface ApplyAllResult {
@@ -472,6 +503,13 @@ export interface ApplyAllFourResult extends ApplyAllResult {
    * patches from reporting `applied` / `noop`.
    */
   proxyRoutingOverride: ApplyResult;
+  /**
+   * Result of the admin Express mount patch on `main.ts`. Mounts the
+   * plugin admin routes (`/api/plugins/*` + `/admin/admin.js`) on the
+   * same Express instance as the dashboard, so the React UI is
+   * reachable on the backend's port (2099) without a separate sidecar.
+   */
+  adminMount: ApplyResult;
 }
 
 /**
@@ -499,15 +537,24 @@ export async function applyAllFour(
 ): Promise<ApplyAllFourResult> {
   const resolve = (rel: string) => `${manifestRoot.replace(/\/$/, '')}/${rel}`;
   const proxyServicePath = resolve(files.proxyService);
-  // Phase 1: provider-client + rate-limiter run in parallel.
+  if (files.main === undefined) {
+    throw new Error(
+      'applyAllFour: files.main is required (path to packages/backend/src/main.ts for the admin mount patch)',
+    );
+  }
+  const mainPath = resolve(files.main);
+  // Phase 1: provider-client + rate-limiter + admin-mount run in parallel
+  //          (each writes a different file).
   // Phase 2: message-cap runs alone so the file is settled.
   // Phase 3: routing-override runs alone so its anchor scan
   //          sees the post-message-cap file state.
-  const [providerClient, proxyRateLimiter, proxyService] = await Promise.all([
-    applyProviderClientHost(resolve(files.providerClient), options),
-    applyProxyRateLimiterHost(resolve(files.proxyRateLimiter), options),
-    applyProxyServiceHost(proxyServicePath, options),
-  ]);
+  const [providerClient, proxyRateLimiter, proxyService, adminMount] =
+    await Promise.all([
+      applyProviderClientHost(resolve(files.providerClient), options),
+      applyProxyRateLimiterHost(resolve(files.proxyRateLimiter), options),
+      applyProxyServiceHost(proxyServicePath, options),
+      applyAdminMount(mainPath, options),
+    ]);
   const proxyRoutingOverride = await applyProxyRoutingOverrideHost(
     proxyServicePath,
     options,
@@ -517,15 +564,18 @@ export async function applyAllFour(
     proxyRateLimiter,
     proxyService,
     proxyRoutingOverride,
+    adminMount,
     fullyApplied:
       providerClient.status !== 'upstream-drift' &&
       proxyRateLimiter.status !== 'upstream-drift' &&
       proxyService.status !== 'upstream-drift' &&
-      proxyRoutingOverride.status !== 'upstream-drift',
+      proxyRoutingOverride.status !== 'upstream-drift' &&
+      adminMount.status !== 'upstream-drift',
     hasDrift:
       providerClient.status === 'upstream-drift' ||
       proxyRateLimiter.status === 'upstream-drift' ||
       proxyService.status === 'upstream-drift' ||
-      proxyRoutingOverride.status === 'upstream-drift',
+      proxyRoutingOverride.status === 'upstream-drift' ||
+      adminMount.status === 'upstream-drift',
   };
 }

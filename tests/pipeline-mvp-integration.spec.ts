@@ -62,6 +62,22 @@ const PATCHED_MANIFEST_FILES = [
       '    private readonly headerTierService: HeaderTierService,\n' +
       '  ) {\n',
   },
+  {
+    // Synthesized upstream `main.ts` carrying the listen anchor the
+    // admin-mount patch needs. Mirrors the `apply.ts` test fixture.
+    relativePath: 'packages/backend/src/main.ts',
+    content:
+      "import { NestFactory } from '@nestjs/core';\n" +
+      "import { AppModule } from './app.module';\n" +
+      '\n' +
+      'export async function bootstrap() {\n' +
+      '  const app = await NestFactory.create(AppModule);\n' +
+      '  const expressApp = app.getHttpAdapter().getInstance();\n' +
+      "  const port = Number(process.env['PORT'] ?? 3001);\n" +
+      "  const host = process.env['BIND_ADDRESS'] ?? '127.0.0.1';\n" +
+      '  await app.listen(port, host);\n' +
+      '}\n',
+  },
 ] as const;
 
 /**
@@ -396,7 +412,7 @@ describe('apply CLI integration', () => {
       expect(result.stderr).not.toContain('choose only one Manifest source');
       expect(result.stdout).toContain('[manifest-plugins/apply] SOURCE_COMMIT=');
       expect(result.stdout).toContain(
-        '[manifest-plugins/apply] all four host hooks patched (or already no-op)',
+        '[manifest-plugins/apply] all five host hooks patched (or already no-op)',
       );
     } finally {
       cleanup(tmp);

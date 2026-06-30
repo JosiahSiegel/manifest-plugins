@@ -127,10 +127,14 @@ export function createAdminServer(options?: AdminServerOptions): Express {
     });
   });
 
-  // 404 fallback for /api/* (admin namespace)
-  app.use('/api', (_req, res) => {
-    res.status(404).json({ error: 'not found' });
-  });
+  // Note: no catch-all 404 middleware here. When the admin app is
+  // mounted as a sub-app via `expressApp.use(adminApp)`, a catch-all
+  // would intercept ALL `/api/*` requests — including NestJS routes
+  // like `/api/v1/health` that the admin namespace does not own.
+  // The 404 for unmatched admin routes is handled per-route above
+  // (e.g. GET /api/plugins/:id returns 404 for unknown ids).
+  // When the admin app is run standalone (e.g. in unit tests),
+  // Express's default 404 handler kicks in for unmatched routes.
 
   return app;
 }

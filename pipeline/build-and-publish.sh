@@ -369,10 +369,11 @@ E2E_OK=1
 E2E_LOG="$(mktemp -t e2e-test.XXXXXX.log)"
 E2E_TAG_FOR_SCRIPT="${IMAGE_NAME}:${E2E_IMAGE_TAG}"
 E2E_ENV=()
-if [[ $MVP -eq 1 ]]; then
-  E2E_ENV=(MVP_UI=1)
-fi
-if ! env "${E2E_ENV[@]}" bash "$(dirname "$0")/e2e-test.sh" "$E2E_TAG_FOR_SCRIPT" >"$E2E_LOG" 2>&1; then
+  E2E_ENV=(ADMIN_UI=1)
+  if [[ $MVP -eq 1 ]]; then
+    E2E_ENV+=(MVP_UI=1)
+  fi
+  if ! env "${E2E_ENV[@]}" bash "$(dirname "$0")/e2e-test.sh" "$E2E_TAG_FOR_SCRIPT" >"$E2E_LOG" 2>&1; then
   E2E_OK=0
   echo "  FAIL — e2e test did not pass for ${E2E_IMAGE_DIGEST}; see log below."
   echo "  --- e2e log (${E2E_LOG}) ---"
