@@ -196,6 +196,67 @@ If a CI environment can't access an external repo, the build will fail.
 Either grant access or temporarily remove the entry from your
 `external-plugins.local.json` (or the shared `external-plugins.json`).
 
+### GitHub Actions: private plugin in CI
+
+The `manifest-plugins` repo's GitHub Actions workflow (`.github/workflows/build-image.yml`)
+has an optional step that writes your private plugin config from secrets
+before the build runs. **Public forks don't have these secrets**, so the
+step is skipped and their build uses only the in-tree plugins. When you
+set both secrets on your repo, the build includes your private plugins.
+
+**Setup:**
+
+1. **Create a PAT** with `repo` scope on the private plugin repo(s).
+   Store it as a repository secret named `PLUGINS_PAT`:
+   - Repo → Settings → Secrets and variables → Actions → New repository secret
+   - Name: `PLUGINS_PAT`
+   - Value: the PAT (e.g. `ghp_...`)
+
+2. **Create the local config secret.** Build the JSON content for
+   `external-plugins.local.json` locally (e.g. the example below), then
+   store it as a repository secret named `EXTERNAL_PLUGINS_LOCAL`:
+   - Name: `EXTERNAL_PLUGINS_LOCAL`
+   - Value (example):
+     ```json
+     {
+       "plugins": [
+         {
+           "name": "anthropic-billing-header",
+           "source": "git+ssh://git@github.com/JosiahSiegel/manifest-plugin-anthropic-billing-header.git",
+           "ref": "v0.6.0",
+           "private": true,
+           "enabledByDefault": true
+         }
+       ]
+     }
+     ```
+
+3. **Push a commit / tag.** The workflow's "Materialize private
+   external-plugins config" step will:
+   - Detect both secrets are present
+   - Write `external-plugins.local.json` from `EXTERNAL_PLUGINS_LOCAL`
+   - Export `GIT_TOKEN=$PLUGINS_PAT` into the build environment
+   - The subsequent `npm run build` step fetches your private plugin
+     via HTTPS+token and includes it in the image.
+
+4. **Verify.** Check the workflow logs for:
+   ```
+   Materialize private external-plugins config
+     Wrote external-plugins.local.json (content masked in logs)
+   Run build-and-publish.sh pipeline
+     fetch-external-plugins: using local override: external-plugins.local.json
+     fetch-external-plugins: anthropic-billing-header @ v0.6.0
+       (private repo — using token auth)
+       -> src/plugins/anthropic-billing-header
+   ```
+
+**Removing a private plugin from CI:** delete either secret (or both).
+The step skips, and the build reverts to the in-tree plugin set.
+
+**Note on `source` URL in CI:** the SSH URL (`git+ssh://git@github.com/...`)
+is fine — the fetch script auto-substitutes HTTPS+token when `GIT_TOKEN`
+is set. You don't need to change the `source` for CI vs local.
+
 ## Removing an external plugin
 
 1. Remove the entry from `external-plugins.local.json` (or
