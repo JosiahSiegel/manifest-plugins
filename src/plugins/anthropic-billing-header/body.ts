@@ -156,7 +156,6 @@ export function buildSystemArray(
   const identity: SystemBlock = {
     type: 'text',
     text: CLAUDE_CODE_IDENTITY_TEXT,
-    cache_control: { type: 'ephemeral', ttl: '1h' },
   };
   const cleaned = stripExistingFingerprint(normalizeSystemBlocks(rawSystem));
   return [billingBlock, identity, ...cleaned];
