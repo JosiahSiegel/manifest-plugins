@@ -63,6 +63,26 @@ describe('host snippet: existing anchors (pre-existing fixtures, regression cove
     expect(HOST_HELPER_SOURCE).toContain('transformRequest');
   });
 
+  it('HOST_HELPER_SOURCE REPLACES requestBody wholesale (not shallow-merges) so plugins can control JSON key order', () => {
+    // Required for `anthropic-billing-header` v0.3.0+ to prepend a
+    // `system[]` block with the Claude Code identity at the start of
+    // the request body (Anthropic's classifier keys on system[0]
+    // content). Shallow-merging would keep the upstream's existing
+    // keys at the start of the serialized object and let later keys
+    // (like `messages`) come before `system`, breaking the byte-exact
+    // cch preimage. The contract here is: when a plugin returns a
+    // requestBody, the host uses that exact object — no merge with
+    // the previous result.requestBody.
+    expect(HOST_HELPER_SOURCE).not.toContain(
+      '{ ...result.requestBody, ...(out.requestBody',
+    );
+    // The replacement branch must reference `out.requestBody` directly
+    // (no spread of the prior body).
+    expect(HOST_HELPER_SOURCE).toContain(
+      '(out.requestBody as Record<string, unknown>)',
+    );
+  });
+
   it('HOST_HELPER_SOURCE honors MANIFEST_PLUGINS_DISABLED at module load', () => {
     // Wave 5: the pasted snippet must call
     // `require('manifest-plugins').applyDisabledListFromEnv(...)` so

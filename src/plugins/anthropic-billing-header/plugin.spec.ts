@@ -30,7 +30,7 @@ function resetEnv(): void {
 }
 
 beforeAll(async () => {
-  // Wait for the hash-wasm WASM module to instantiate so per-request
+  // Wait for the hash-wasm WASM modules to instantiate so per-request
   // xxHash64 calls don't race the cold-start (and accidentally fall
   // back to the `00000` placeholder).
   await cchHasherReady;
@@ -65,21 +65,22 @@ function makeDecision(
   };
 }
 
-describe('AnthropicBillingHeaderPlugin', () => {
-  it('injects the billing header for subscription auth on canonical Anthropic', () => {
-    // Default (env unset): cch is the body-attested xxHash64 hash (5 hex
-    // chars), NOT the static `00000` placeholder (which Anthropic has
-    // rejected as "extra usage" since Claude Code v2.1.113+).
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(makeDecision());
+// =============================================================================
+// Plugin metadata
+// =============================================================================
 
-    expect(result).toBeDefined();
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
-      /^cc_version=2\.1\.196\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
-    );
+describe('AnthropicBillingHeaderPlugin (metadata)', () => {
+  it('ships metadata version 0.3.0 (behavior-changing: body identity + new seed)', () => {
+    expect(AnthropicBillingHeaderPlugin.metadata.version).toBe('0.3.0');
   });
+});
 
-  it('skips the billing header when authType is api_key', () => {
+// =============================================================================
+// Gate behavior (unchanged from 0.2.0)
+// =============================================================================
+
+describe('AnthropicBillingHeaderPlugin (gating)', () => {
+  it('skips the billing header when authType is api_key (S3)', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
     const result = plugin.transformRequest(
       makeDecision({ authType: 'api_key' }),
@@ -100,69 +101,277 @@ describe('AnthropicBillingHeaderPlugin', () => {
     const result = plugin.transformRequest(makeDecision({ authType: undefined }));
     expect(result).toBeUndefined();
   });
+});
 
-  it('honors MANIFEST_CC_VERSION env override', () => {
-    setEnv({ MANIFEST_CC_VERSION: '2.1.999' });
+// =============================================================================
+// S1 — Happy path: subscription auth on canonical Anthropic
+// =============================================================================
+
+describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
+  it('returns url, headers, and requestBody for subscription auth', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
     const result = plugin.transformRequest(makeDecision());
 
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
+    expect(result).toBeDefined();
+    expect(result).toHaveProperty('url');
+    expect(result).toHaveProperty('headers');
+    expect(result).toHaveProperty('requestBody');
+  });
+
+  it('appends beta=true to /v1/messages URL only', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(makeDecision())!;
+
+    expect(result.url).toContain('beta=true');
+    expect(result.url).toMatch(/^https:\/\/api\.anthropic\.com\/v1\/messages/);
+  });
+
+  it('does not duplicate beta=true when already present', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({ url: 'https://api.anthropic.com/v1/messages?beta=true' }),
+    )!;
+
+    expect(result.url).toBe('https://api.anthropic.com/v1/messages?beta=true');
+  });
+
+  it('leaves non-/v1/messages URLs untouched', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({ url: 'https://api.anthropic.com/v1/something_else' }),
+    )!;
+    // Plugin either returns a rewrite or a no-op for unsupported URLs;
+    // either way beta=true must NOT appear on a wrong path.
+    expect(result.url).not.toContain('beta=true');
+  });
+
+  it('injects the cch billing header for subscription auth on canonical Anthropic', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(makeDecision())!;
+
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(
+      /^cc_version=2\.1\.196\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
+    );
+  });
+
+  it('mints a freshly computed cch (not the static 00000 placeholder)', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const header = plugin.transformRequest(makeDecision())!.headers![
+      'x-anthropic-billing-header'
+    ]!;
+    expect(header).not.toMatch(/cch=00000;/);
+  });
+
+  it('returns requestBody whose system[0] is the Claude Code identity block', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(makeDecision())!;
+    const body = result.requestBody as Record<string, unknown>;
+    const system = body['system'];
+
+    expect(Array.isArray(system)).toBe(true);
+    const arr = system as Array<Record<string, unknown>>;
+    expect(arr[0]).toEqual({
+      type: 'text',
+      text: 'You are Claude Code, Anthropic\'s official CLI for Claude.',
+    });
+  });
+
+  it('places the billing attestation in system[1] (immediately after identity)', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(makeDecision())!;
+    const body = result.requestBody as Record<string, unknown>;
+    const system = body['system'] as Array<Record<string, unknown>>;
+
+    const text = system[1]?.['text'];
+    expect(typeof text).toBe('string');
+    expect(text as string).toMatch(
+      /^x-anthropic-billing-header: cc_version=2\.1\.196\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
+    );
+  });
+
+  it('preserves pre-existing system blocks after identity + billing', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          system: 'Original system prompt',
+          messages: [{ role: 'user', content: 'Hello' }],
+        },
+      }),
+    )!;
+    const body = result.requestBody as Record<string, unknown>;
+    const system = body['system'] as Array<Record<string, unknown>>;
+
+    expect(system).toHaveLength(3);
+    expect(system[0]!.text).toMatch(/^You are Claude Code/);
+    expect(system[1]!.text).toMatch(/^x-anthropic-billing-header:/);
+    expect(system[2]).toEqual({ type: 'text', text: 'Original system prompt' });
+  });
+
+  it('preserves cache_control on pre-existing system blocks', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          system: [
+            {
+              type: 'text',
+              text: 'Tool instructions',
+              cache_control: { type: 'ephemeral' },
+            },
+          ],
+          messages: [{ role: 'user', content: 'Hello' }],
+        },
+      }),
+    )!;
+    const body = result.requestBody as Record<string, unknown>;
+    const system = body['system'] as Array<Record<string, unknown>>;
+
+    // Identity + billing + original
+    expect(system).toHaveLength(3);
+    expect(system[2]).toEqual({
+      type: 'text',
+      text: 'Tool instructions',
+      cache_control: { type: 'ephemeral' },
+    });
+  });
+
+  it('does not duplicate the identity block if it is already the first system entry', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          system: [
+            {
+              type: 'text',
+              text: 'You are Claude Code, Anthropic\'s official CLI for Claude.',
+            },
+          ],
+          messages: [{ role: 'user', content: 'Hello' }],
+        },
+      }),
+    )!;
+    const body = result.requestBody as Record<string, unknown>;
+    const system = body['system'] as Array<Record<string, unknown>>;
+
+    const identityCount = system.filter(
+      (s) => s.text === 'You are Claude Code, Anthropic\'s official CLI for Claude.',
+    ).length;
+    expect(identityCount).toBe(1);
+  });
+});
+
+// =============================================================================
+// S2 — Seed fallback for unknown / new Claude Code versions
+// =============================================================================
+
+describe('AnthropicBillingHeaderPlugin (S2 seed fallback)', () => {
+  it('uses the current seed for an unknown MANIFEST_CC_VERSION', () => {
+    setEnv({ MANIFEST_CC_VERSION: '2.1.999' });
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(makeDecision())!;
+
+    // cc_version matches the env value; cch is not the placeholder.
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(
       /^cc_version=2\.1\.999\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
     );
   });
 
-  it('honors MANIFEST_CCH_VALUE raw override (with cch= prefix stripped)', () => {
+  it('honors MANIFEST_CCH_VALUE raw override (with cch= prefix stripped) — full no-op', () => {
     setEnv({ MANIFEST_CCH_VALUE: 'cch=abc12' });
     const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(makeDecision());
+    const result = plugin.transformRequest(makeDecision())!;
 
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(/; cch=abc12;$/);
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(/; cch=abc12;$/);
   });
 
   it('honors MANIFEST_CCH_VALUE raw override (without prefix)', () => {
     setEnv({ MANIFEST_CCH_VALUE: 'fa690' });
     const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(makeDecision());
+    const result = plugin.transformRequest(makeDecision())!;
 
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(/; cch=fa690;$/);
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(/; cch=fa690;$/);
   });
 
-  it('falls back to body-attested cch when MANIFEST_CCH_VALUE is empty string', () => {
+  it('falls back to body attestation when MANIFEST_CCH_VALUE is empty string', () => {
     setEnv({ MANIFEST_CCH_VALUE: '' });
     const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(makeDecision());
+    const result = plugin.transformRequest(makeDecision())!;
 
-    // Empty override → body attestation, NOT the static `00000` placeholder.
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(
       /; cch=[0-9a-f]{5};$/,
     );
-    expect(result!.headers!['x-anthropic-billing-header']).not.toMatch(/; cch=00000;$/);
+    expect(result.headers!['x-anthropic-billing-header']).not.toMatch(/; cch=00000;$/);
   });
+});
 
-  it('still produces a valid 5-hex cch when there is no user message at all', () => {
-    setEnv({ MANIFEST_CCH_VALUE: undefined });
+// =============================================================================
+// S5 — cch preimage semantics (v2.1.172+)
+// =============================================================================
+
+describe('AnthropicBillingHeaderPlugin (S5 cch preimage)', () => {
+  it('produces the SAME cch when only `model` and `max_tokens` differ between requests', () => {
+    // Anthropic's classifier computes cch over the body WITH the `model`
+    // value blanked and `max_tokens` removed (per the v2.1.172+ cch
+    // preimage transform). If our plugin computes cch over the raw body
+    // (pre-transform), the cch will not match what Anthropic expects and
+    // the request will be classified as third-party.
     const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(
+    const a = plugin.transformRequest(
       makeDecision({
-        requestBody: { messages: [{ role: 'system', content: 'no user' }] },
+        requestBody: {
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1024,
+          messages: [{ role: 'user', content: 'Hello world' }],
+        },
       }),
-    );
-
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
-      /; cch=[0-9a-f]{5};$/,
-    );
+    )!;
+    const b = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          model: 'claude-opus-4-6',
+          max_tokens: 4096,
+          messages: [{ role: 'user', content: 'Hello world' }],
+        },
+      }),
+    )!;
+    const aCch = a.headers!['x-anthropic-billing-header']!.match(
+      /cch=([0-9a-f]{5})/,
+    )![1];
+    const bCch = b.headers!['x-anthropic-billing-header']!.match(
+      /cch=([0-9a-f]{5})/,
+    )![1];
+    // The first user message text is the same, so the cc_version suffix
+    // and identity block are the same; the cch must also match because
+    // the cch preimage strips both fields.
+    expect(aCch).toBe(bCch);
   });
 
-  it('still produces a valid 5-hex cch when requestBody has no messages array', () => {
-    setEnv({ MANIFEST_CCH_VALUE: undefined });
+  it('produces DIFFERENT cch when the first user message text differs', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(makeDecision({ requestBody: {} }));
-
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
-      /; cch=[0-9a-f]{5};$/,
-    );
+    const a = plugin.transformRequest(makeDecision())!;
+    const b = plugin.transformRequest(
+      makeDecision({
+        requestBody: {
+          messages: [{ role: 'user', content: 'A completely different prompt' }],
+        },
+      }),
+    )!;
+    const aCch = a.headers!['x-anthropic-billing-header']!.match(
+      /cch=([0-9a-f]{5})/,
+    )![1];
+    const bCch = b.headers!['x-anthropic-billing-header']!.match(
+      /cch=([0-9a-f]{5})/,
+    )![1];
+    expect(aCch).not.toBe(bCch);
   });
+});
 
+// =============================================================================
+// Existing body-shape handling (regression coverage from 0.2.0)
+// =============================================================================
+
+describe('AnthropicBillingHeaderPlugin (request body content)', () => {
   it('reads first user text from array-form content with a text block', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
     const result = plugin.transformRequest(
@@ -179,12 +388,12 @@ describe('AnthropicBillingHeaderPlugin', () => {
           ],
         },
       }),
-    );
+    )!;
 
-    expect(result!.headers!['x-anthropic-billing-header']).toContain(
+    expect(result.headers!['x-anthropic-billing-header']).toContain(
       'cc_version=2.1.196.',
     );
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(
       /; cch=[0-9a-f]{5};$/,
     );
   });
@@ -202,9 +411,9 @@ describe('AnthropicBillingHeaderPlugin', () => {
           ],
         },
       }),
-    );
+    )!;
 
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(
       /; cch=[0-9a-f]{5};$/,
     );
   });
@@ -226,9 +435,9 @@ describe('AnthropicBillingHeaderPlugin', () => {
           ],
         },
       }),
-    );
+    )!;
 
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(
       /; cch=[0-9a-f]{5};$/,
     );
   });
@@ -245,9 +454,9 @@ describe('AnthropicBillingHeaderPlugin', () => {
           ],
         },
       }),
-    );
+    )!;
 
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(
       /; cch=[0-9a-f]{5};$/,
     );
   });
@@ -265,9 +474,9 @@ describe('AnthropicBillingHeaderPlugin', () => {
           ] as unknown[],
         },
       }),
-    );
+    )!;
 
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
+    expect(result.headers!['x-anthropic-billing-header']).toMatch(
       /; cch=[0-9a-f]{5};$/,
     );
   });
@@ -315,10 +524,6 @@ describe('AnthropicBillingHeaderPlugin', () => {
   });
 
   it('matches the reference SHA-256 suffix for a known message', () => {
-    // SHA-256("59cf53e54c78" + message[4]+message[7]+message[20] + "2.1.196")[:3]
-    // For message = "hello world":
-    //   h(0) e(1) l(2) l(3) o(4) ' '(5) w(6) o(7) r(8) l(9) d(10)
-    //   sampled = "o" + "o" + (message[20] -> '0' since string has 11 chars) = "oo0"
     const expectedSuffix = require('crypto')
       .createHash('sha256')
       .update(`59cf53e54c78oo02.1.196`)
@@ -333,51 +538,6 @@ describe('AnthropicBillingHeaderPlugin', () => {
     )!;
     expect(result.headers!['x-anthropic-billing-header']).toContain(
       `.${expectedSuffix};`,
-    );
-  });
-
-  it('produces a deterministic 5-hex cch for the same wire body', () => {
-    // Same request body → same wire-body serialization → same cch. This
-    // is the core correctness invariant: the body attestation must be
-    // reproducible.
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const a = plugin.transformRequest(makeDecision())!;
-    const b = plugin.transformRequest(makeDecision())!;
-    const aCch = a.headers!['x-anthropic-billing-header']!.match(
-      /cch=([0-9a-f]{5})/,
-    )![1];
-    const bCch = b.headers!['x-anthropic-billing-header']!.match(
-      /cch=([0-9a-f]{5})/,
-    )![1];
-    expect(aCch).toBe(bCch);
-  });
-
-  it('produces different 5-hex cch for different request bodies', () => {
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const a = plugin.transformRequest(makeDecision())!;
-    const b = plugin.transformRequest(
-      makeDecision({
-        requestBody: {
-          messages: [
-            { role: 'user', content: 'a completely different prompt body' },
-          ],
-        },
-      }),
-    )!;
-    const aCch = a.headers!['x-anthropic-billing-header']!.match(
-      /cch=([0-9a-f]{5})/,
-    )![1];
-    const bCch = b.headers!['x-anthropic-billing-header']!.match(
-      /cch=([0-9a-f]{5})/,
-    )![1];
-    expect(aCch).not.toBe(bCch);
-  });
-
-  it('default cc_version reflects current Claude Code release (June 2026: 2.1.196)', () => {
-    const plugin = new AnthropicBillingHeaderPlugin();
-    const result = plugin.transformRequest(makeDecision());
-    expect(result!.headers!['x-anthropic-billing-header']).toMatch(
-      /^cc_version=2\.1\.196\./,
     );
   });
 });

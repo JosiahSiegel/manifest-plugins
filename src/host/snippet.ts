@@ -29,8 +29,20 @@ export const HOST_HELPER_SOURCE = `/**
  *
  * Plugin contract: each entry in \`require('manifest-plugins').plugins\` is an
  * object with a synchronous \`transformRequest(decision)\` method that returns
- * \`{ url?, headers?, requestBody? }\` with optional overrides. Plugin errors
- * are caught and logged; one broken plugin must not break the request.
+ * \`{ url?, headers?, requestBody? }\` with optional overrides.
+ *
+ *   - url          — replacement for the current request URL
+ *   - headers      — merged into the current headers map (shallow merge,
+ *                    last plugin wins per key)
+ *   - requestBody  — REPLACED wholesale when the plugin returns one (NOT
+ *                    shallow-merged). Plugins that mutate the body to
+ *                    prepend a system[] block (e.g. for Anthropic OAuth
+ *                    fingerprinting) MUST see their output land on the
+ *                    wire byte-for-byte; a shallow merge would keep the
+ *                    upstream's key order intact and break byte-faithful
+ *                    consumers (the cch preimage is key order-sensitive).
+ *
+ * Plugin errors are caught and logged; one broken plugin must not break the request.
  */
 function applyRequestTransformPlugins(
   decision: {
@@ -87,9 +99,16 @@ function applyRequestTransformPlugins(
             out.headers && typeof out.headers === 'object'
               ? { ...result.headers, ...(out.headers as Record<string, string>) }
               : result.headers,
+          // requestBody is REPLACED wholesale when the plugin returns one,
+          // not shallow-merged. Plugins that mutate the body (e.g. to
+          // prepend a system[] block for Anthropic OAuth fingerprinting)
+          // MUST see their output land on the wire byte-for-byte; a
+          // shallow merge would leave the upstream's key order intact
+          // and break byte-faithful consumers (the cch preimage is key
+          // order-sensitive).
           requestBody:
             out.requestBody && typeof out.requestBody === 'object'
-              ? { ...result.requestBody, ...(out.requestBody as Record<string, unknown>) }
+              ? (out.requestBody as Record<string, unknown>)
               : result.requestBody,
         };
       }

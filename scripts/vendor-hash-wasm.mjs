@@ -11,21 +11,19 @@
  * plain `require('hash-wasm')` would fail with MODULE_NOT_FOUND at
  * runtime.
  *
- * Two facts make a per-plugin bundle the right shape:
- *   - hash-wasm ships a ~1.1 MB self-contained WASM blob (the
- *     xxhash64 binary is built in to the same .umd.js entry, plus a
- *     handful of lazily-loaded per-algorithm .umd.min.js chunks).
- *     We bundle only the xxhash64 chunk to keep the dist small.
- *   - esbuild produces a single CJS bundle that the plugin's compiled
- *     `require()` can resolve, no matter where the host repo's
- *     node_modules is on disk at runtime.
+ * Implementation detail: v0.3.0 split the plugin into multiple files
+ * (`plugin.ts`, `cch.ts`, `body.ts`, `constants.ts`). The
+ * `require('hash-wasm')` call lives in `cch.ts` after the split; the
+ * vendor step scans every plugin .js file for the require and bundles
+ * them all into one shared `vendor-hash-wasm.js` that any of them can
+ * pull in.
  *
  * Run automatically via `npm run build`. Re-runnable (overwrites the
  * bundled output on every run).
  */
 
 import { build } from 'esbuild';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,22 +32,41 @@ const __dirname = dirname(__filename);
 const repoRoot = resolve(__dirname, '..');
 
 const PLUGIN_DIR = resolve(repoRoot, 'dist/plugins/anthropic-billing-header');
-const ENTRY_FILE = join(PLUGIN_DIR, 'plugin.js');
 const BUNDLE_OUT = join(PLUGIN_DIR, 'vendor-hash-wasm.js');
 
+function listPluginFiles(dir) {
+  const out = [];
+  for (const child of readdirSync(dir)) {
+    if (child === 'vendor-hash-wasm.js') continue;
+    if (child.startsWith('.')) continue;
+    if (child.endsWith('.js')) {
+      out.push(join(dir, child));
+    }
+  }
+  return out;
+}
+
 async function main() {
-  // Read the compiled plugin source to find the `require('hash-wasm')`
-  // call sites we want to inline.
-  const pluginSrc = readFileSync(ENTRY_FILE, 'utf-8');
-  if (!pluginSrc.includes("require('hash-wasm')")) {
-    console.log('vendor-hash-wasm: no hash-wasm require() found in plugin.js; skipping');
+  // Find every plugin .js file that imports `hash-wasm` via require().
+  const candidates = listPluginFiles(PLUGIN_DIR).filter((file) => {
+    if (!file.endsWith('.js')) return false;
+    try {
+      return readFileSync(file, 'utf-8').includes("require('hash-wasm')");
+    } catch {
+      return false;
+    }
+  });
+
+  if (candidates.length === 0) {
+    console.log(
+      'vendor-hash-wasm: no hash-wasm require() found in any plugin .js; skipping',
+    );
     return;
   }
 
   // Bundle a tiny shim that re-exports `createXXHash64` from hash-wasm.
-  // We bundle the whole hash-wasm package (the CJS UMD entry is
-  // self-contained and lazy-loads per-algorithm chunks via dynamic
-  // import).
+  // The hash-wasm UMD bundle is self-contained (WASM inlined) and lazy-loads
+  // per-algorithm chunks via dynamic import.
   const shimEntry = `
     const { createXXHash64 } = require('hash-wasm');
     module.exports = { createXXHash64 };
@@ -58,14 +75,16 @@ async function main() {
   mkdirSync(PLUGIN_DIR, { recursive: true });
 
   const result = await build({
-    stdin: { contents: shimEntry, resolveDir: repoRoot, sourcefile: 'hash-wasm-shim.js' },
+    stdin: {
+      contents: shimEntry,
+      resolveDir: repoRoot,
+      sourcefile: 'hash-wasm-shim.js',
+    },
     bundle: true,
     platform: 'node',
     target: 'node20',
     format: 'cjs',
     outfile: BUNDLE_OUT,
-    // Don't try to resolve Node built-ins; the host repo's @types/node
-    // doesn't exist at Docker build time.
     external: [],
     logLevel: 'error',
     metafile: false,
@@ -73,9 +92,7 @@ async function main() {
     minify: false,
     treeShaking: true,
     // Tell esbuild where to find hash-wasm in the host repo's
-    // node_modules at build time. The Docker build context does NOT
-    // have access to this — but the build script runs on the CI host
-    // where the plugin source was just `npm install`-ed.
+    // node_modules at build time.
     nodePaths: [resolve(repoRoot, 'node_modules')],
   });
 
@@ -85,16 +102,25 @@ async function main() {
     process.exit(1);
   }
 
-  // Rewrite the plugin's `require('hash-wasm')` to point at the bundle.
-  // We use a precise rewrite because the plugin calls the same require
-  // at multiple sites.
-  const rewritten = pluginSrc.replace(
-    /require\(['"]hash-wasm['"]\)/g,
-    "require('./vendor-hash-wasm')",
-  );
-  writeFileSync(ENTRY_FILE, rewritten, 'utf-8');
+  // Rewrite every plugin .js that imported `hash-wasm` to load the bundle
+  // instead. The bundle is a sibling of `plugin.js`, so a relative
+  // import works for every consumer.
+  let rewrittenCount = 0;
+  for (const file of candidates) {
+    const src = readFileSync(file, 'utf-8');
+    const rewritten = src.replace(
+      /require\(['"]hash-wasm['"]\)/g,
+      "require('./vendor-hash-wasm')",
+    );
+    if (rewritten !== src) {
+      writeFileSync(file, rewritten, 'utf-8');
+      rewrittenCount += 1;
+    }
+  }
 
-  console.log(`vendor-hash-wasm: bundled hash-wasm into ${BUNDLE_OUT}`);
+  console.log(
+    `vendor-hash-wasm: bundled hash-wasm into ${BUNDLE_OUT} (rewrote ${rewrittenCount} file(s))`,
+  );
 }
 
 main().catch((err) => {
