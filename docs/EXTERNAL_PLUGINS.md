@@ -212,24 +212,28 @@ set both secrets on your repo, the build includes your private plugins.
    - Name: `PLUGINS_PAT`
    - Value: the PAT (e.g. `ghp_...`)
 
-2. **Create the local config secret.** Build the JSON content for
-   `external-plugins.local.json` locally (e.g. the example below), then
-   store it as a repository secret named `EXTERNAL_PLUGINS_LOCAL`:
+2. **Create the local config secret.** Store the JSON content of
+   `external-plugins.local.json` as a repository secret named
+   `EXTERNAL_PLUGINS_LOCAL`.
+
+   **CRITICAL: paste PLAIN, UNESCAPED, SINGLE-LINE JSON.** Do not copy
+   the pretty-printed/escaped form from a code block that uses `\"`.
+   The most common failure is storing escaped quotes (`\"plugins\"`)
+   which is not valid JSON and fails the build at the validate step.
+
    - Name: `EXTERNAL_PLUGINS_LOCAL`
-   - Value (example):
-     ```json
-     {
-       "plugins": [
-         {
-           "name": "anthropic-billing-header",
-           "source": "git+ssh://git@github.com/JosiahSiegel/manifest-plugin-anthropic-billing-header.git",
-           "ref": "v0.6.0",
-           "private": true,
-           "enabledByDefault": true
-         }
-       ]
-     }
+   - Value (copy this exact single line, swapping in your repo/ref):
      ```
+     {"plugins":[{"name":"anthropic-billing-header","source":"git+ssh://git@github.com/JosiahSiegel/manifest-plugin-anthropic-billing-header.git","ref":"v0.6.0","private":true,"enabledByDefault":true}]}
+     ```
+
+   Pretty-printed multi-line JSON also works **as long as the quotes are
+   real `"` characters, not escaped `\"`**. When in doubt, minify to a
+   single line. You can generate a guaranteed-valid value with:
+   ```bash
+   node -e 'console.log(JSON.stringify(require("./external-plugins.local.json")))'
+   ```
+   (run against your local file) and paste the output.
 
 3. **Push a commit / tag.** The workflow's "Materialize private
    external-plugins config" step will:
@@ -242,13 +246,18 @@ set both secrets on your repo, the build includes your private plugins.
 4. **Verify.** Check the workflow logs for:
    ```
    Materialize private external-plugins config
-     Wrote external-plugins.local.json (content masked in logs)
+     Wrote and validated external-plugins.local.json (content masked)
    Run build-and-publish.sh pipeline
      fetch-external-plugins: using local override: external-plugins.local.json
      fetch-external-plugins: anthropic-billing-header @ v0.6.0
        (private repo — using token auth)
        -> src/plugins/anthropic-billing-header
    ```
+
+   If the secret is malformed JSON, the "Materialize" step fails with a
+   precise error telling you it's not valid JSON and showing the parser
+   message + the first 8 bytes (hex) of the written file (the content
+   stays masked). Fix the secret value and re-run.
 
 **Removing a private plugin from CI:** delete either secret (or both).
 The step skips, and the build reverts to the in-tree plugin set.
