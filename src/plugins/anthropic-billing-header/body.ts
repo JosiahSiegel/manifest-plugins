@@ -225,6 +225,9 @@ export function withBetaQuery(url: string): string {
   const head = url.slice(0, endpoint);
   const tail = url.slice(endpoint);
   if (/[?&]beta=true(?:&|$)/.test(tail)) return url;
-  const separator = tail.length === 0 || tail.startsWith('?') ? '' : '&';
-  return `${head}${separator}beta=true${tail}`;
+  // No existing query → start one with '?'. Existing query → append with '&'.
+  // beta=true is always appended at the END so the existing query string
+  // (if any) stays intact.
+  const separator = tail.length === 0 ? '?' : '&';
+  return `${head}${tail}${separator}beta=true`;
 }
