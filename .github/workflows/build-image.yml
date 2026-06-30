@@ -137,6 +137,37 @@ jobs:
         run: |
           npm install --legacy-peer-deps --no-audit --no-fund
 
+      - name: Materialize private external-plugins config
+        # Optional. When the repo owner has private plugins to include in
+        # their deploy image (e.g. a private billing-header plugin), they
+        # set two secrets on this repo:
+        #
+        #   EXTERNAL_PLUGINS_LOCAL  — JSON content of external-plugins.local.json
+        #                              (same shape as external-plugins.local.example.json)
+        #   PLUGINS_PAT             — GitHub PAT with `repo` scope on the
+        #                              private plugin repo(s)
+        #
+        # When BOTH secrets are set, this step writes the local config and
+        # exports GIT_TOKEN so the fetch script can clone private repos.
+        # When either is missing, this step is a no-op and the build uses
+        # only the in-tree plugins (default-policy, header-tier-router,
+        # and any committed entries in external-plugins.json).
+        #
+        # Public forks without these secrets: this step skips silently,
+        # the build proceeds with whatever's in the public repo. No access
+        # to private repos is ever attempted.
+        if: env.EXTERNAL_PLUGINS_LOCAL != '' && env.PLUGINS_PAT != ''
+        env:
+          EXTERNAL_PLUGINS_LOCAL: ${{ secrets.EXTERNAL_PLUGINS_LOCAL }}
+          PLUGINS_PAT: ${{ secrets.PLUGINS_PAT }}
+        run: |
+          printf '%s' "$EXTERNAL_PLUGINS_LOCAL" > external-plugins.local.json
+          echo "::add-mask::$(cat external-plugins.local.json | head -c 100)"
+          echo "Wrote external-plugins.local.json (content masked in logs)"
+          # GIT_TOKEN is exported into GITHUB_ENV so the subsequent
+          # build-and-publish.sh step inherits it.
+          echo "GIT_TOKEN=$PLUGINS_PAT" >> "$GITHUB_ENV"
+
       - name: Run build-and-publish.sh pipeline
         id: pipeline
         # The pipeline script does: clone/refresh mnfst/manifest, build
