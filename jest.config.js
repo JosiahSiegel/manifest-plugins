@@ -5,6 +5,10 @@ module.exports = {
   rootDir: '.',
   roots: ['<rootDir>/src', '<rootDir>/tests'],
   testMatch: ['**/*.spec.ts'],
+  // Fetch external plugins (per external-plugins.json) before any test runs.
+  // This is what makes the auto-discovery in src/registry/discover.ts pick up
+  // plugins that live in separate repos. See docs/EXTERNAL_PLUGINS.md.
+  globalSetup: '<rootDir>/scripts/jest-global-setup.js',
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',

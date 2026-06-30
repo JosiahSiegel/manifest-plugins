@@ -1,0 +1,5 @@
+{
+  "$schema": "./schemas/external-plugins.schema.json",
+  "_comment": "External plugins fetched at build time and test time from separate repos into src/plugins/<name>/ so the existing auto-discovery picks them up. See docs/EXTERNAL_PLUGINS.md for the full schema and examples.",
+  "plugins": []
+}
