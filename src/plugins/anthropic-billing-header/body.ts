@@ -5,22 +5,21 @@
  * classifier attribute the request to a first-party Claude Code
  * invocation. Three layers of transformations:
  *
- *   1. The `system[]` array must start with the Claude Code identity
- *      block (since March 16, 2026 for OAuth Sonnet/Opus).
- *   2. The first system block must ALSO be the billing-attestation
- *      sentinel (`x-anthropic-billing-header: ...`). The two
- *      requirements are satisfied with three entries:
- *        system[0] = identity (Claude Code)
- *        system[1] = billing header (billing attestation)
- *        system[2..] = original content (preserved)
- *      The order matters — Anthropic's cch verification expects the
- *      billing block to be the first system entry; the identity block
- *      must be the very first text the model sees.
+ *   1. The `system[]` array must start with the billing-attestation
+ *      block (`x-anthropic-billing-header: ...`) as system[0], followed
+ *      by the Claude Code identity block as system[1]. Verified by 8+
+ *      independent wire captures from CC v2.1.37 through v2.1.177.
+ *        system[0] = billing header (billing attestation, NO cache_control)
+ *        system[1] = identity (Claude Code, WITH cache_control: ephemeral 1h)
+ *        system[2..] = original content (preserved with cache_control)
  *
- *   3. JSON key order in the serialized body must be deterministic:
+ *   2. JSON key order in the serialized body must be deterministic:
  *      `system` first, then `messages`, then everything else. Claude
  *      Code emits the body in this order; our cch hash preimage (see
  *      `cch.ts`) assumes this order.
+ *
+ *   3. The `?beta=true` query string on `/v1/messages` URLs (see
+ *      `withBetaQuery`).
  */
 
 import { createHash } from 'crypto';
@@ -75,14 +74,15 @@ export function extractFirstUserText(
 }
 
 /**
- * The expected shape of every element we put in `system[]`. We avoid
- * adding `cache_control` to identity/billing blocks (they're never
- * cached; their content changes every request).
+ * The expected shape of every element we put in `system[]`. The billing
+ * block (system[0]) is never cached (content rotates per request). The
+ * identity block (system[1]) and original blocks use `cache_control`
+ * with optional `ttl` (real CC emits `{ type: "ephemeral", ttl: "1h" }`).
  */
 interface SystemBlock {
   type: 'text';
   text: string;
-  cache_control?: { type: 'ephemeral' };
+  cache_control?: { type: 'ephemeral'; ttl?: string };
 }
 
 function isBillingHeaderBlock(block: SystemBlock): boolean {
@@ -134,16 +134,32 @@ function stripExistingFingerprint(blocks: SystemBlock[]): SystemBlock[] {
 }
 
 /**
- * Build the final `system[]` array: identity first, billing header second,
- * then any original blocks (cache_control preserved).
+ * Build the final `system[]` array in the order real Claude Code emits:
+ *
+ *   system[0] = billing header block (NO cache_control — rotates per request)
+ *   system[1] = identity block (WITH cache_control: ephemeral, 1h ttl)
+ *   system[2..] = original blocks (cache_control preserved if present)
+ *
+ * This order is verified by 8+ independent wire captures from CC v2.1.37
+ * through v2.1.177. The billing block must be first because:
+ *   1. Anthropic's server-side regex anchors on `^x-anthropic-billing-header:`
+ *   2. Prompt cache prefixes match only when the billing block is system[0]
+ *   3. CC's own code pushes the billing block first (binary decompilation)
+ *
+ * The identity block gets cache_control because real CC caches it for 1h.
+ * Original system blocks preserve their own cache_control settings.
  */
 export function buildSystemArray(
   rawSystem: unknown,
   billingBlock: SystemBlock,
 ): SystemBlock[] {
-  const identity: SystemBlock = { type: 'text', text: CLAUDE_CODE_IDENTITY_TEXT };
+  const identity: SystemBlock = {
+    type: 'text',
+    text: CLAUDE_CODE_IDENTITY_TEXT,
+    cache_control: { type: 'ephemeral', ttl: '1h' },
+  };
   const cleaned = stripExistingFingerprint(normalizeSystemBlocks(rawSystem));
-  return [identity, billingBlock, ...cleaned];
+  return [billingBlock, identity, ...cleaned];
 }
 
 /**
