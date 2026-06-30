@@ -186,6 +186,40 @@ takes effect on the next call into that plugin's hook; it does NOT
 survive a process restart unless persisted (e.g. via
 `MANIFEST_PLUGINS_DISABLED` — see Wave 5 of the work plan).
 
+## `transformRequest` return semantics (what the host does with each field)
+
+The `RequestTransformResult` interface (`src/index.ts`) exposes three
+optional override fields. The host applies them in this order, with these
+shallow-vs-replacement rules:
+
+| Field | Behavior |
+| --- | --- |
+| `url` | Replacement (string → string, or `undefined` to keep current) |
+| `headers` | **Shallow-merge** — keys you provide are added/overwritten on the host's headers; absent keys are preserved. Last plugin to touch a key wins. |
+| `requestBody` | **Wholesale replacement** (object → object, or `undefined` to keep current). The plugin's object lands on the wire byte-for-byte; the host does NOT shallow-merge with the existing body. |
+
+> ⚠ `requestBody` replacement is load-bearing: plugins that mutate the
+> body (e.g. `anthropic-billing-header` injecting a Claude Code identity
+> block at the start of `system[]`) MUST see their output on the wire
+> byte-for-byte. Shallow-merging would preserve the upstream's existing
+> top-level key order and let later keys (like `messages`) come before
+> `system`, breaking downstream consumers that hash the body in key order
+> (e.g. Anthropic's `cch` attestation). If your plugin only wants to
+> ADD a field, return the full new body — there is no merge helper.
+
+Authoring pattern (full body replacement):
+
+```typescript
+transformRequest(decision): RequestTransformResult | undefined {
+  const original = decision.requestBody;
+  const next: Record<string, unknown> = { ...original };
+  delete next['x-stale-field'];
+  next['model'] = 'claude-sonnet-4-20250514';
+  next['stream'] = false;
+  return { requestBody: next };
+}
+```
+
 ## Versioning
 
 `metadata.version` is free-form but should follow semver. Bump it
