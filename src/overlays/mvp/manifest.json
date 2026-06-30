@@ -22,7 +22,7 @@
     },
     {
       "id": "dashboard-plugin-manager-mount",
-      "target": "apps/web/index.html",
+      "target": "packages/frontend/index.html",
       "postPatchSymbol": "id=\"plugin-manager-root\""
     }
   ]

@@ -384,6 +384,16 @@ export { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';
  */
 export { applyDisabledListFromEnv, parseDisabledList } from './host/env-toggle';
 
+/**
+ * The plugin admin Express app factory. Exposed so the host's `main.ts`
+ * patch (see `src/host/snippet.ts::ADMIN_MOUNT_NEW`) can mount the admin
+ * routes (`/api/plugins/*` + `/admin/admin.js`) on the same Express
+ * instance as the dashboard. The host snippet wraps the mount call in
+ * a best-effort try/catch so a missing `manifest-plugins` package (e.g.
+ * upstream without the fork's plugin layer) is a silent no-op.
+ */
+export { createAdminServer, startAdminServer } from './admin/server';
+
 // =============================================================================
 // Persisted state boot (MANIFEST_PLUGINS_STATE_FILE)
 // =============================================================================

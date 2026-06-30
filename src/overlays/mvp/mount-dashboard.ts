@@ -3,12 +3,12 @@
  *
  * The 5th MVP overlay injects the mount point + script tag for the
  * plugin admin UI island into the upstream Manifest dashboard's
- * `apps/web/index.html`. The script is loaded with `defer` so the
+ * `packages/frontend/index.html`. The script is loaded with `defer` so the
  * dashboard's own bundle initializes first; the plugin manager
  * mounts on `<div id="plugin-manager-root">` after DOMContentLoaded.
  *
  * Idempotency:
- *   - If `apps/web/index.html` already contains `id="plugin-manager-root"`,
+ *   - If `packages/frontend/index.html` already contains `id="plugin-manager-root"`,
  *     the file is left untouched (no byte changes).
  *   - If the file does not exist, the applicator is a silent no-op
  *     (returns successfully without writing). This keeps the overlay
@@ -53,7 +53,7 @@ function buildMountBlock(): string {
 /**
  * Apply the dashboard mount to the Manifest checkout.
  *
- * Reads `manifestRoot/apps/web/index.html`; if the file already
+ * Reads `manifestRoot/packages/frontend/index.html`; if the file already
  * contains the mount marker, the function returns without changes.
  * Otherwise, the mount block is inserted before `</body>` (or
  * appended to the end if `</body>` is missing) and the file is
@@ -64,7 +64,7 @@ function buildMountBlock(): string {
 export async function mountDashboardPluginManager(
   manifestRoot: string,
 ): Promise<void> {
-  const targetPath = join(manifestRoot, 'apps', 'web', 'index.html');
+  const targetPath = join(manifestRoot, 'packages', 'frontend', 'index.html');
   if (!existsSync(targetPath)) {
     // Silent skip — the dashboard may not exist in this Manifest
     // checkout. The orchestrator's `missing` list will not include

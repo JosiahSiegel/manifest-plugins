@@ -218,6 +218,7 @@ async function main(): Promise<number> {
     logResult('proxy-rate-limiter', all.proxyRateLimiter);
     logResult('proxy-service', all.proxyService);
     logResult('proxy-routing-override', all.proxyRoutingOverride);
+    logResult('admin-mount', all.adminMount);
 
     if (all.hasDrift) {
       process.stderr.write(
@@ -228,7 +229,7 @@ async function main(): Promise<number> {
     }
 
     process.stdout.write(
-      '[manifest-plugins/apply] all four host hooks patched (or already no-op)\n',
+      '[manifest-plugins/apply] all five host hooks patched (or already no-op)\n',
     );
 
     if (parsed.applyOverlay) {

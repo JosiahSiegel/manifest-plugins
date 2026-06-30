@@ -28,9 +28,9 @@ function tempDir(prefix: string): TempDir {
 }
 
 function writeDashboardIndex(manifestRoot: string, content: string): string {
-  const webDir = join(manifestRoot, 'apps', 'web');
-  mkdirSync(webDir, { recursive: true });
-  const indexPath = join(webDir, 'index.html');
+  const frontendDir = join(manifestRoot, 'packages', 'frontend');
+  mkdirSync(frontendDir, { recursive: true });
+  const indexPath = join(frontendDir, 'index.html');
   writeFileSync(indexPath, content, 'utf-8');
   return indexPath;
 }
@@ -42,7 +42,7 @@ function tempMountRoots(): readonly string[] {
 }
 
 describe('mountDashboardPluginManager', () => {
-  it('injects the plugin manager div and script into apps/web/index.html that ends with </body>', async () => {
+  it('injects the plugin manager div and script into packages/frontend/index.html that ends with </body>', async () => {
     const tmp = tempDir('manifest-plugins-mount-dashboard-inject-');
     try {
       const indexPath = writeDashboardIndex(
@@ -114,7 +114,7 @@ describe('mountDashboardPluginManager', () => {
     }
   });
 
-  it('silently no-ops when apps/web/index.html is missing', async () => {
+  it('silently no-ops when packages/frontend/index.html is missing', async () => {
     const tmp = tempDir('manifest-plugins-mount-dashboard-missing-');
     try {
       await expect(mountDashboardPluginManager(tmp.path)).resolves.toBeUndefined();

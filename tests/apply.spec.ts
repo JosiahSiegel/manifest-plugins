@@ -39,6 +39,7 @@ interface UpstreamFiles {
   providerClient: string;
   proxyRateLimiter: string;
   proxyService: string;
+  main: string;
 }
 
 function readUpstream(file: string): string {
@@ -69,8 +70,43 @@ function readAllUpstream(): UpstreamFiles {
     providerClient: readUpstream(FILES.providerClient),
     proxyRateLimiter: readUpstream(FILES.proxyRateLimiter),
     proxyService: readUpstream(FILES.proxyService),
+    // Best-effort: the upstream sibling may not have main.ts (e.g. a
+    // pre-monorepo checkout). When absent, the test fixture substitutes
+    // a synthesized stub below.
+    main: readUpstreamSafe(FILES.main ?? ''),
   };
 }
+
+function readUpstreamSafe(file: string): string {
+  if (file === '') return '';
+  try {
+    return readUpstream(file);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Synthesized upstream `main.ts` shape — used when the sibling
+ * `MANIFEST_REPO` checkout does not have main.ts at upstream/main
+ * (e.g. a stale local fork). Mirrors the `app.listen(port, host);`
+ * block the admin-mount patch anchors on, plus the `expressApp`
+ * variable initialization that the patch references.
+ */
+const SYNTHESIZED_MAIN_TS = [
+  "import { NestFactory } from '@nestjs/core';",
+  "import { AppModule } from './app.module';",
+  '',
+  'export async function bootstrap() {',
+  '  const app = await NestFactory.create(AppModule);',
+  '  const expressApp = app.getHttpAdapter().getInstance();',
+  '  // ... upstream middleware ...',
+  "  const port = Number(process.env['PORT'] ?? 3001);",
+  "  const host = process.env['BIND_ADDRESS'] ?? '127.0.0.1';",
+  '  await app.listen(port, host);',
+  '}',
+  '',
+].join('\n');
 
 interface TempFiles {
   /** Absolute path to the manifest root (the tempdir). */
@@ -78,6 +114,7 @@ interface TempFiles {
   providerClient: string;
   proxyRateLimiter: string;
   proxyService: string;
+  main: string;
   cleanup: () => void;
 }
 
@@ -95,12 +132,17 @@ function withTempManifest(
   writeFile(FILES.providerClient, upstream.providerClient);
   writeFile(FILES.proxyRateLimiter, upstream.proxyRateLimiter);
   writeFile(FILES.proxyService, upstream.proxyService);
+  writeFile(
+    FILES.main ?? 'packages/backend/src/main.ts',
+    upstream.main !== '' ? upstream.main : SYNTHESIZED_MAIN_TS,
+  );
 
   const files: TempFiles = {
     root: tmp,
     providerClient: join(tmp, FILES.providerClient),
     proxyRateLimiter: join(tmp, FILES.proxyRateLimiter),
     proxyService: join(tmp, FILES.proxyService),
+    main: join(tmp, FILES.main ?? 'packages/backend/src/main.ts'),
     cleanup: () => rmSync(tmp, { recursive: true, force: true }),
   };
   return Promise.resolve(fn(files)).finally(files.cleanup);

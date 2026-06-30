@@ -56,7 +56,7 @@ export interface MvpOverlaySpec {
  *     this is correct (the upstream shape pre-`2ab748a6` already routed
  *     headers first).
  *   - `dashboard-plugin-manager-mount`       → plugin admin UI mount in
- *     `apps/web/index.html`.
+ *     `packages/frontend/index.html`.
  */
 export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
   Object.freeze({
@@ -81,7 +81,7 @@ export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
   }),
   Object.freeze({
     id: 'dashboard-plugin-manager-mount',
-    target: 'apps/web/index.html',
+    target: 'packages/frontend/index.html',
     postPatchSymbol: 'id="plugin-manager-root"',
     apply: mountDashboardPluginManager,
   }),

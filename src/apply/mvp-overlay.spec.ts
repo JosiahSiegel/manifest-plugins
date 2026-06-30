@@ -949,7 +949,7 @@ describe('OVERLAY_SPEC re-exports', () => {
       (overlay) => overlay.id === 'dashboard-plugin-manager-mount',
     );
     expect(mount).toBeDefined();
-    expect(mount?.target).toBe('apps/web/index.html');
+    expect(mount?.target).toBe('packages/frontend/index.html');
     expect(mount?.postPatchSymbol).toBe('id="plugin-manager-root"');
   });
 });
