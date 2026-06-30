@@ -38,3 +38,5 @@ external-plugins.local.json
 .env.local
 *.log
 npm-debug.log*
+.playwright*
+*.png
