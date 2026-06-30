@@ -82,16 +82,23 @@ concurrency:
 
 permissions:
   contents: read   # checkout plugins repo + clone mnfst/manifest
-  # packages: write is intentionally NOT declared at workflow scope. PRs from
-  # forks only get a read-only GITHUB_TOKEN and any `packages: write`
-  # declaration causes the run to fail before any step runs. The docker
-  # login-action requests `packages: write` implicitly when it uses
-  # GITHUB_TOKEN against ghcr.io on events that have it (push, manual
-  # workflow_dispatch). On pull_request the login step is skipped entirely.
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Job-level permissions: packages: write is required so the
+    # `docker push` step can write to ghcr.io/<owner>/manifest-with-plugins.
+    # This is safe for fork PRs because:
+    #   1. The "Log in to ghcr.io" step has an `if:` that skips on
+    #      pull_request events, so no GITHUB_TOKEN-based login happens.
+    #   2. The build-and-publish.sh script only calls `docker push` when
+    #      `--push` is passed, and the workflow does not pass `--push`
+    #      on pull_request (PUSH=false in the case statement).
+    # Net effect: PRs from forks still build + e2e-test, never push.
+    # workflow_dispatch + tag push get packages: write and can push.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Check out plugins repo
         uses: actions/checkout@v4
