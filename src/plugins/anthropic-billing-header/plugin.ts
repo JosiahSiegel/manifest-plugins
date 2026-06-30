@@ -114,32 +114,47 @@ import {
   computeVersionSuffix,
   extractFirstUserText,
   serializeBody,
-  type SystemBlock,
   withBetaQuery,
 } from './body';
 import {
-  prependMovedContentToFirstUserMessage,
-  relocateSystemContent,
-} from './system-relocation';
+  normalizeToolNames,
+} from './tool-normalization';
+import {
+  scrubAnchorsInPlace,
+} from './classifier-scrub';
 import { cchHasherReady, computeCchForBody } from './cch';
 
 export { cchHasherReady };
 
 export const ANTHROPIC_BILLING_HEADER_PLUGIN_KIND: PluginKind = 'transform';
 
-function readRelocateEnabled(): boolean {
-  const raw = process.env['MANIFEST_CC_RELOCATE'];
-  if (raw === undefined) return true;
+function readEnvFlag(name: string, defaultValue: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return defaultValue;
   const v = raw.trim().toLowerCase();
   return v !== 'false' && v !== '0' && v !== 'no' && v !== 'off';
+}
+
+function readScrubMessagesEnabled(): boolean {
+  return readEnvFlag('MANIFEST_CC_SCRUB_MESSAGES', true);
+}
+
+function readNormalizeToolsEnabled(): boolean {
+  return readEnvFlag('MANIFEST_CC_NORMALIZE_TOOLS', true);
+}
+
+function readLegacyRelocateEnabled(): boolean {
+  // v0.5.0 "relocate to messages[]" is deprecated; off by default. Set to true
+  // for bisection only.
+  return readEnvFlag('MANIFEST_CC_RELOCATE_LEGACY', false);
 }
 
 export const ANTHROPIC_BILLING_HEADER_PLUGIN_METADATA: PluginMetadata = Object.freeze({
   id: 'anthropic-billing-header',
   name: 'Anthropic billing header',
-  version: '0.5.0',
+  version: '0.6.0',
   description:
-    'Injects Anthropic subscription billing header + body fingerprint (xxHash64 cch, billing-first system[], fingerprint HTTP headers, beta=true).',
+    'Injects Anthropic subscription billing header + body fingerprint (xxHash64 cch, billing-first system[], fingerprint HTTP headers, beta=true, in-place anchor scrub, tool-name normalization).',
   kind: ANTHROPIC_BILLING_HEADER_PLUGIN_KIND,
 });
 
@@ -153,35 +168,33 @@ export class AnthropicBillingHeaderPlugin implements RequestTransformPlugin {
     const isSubscription = decision.authType === 'subscription';
     if (!isAnthropic || !isSubscription) return undefined;
 
-    const rawSystem = decision.requestBody['system'];
-
-    // S6: Relocate opencode-fingerprinted system[] entries to the first user
-    // message so Anthropic's billing classifier routes the request against the
-    // subscription pool instead of the extra-usage pool.
+    // S7: Scrub opencode fingerprint phrases in-place across system[] AND
+    // messages[]. v0.5.0's "relocate to messages[]" strategy failed on turn 2+
+    // because Anthropic's classifier inspects the entire request payload, not
+    // just system[]. In-place scrubbing preserves the prompt-cache prefix while
+    // removing the classifier triggers.
+    //
+    // Optional legacy v0.5.0 behavior via MANIFEST_CC_RELOCATE_LEGACY=true
+    // (off by default). For bisection only.
     let bodyForSigning: Readonly<Record<string, unknown>> = decision.requestBody;
-    let systemSource: unknown = rawSystem;
-    if (readRelocateEnabled()) {
-      let relocated: { readonly kept: readonly SystemBlock[]; readonly moved: string };
+    if (!readLegacyRelocateEnabled()) {
       try {
-        relocated = relocateSystemContent(rawSystem, {});
+        bodyForSigning = scrubAnchorsInPlace(decision.requestBody, {
+          scrubMessages: readScrubMessagesEnabled(),
+        });
       } catch {
-        relocated = { kept: [], moved: '' };
+        bodyForSigning = decision.requestBody;
       }
-      systemSource = relocated.kept;
-      if (relocated.moved !== '') {
+      if (readNormalizeToolsEnabled()) {
         try {
-          bodyForSigning = prependMovedContentToFirstUserMessage(
-            decision.requestBody,
-            relocated.moved,
-            {},
-          );
+          bodyForSigning = normalizeToolNames(bodyForSigning);
         } catch {
-          bodyForSigning = decision.requestBody;
-          systemSource = rawSystem;
+          // Normalization failed — fall back to the scrubbed (non-normalized) body.
         }
       }
     }
 
+    const systemSource: unknown = bodyForSigning['system'];
     const firstUserText = extractFirstUserText(bodyForSigning);
     const version = process.env['MANIFEST_CC_VERSION'] || DEFAULT_CC_VERSION;
     const suffix = computeVersionSuffix(firstUserText, version);
@@ -204,8 +217,7 @@ export class AnthropicBillingHeaderPlugin implements RequestTransformPlugin {
     const finalBillingBlock = buildBillingBlock(finalHeaderValue);
 
     // Replace only systemArray[0] with the final billing block (placeholder
-    // → final), preserving the relocated/non-relocated original system entries
-    // verbatim.
+    // → final), preserving the scrubbed original system entries verbatim.
     const finalSystemArray = placeholderSystemArray.map((block, idx) =>
       idx === 0 ? finalBillingBlock : block,
     );

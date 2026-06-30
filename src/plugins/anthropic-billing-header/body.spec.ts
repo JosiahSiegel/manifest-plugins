@@ -4,7 +4,7 @@ import {
   relocateSystemContent,
   prependMovedContentToFirstUserMessage,
   OPENCODE_SYSTEM_FINGERPRINTS,
-} from './system-relocation';
+} from './classifier-scrub';
 
 describe('relocateSystemContent', () => {
   it('B1: keeps non-fingerprint plain text in kept', () => {
