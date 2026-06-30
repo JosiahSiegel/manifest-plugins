@@ -70,8 +70,8 @@ function makeDecision(
 // =============================================================================
 
 describe('AnthropicBillingHeaderPlugin (metadata)', () => {
-  it('ships metadata version 0.3.0 (behavior-changing: body identity + new seed)', () => {
-    expect(AnthropicBillingHeaderPlugin.metadata.version).toBe('0.3.0');
+  it('ships metadata version 0.4.0 (billing-first system[], fingerprint headers)', () => {
+    expect(AnthropicBillingHeaderPlugin.metadata.version).toBe('0.4.0');
   });
 });
 
@@ -173,7 +173,7 @@ describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
     expect(header).not.toMatch(/cch=00000;/);
   });
 
-  it('returns requestBody whose system[0] is the Claude Code identity block', () => {
+  it('returns requestBody whose system[0] is the billing header block', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
     const result = plugin.transformRequest(makeDecision())!;
     const body = result.requestBody as Record<string, unknown>;
@@ -181,26 +181,25 @@ describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
 
     expect(Array.isArray(system)).toBe(true);
     const arr = system as Array<Record<string, unknown>>;
-    expect(arr[0]).toEqual({
-      type: 'text',
-      text: 'You are Claude Code, Anthropic\'s official CLI for Claude.',
-    });
+    expect(arr[0]?.['text']).toMatch(
+      /^x-anthropic-billing-header: cc_version=2\.1\.196\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
+    );
   });
 
-  it('places the billing attestation in system[1] (immediately after identity)', () => {
+  it('places the Claude Code identity in system[1] (after billing header)', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
     const result = plugin.transformRequest(makeDecision())!;
     const body = result.requestBody as Record<string, unknown>;
     const system = body['system'] as Array<Record<string, unknown>>;
 
-    const text = system[1]?.['text'];
-    expect(typeof text).toBe('string');
-    expect(text as string).toMatch(
-      /^x-anthropic-billing-header: cc_version=2\.1\.196\.[0-9a-f]{3}; cc_entrypoint=cli; cch=[0-9a-f]{5};$/,
-    );
+    expect(system[1]).toEqual({
+      type: 'text',
+      text: 'You are Claude Code, Anthropic\'s official CLI for Claude.',
+      cache_control: { type: 'ephemeral', ttl: '1h' },
+    });
   });
 
-  it('preserves pre-existing system blocks after identity + billing', () => {
+  it('preserves pre-existing system blocks after billing + identity', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
     const result = plugin.transformRequest(
       makeDecision({
@@ -214,8 +213,8 @@ describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
     const system = body['system'] as Array<Record<string, unknown>>;
 
     expect(system).toHaveLength(3);
-    expect(system[0]!.text).toMatch(/^You are Claude Code/);
-    expect(system[1]!.text).toMatch(/^x-anthropic-billing-header:/);
+    expect(system[0]!.text).toMatch(/^x-anthropic-billing-header:/);
+    expect(system[1]!.text).toMatch(/^You are Claude Code/);
     expect(system[2]).toEqual({ type: 'text', text: 'Original system prompt' });
   });
 
@@ -238,7 +237,7 @@ describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
     const body = result.requestBody as Record<string, unknown>;
     const system = body['system'] as Array<Record<string, unknown>>;
 
-    // Identity + billing + original
+    // Billing + identity + original
     expect(system).toHaveLength(3);
     expect(system[2]).toEqual({
       type: 'text',
@@ -247,7 +246,7 @@ describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
     });
   });
 
-  it('does not duplicate the identity block if it is already the first system entry', () => {
+  it('does not duplicate the identity block if it is already present in system[]', () => {
     const plugin = new AnthropicBillingHeaderPlugin();
     const result = plugin.transformRequest(
       makeDecision({
@@ -269,6 +268,17 @@ describe('AnthropicBillingHeaderPlugin (S1 happy path)', () => {
       (s) => s.text === 'You are Claude Code, Anthropic\'s official CLI for Claude.',
     ).length;
     expect(identityCount).toBe(1);
+  });
+
+  it('injects fingerprint HTTP headers (User-Agent, anthropic-beta, x-app)', () => {
+    const plugin = new AnthropicBillingHeaderPlugin();
+    const result = plugin.transformRequest(makeDecision())!;
+
+    expect(result.headers!['user-agent']).toBe('claude-cli/2.1.196 (external, cli)');
+    expect(result.headers!['anthropic-beta']).toContain('claude-code-20250219');
+    expect(result.headers!['anthropic-beta']).toContain('oauth-2025-04-20');
+    expect(result.headers!['x-app']).toBe('cli');
+    expect(result.headers!['anthropic-version']).toBe('2023-06-01');
   });
 });
 

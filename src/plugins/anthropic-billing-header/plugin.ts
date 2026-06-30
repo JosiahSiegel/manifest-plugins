@@ -100,7 +100,11 @@ import type {
 
 import {
   BILLING_HEADER_BLOCK_PREFIX,
+  CC_ANTHROPIC_BETA,
+  CC_ANTHROPIC_VERSION,
   CC_ENTRYPOINT,
+  CC_USER_AGENT,
+  CC_X_APP,
   CCH_PLACEHOLDER,
   DEFAULT_CC_VERSION,
   MESSAGES_BETA_QUERY_PARAM,
@@ -124,9 +128,9 @@ export const ANTHROPIC_BILLING_HEADER_PLUGIN_KIND: PluginKind = 'transform';
 export const ANTHROPIC_BILLING_HEADER_PLUGIN_METADATA: PluginMetadata = Object.freeze({
   id: 'anthropic-billing-header',
   name: 'Anthropic billing header',
-  version: '0.3.0',
+  version: '0.4.0',
   description:
-    'Injects Anthropic subscription billing header + body fingerprint (xxHash64 cch, system identity, beta=true).',
+    'Injects Anthropic subscription billing header + body fingerprint (xxHash64 cch, billing-first system[], fingerprint HTTP headers, beta=true).',
   kind: ANTHROPIC_BILLING_HEADER_PLUGIN_KIND,
 });
 
@@ -167,8 +171,10 @@ export class AnthropicBillingHeaderPlugin implements RequestTransformPlugin {
         : undefined;
     const cch = cchOverride ?? computeCchForBody(serializedBody, version);
 
-    // Step 6: rewrite the placeholder in the serialized body with the
-    // computed cch. Same in the HTTP header value (so they match).
+    // Step 6: rebuild system[] with the computed cch. In the new order
+    // (billing-first), systemArray = [billing(placeholder), identity, ...originals].
+    // Replace systemArray[0] (billing) with the final billing block;
+    // keep systemArray[1] (identity) and all originals as-is.
     const finalHeaderValue = buildBillingHeaderValue(
       version,
       suffix,
@@ -177,8 +183,8 @@ export class AnthropicBillingHeaderPlugin implements RequestTransformPlugin {
     );
     const finalBillingBlock = buildBillingBlock(finalHeaderValue);
     const finalSystemArray: typeof systemArray = [
-      systemArray[0]!,
       finalBillingBlock,
+      systemArray[1]!,
       ...systemArray.slice(2),
     ];
     const finalFinalBody = buildFinalBody(decision.requestBody, finalSystemArray);
@@ -193,11 +199,16 @@ export class AnthropicBillingHeaderPlugin implements RequestTransformPlugin {
     // Discard the second serialization — kept purely to validate the
     // deterministic body shape; the real body lives in `finalFinalBody`.
     void finalSerialized;
+    void MESSAGES_BETA_QUERY_PARAM;
 
     return {
       url: finalUrl,
       headers: {
         'x-anthropic-billing-header': finalHeaderValue,
+        'user-agent': CC_USER_AGENT,
+        'anthropic-beta': CC_ANTHROPIC_BETA,
+        'anthropic-version': CC_ANTHROPIC_VERSION,
+        'x-app': CC_X_APP,
       },
       requestBody: finalFinalBody as Readonly<Record<string, unknown>>,
     };
