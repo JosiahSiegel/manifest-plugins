@@ -24,6 +24,11 @@
       "id": "dashboard-plugin-manager-mount",
       "target": "packages/frontend/index.html",
       "postPatchSymbol": "id=\"plugin-manager-root\""
+    },
+    {
+      "id": "dashboard-transform-mount",
+      "target": "packages/frontend/index.html",
+      "postPatchSymbol": "data-mwp-dashboard-transform"
     }
   ]
 }

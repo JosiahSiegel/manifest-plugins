@@ -17,6 +17,7 @@
  * declarative surface that consumes those snippets in one batch.
  */
 import { mountDashboardPluginManager } from './mount-dashboard';
+import { mountDashboardTransform } from './mount-dashboard-transform';
 
 export interface MvpOverlaySpec {
   /** Stable overlay identifier (matches the on-disk artifact id). */
@@ -84,5 +85,11 @@ export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
     target: 'packages/frontend/index.html',
     postPatchSymbol: 'id="plugin-manager-root"',
     apply: mountDashboardPluginManager,
+  }),
+  Object.freeze({
+    id: 'dashboard-transform-mount',
+    target: 'packages/frontend/index.html',
+    postPatchSymbol: 'data-mwp-dashboard-transform',
+    apply: mountDashboardTransform,
   }),
 ]);

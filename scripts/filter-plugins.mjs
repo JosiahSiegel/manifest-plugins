@@ -133,6 +133,7 @@ function annotateEnabledDefaults(distSource, disabledClassNames) {
   const pluginIds = {
     DefaultPolicyPlugin: 'default-policy',
     HeaderTierRouterPlugin: 'header-tier-router',
+    ShowAllRouterViewsPlugin: 'show-all-router-views',
   };
   let next = distSource;
   for (const className of disabledClassNames) {

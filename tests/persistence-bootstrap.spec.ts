@@ -34,6 +34,7 @@ interface LoadedModule {
   readonly resetPersistedPluginState: () => void;
   readonly DefaultPolicyPlugin: new (...args: never[]) => unknown;
   readonly HeaderTierRouterPlugin: new (...args: never[]) => unknown;
+  readonly ShowAllRouterViewsPlugin: new (...args: never[]) => unknown;
 }
 
 function freshStateFile(): string {
@@ -77,9 +78,10 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    expect(mod!.plugins).toHaveLength(1);
+    expect(mod!.plugins).toHaveLength(2);
     expect(mod!.plugins).not.toContainEqual(expect.any(mod!.DefaultPolicyPlugin));
     expect(mod!.plugins).toContainEqual(expect.any(mod!.HeaderTierRouterPlugin));
+    expect(mod!.plugins).toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
   });
 
   it('applies a persisted true entry so getInstalledPlugins reports enabled=true for that id', () => {
@@ -110,7 +112,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    expect(mod!.plugins).toHaveLength(2);
+    expect(mod!.plugins).toHaveLength(3);
     const installed = mod!.getInstalledPlugins();
     for (const p of installed) {
       expect(p.enabled).toBe(true);
@@ -145,7 +147,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     });
 
     // Boot has dropped both plugins from the runtime array.
-    expect(mod!.plugins).toHaveLength(0);
+    expect(mod!.plugins).toHaveLength(1);
 
     mod!.resetPersistedPluginState();
 
@@ -157,6 +159,6 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       expect(p.enabledByDefault).toBe(true);
     }
     // Every plugin is back in the runtime array.
-    expect(mod!.plugins).toHaveLength(2);
+    expect(mod!.plugins).toHaveLength(3);
   });
 });

@@ -68,14 +68,18 @@ function writeBrokenPlugin(
 }
 
 describe('discoverPlugins (filesystem enumeration)', () => {
-  it('discovers the two built-in plugins from src/plugins/', () => {
+  it('discovers the three built-in plugins from src/plugins/', () => {
     const discovered = discoverPlugins(PLUGINS_SRC_DIR);
 
     const classNames = discovered.map((entry) => entry.pluginClassName);
     expect(classNames).toEqual(
-      expect.arrayContaining(['DefaultPolicyPlugin', 'HeaderTierRouterPlugin']),
+      expect.arrayContaining([
+        'DefaultPolicyPlugin',
+        'HeaderTierRouterPlugin',
+        'ShowAllRouterViewsPlugin',
+      ]),
     );
-    expect(discovered).toHaveLength(2);
+    expect(discovered).toHaveLength(3);
   });
 
   it('returns plugin entries with a non-empty id, kind, and instance', () => {
@@ -84,7 +88,7 @@ describe('discoverPlugins (filesystem enumeration)', () => {
       expect(entry.metadata.id).toEqual(expect.any(String));
       expect(entry.metadata.id.length).toBeGreaterThan(0);
       expect(entry.metadata.kind).toEqual(
-        expect.stringMatching(/^(transform|policy|routing-override)$/),
+        expect.stringMatching(/^(transform|policy|routing-override|dashboard-transform)$/),
       );
       expect(entry.instance).toBeDefined();
     }
@@ -289,11 +293,12 @@ describe('discoverPlugins (compiled JS shape — post-tsc runtime)', () => {
       expect.arrayContaining([
         'DefaultPolicyPlugin',
         'HeaderTierRouterPlugin',
+        'ShowAllRouterViewsPlugin',
       ]),
     );
-    // Must discover both in-tree plugins. External plugins may add to
+    // Must discover all in-tree plugins. External plugins may add to
     // this count when present.
-    expect(discovered.length).toBeGreaterThanOrEqual(2);
+    expect(discovered.length).toBeGreaterThanOrEqual(3);
   });
 });
 
