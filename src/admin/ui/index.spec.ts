@@ -66,6 +66,15 @@ const SAMPLE_PLUGINS: readonly PluginMetadata[] = [
     enabledByDefault: false,
     enabled: false,
   },
+  {
+    id: 'show-all-router-views',
+    name: 'Show all router views',
+    version: '0.1.0',
+    description: 'Un-hides hidden routing views.',
+    kind: 'dashboard-transform',
+    enabledByDefault: true,
+    enabled: true,
+  },
 ];
 
 let originalFetch: typeof fetch | undefined;
@@ -288,5 +297,26 @@ describe('PluginManager UI', () => {
       expect(url).toBe('/api/plugins');
       expect((initArg?.method ?? 'GET')).toBe('GET');
     }
+  });
+
+  it('renders a kind pill for every installed plugin kind, including dashboard-transform', async () => {
+    // Regression: KIND_PILL_TINT did not include the new 'dashboard-transform'
+    // kind, so the row crashed with "Cannot read properties of undefined
+    // (reading 'bg')" at the first render. This test pins the contract that
+    // every plugin the API returns renders without throwing.
+    createAlwaysResolvingFetch();
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+
+    // All three plugin kinds must render a kind pill with the right text.
+    expect(screen.getByTestId('plugin-kind-default-policy')).toHaveTextContent('policy');
+    expect(screen.getByTestId('plugin-kind-header-tier-router')).toHaveTextContent(
+      'routing-override',
+    );
+    expect(screen.getByTestId('plugin-kind-show-all-router-views')).toHaveTextContent(
+      'dashboard-transform',
+    );
   });
 });
