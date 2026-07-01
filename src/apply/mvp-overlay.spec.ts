@@ -919,7 +919,7 @@ describe('OVERLAY_SPEC re-exports', () => {
   it('MVP_OVERLAY_SPEC and OVERLAY_SPEC reference the same frozen array', () => {
     expect(OVERLAY_SPEC).toBe(MVP_OVERLAY_SPEC);
     expect(Object.isFrozen(OVERLAY_SPEC)).toBe(true);
-    expect(OVERLAY_SPEC).toHaveLength(5);
+    expect(OVERLAY_SPEC).toHaveLength(6);
     for (const overlay of OVERLAY_SPEC) {
       expect(typeof overlay.id).toBe('string');
       expect(typeof overlay.target).toBe('string');
@@ -951,5 +951,14 @@ describe('OVERLAY_SPEC re-exports', () => {
     expect(mount).toBeDefined();
     expect(mount?.target).toBe('packages/frontend/index.html');
     expect(mount?.postPatchSymbol).toBe('id="plugin-manager-root"');
+  });
+
+  it('includes the dashboard-transform-mount overlay (6th overlay)', () => {
+    const mount = OVERLAY_SPEC.find(
+      (overlay) => overlay.id === 'dashboard-transform-mount',
+    );
+    expect(mount).toBeDefined();
+    expect(mount?.target).toBe('packages/frontend/index.html');
+    expect(mount?.postPatchSymbol).toBe('data-mwp-dashboard-transform');
   });
 });

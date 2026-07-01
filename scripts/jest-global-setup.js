@@ -19,7 +19,7 @@ const { execFileSync } = require('node:child_process');
 const { existsSync, readdirSync } = require('node:fs');
 const { join } = require('node:path');
 
-const IN_TREE_PLUGIN_DIRS = new Set(['default-policy', 'header-tier-router']);
+const IN_TREE_PLUGIN_DIRS = new Set(['default-policy', 'header-tier-router', 'show-all-router-views']);
 
 module.exports = async function jestGlobalSetup() {
   const root = join(__dirname, '..');

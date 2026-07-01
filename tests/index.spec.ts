@@ -2,11 +2,12 @@ import {
   plugins,
   DefaultPolicyPlugin,
   HeaderTierRouterPlugin,
+  ShowAllRouterViewsPlugin,
 } from '../src/index';
 
 describe('plugin registry', () => {
-  it('exports the two built-in plugins', () => {
-    expect(plugins).toHaveLength(2);
+  it('exports the three built-in plugins', () => {
+    expect(plugins).toHaveLength(3);
   });
 
   it('includes the DefaultPolicyPlugin', () => {
@@ -15,6 +16,10 @@ describe('plugin registry', () => {
 
   it('includes the HeaderTierRouterPlugin', () => {
     expect(plugins).toContainEqual(expect.any(HeaderTierRouterPlugin));
+  });
+
+  it('includes the ShowAllRouterViewsPlugin', () => {
+    expect(plugins).toContainEqual(expect.any(ShowAllRouterViewsPlugin));
   });
 
   it('freezes the registry to prevent runtime mutation', () => {

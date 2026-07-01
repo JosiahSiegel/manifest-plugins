@@ -38,13 +38,15 @@ import type {
   RequestPolicyPlugin,
   RequestTransformPlugin,
   RoutingOverridePlugin,
+  DashboardTransformPlugin,
   PluginKind,
   PluginMetadata,
 } from '../index';
 
 type ManifestPlugin = Partial<RequestTransformPlugin> &
   Partial<RequestPolicyPlugin> &
-  Partial<RoutingOverridePlugin>;
+  Partial<RoutingOverridePlugin> &
+  Partial<DashboardTransformPlugin>;
 
 export class PluginDiscoveryError extends Error {
   override readonly name = 'PluginDiscoveryError';
@@ -157,6 +159,7 @@ function requirePluginClass(
     'transform',
     'policy',
     'routing-override',
+    'dashboard-transform',
   ];
   if (!validKinds.includes(metadata.kind)) {
     throw new PluginDiscoveryError(

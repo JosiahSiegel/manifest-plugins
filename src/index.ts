@@ -264,10 +264,68 @@ export interface RoutingOverridePlugin {
 }
 
 // =============================================================================
+// DashboardTransformPlugin — browser-side dashboard augmentation
+// =============================================================================
+
+/**
+ * Plugins that augment the Manifest dashboard's browser-side
+ * rendering. The host (admin server) collects `getDashboardScript()`
+ * from every enabled `dashboard-transform` plugin, concatenates the
+ * results into a single IIFE bundle served at
+ * `/admin/dashboard-transform/all.js`, and the dashboard mount
+ * overlay injects a single `<script src="/admin/dashboard-transform/all.js" defer>`
+ * tag into `packages/frontend/index.html`. Each plugin's script
+ * registers itself on `window.__manifestPluginsDashboardTransform`
+ * and the bundle iterates that registry on `DOMContentLoaded`.
+ *
+ * Use cases:
+ *   - Audit tools (e.g. `show-all-router-views` shows every
+ *     configured routing rule, including ones the upstream UI hides
+ *     via the deprecation gate).
+ *   - DOM-level patches to expose hidden tabs / panels.
+ *   - Floating action buttons that fetch additional data via the
+ *     public API.
+ *
+ * The script MUST:
+ *   - Be self-contained (no external imports, no require/import
+ *     statements — it runs in a browser without a module loader).
+ *   - Wrap its body in an IIFE so it does not leak globals.
+ *   - Be idempotent (safe to re-run on HMR / route change).
+ *   - No-op on pages that are not relevant.
+ *   - Use safe DOM construction (createElement + textContent /
+ *     appendChild) for any user-controlled data. Never assign
+ *     user-controlled strings to innerHTML.
+ *
+ * The script SHOULD:
+ *   - Register itself on `window.__manifestPluginsDashboardTransform`
+ *     so the host can introspect which plugins are loaded.
+ *   - Use CSS variables (`hsl(var(--foreground))`, etc.) so the
+ *     injected UI adopts the dashboard's theme (light / dark).
+ *
+ * Plugin errors MUST be non-fatal: the host catches and logs them
+ * and continues with the upstream dashboard. Never throw to abort
+ * the dashboard.
+ */
+export interface DashboardTransformPlugin {
+  /**
+   * Return a self-contained JavaScript string to run in the
+   * Manifest dashboard's browser context. The string is concatenated
+   * into the combined bundle as-is — do NOT include a closing
+   * `<script>` tag or any HTML; just the JavaScript.
+   *
+   * Returning `null` or `undefined` means "I have nothing to add
+   * right now" and the host omits the plugin from the bundle. The
+   * plugin still ships enabled in the admin UI so the operator can
+   * see it's installed.
+   */
+  getDashboardScript(): string | null;
+}
+
+// =============================================================================
 // Plugin registry metadata + runtime toggles
 // =============================================================================
 
-export type PluginKind = 'transform' | 'policy' | 'routing-override';
+export type PluginKind = 'transform' | 'policy' | 'routing-override' | 'dashboard-transform';
 
 export interface PluginMetadata {
   readonly id: string;
@@ -284,7 +342,8 @@ export interface InstalledPluginMetadata extends PluginMetadata {
 
 type ManifestPlugin = Partial<RequestTransformPlugin> &
   Partial<RequestPolicyPlugin> &
-  Partial<RoutingOverridePlugin>;
+  Partial<RoutingOverridePlugin> &
+  Partial<DashboardTransformPlugin>;
 
 interface PluginRegistryEntry {
   readonly pluginClassName: string;
@@ -371,6 +430,11 @@ export function setPluginEnabled(pluginId: string, enabled: boolean): void {
 
 export { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
 export { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';
+export {
+  ShowAllRouterViewsPlugin,
+  SHOW_ALL_ROUTER_VIEWS_PLUGIN_METADATA,
+  SHOW_ALL_ROUTER_VIEWS_SCRIPT,
+} from './plugins/show-all-router-views/plugin';
 
 // =============================================================================
 // Re-exports for the pasted host snippets

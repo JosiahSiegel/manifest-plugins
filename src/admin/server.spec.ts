@@ -33,6 +33,7 @@ type PluginJson = {
 const EXPECTED_PLUGIN_IDS = [
   'default-policy',
   'header-tier-router',
+  'show-all-router-views',
 ];
 
 let tempDir = '';
@@ -275,6 +276,93 @@ describe('plugin admin HTTP API', () => {
     // Then: the file body is returned with a JS content type.
     expect(response.text).toBe(bundleBody);
     expect(response.headers['content-type']).toMatch(/javascript|application\/octet-stream/);
+  });
+
+  // -------------------------------------------------------------------
+  // Dashboard-transform bundle endpoints
+  // -------------------------------------------------------------------
+
+  it('GET /admin/dashboard-transform/all.js serves a JS bundle with the bootstrap + all enabled plugins', async () => {
+    // Given: a fresh admin server.
+    const app = createApp();
+
+    // When: the combined bundle is requested.
+    const response = await request(app)
+      .get('/admin/dashboard-transform/all.js')
+      .expect(200);
+
+    // Then: the bundle has the right content type + a no-store cache header.
+    expect(response.headers['content-type']).toMatch(/application\/javascript/);
+    expect(response.headers['cache-control']).toBe('no-store');
+
+    // And: the bundle includes the bootstrap, the show-all-router-views
+    // plugin's script body, and the global registry key.
+    const body = response.text;
+    expect(body).toContain('__manifestPluginsDashboardTransformBootstrap');
+    expect(body).toContain('window.__manifestPluginsDashboardTransform');
+    // The show-all-router-views plugin's IIFE wrapper is in the bundle.
+    expect(body).toContain('PLUGIN_ID = \'show-all-router-views\'');
+    // The combined bundle header comment is present.
+    expect(body).toContain('Combined dashboard-transform bundle');
+  });
+
+  it('GET /admin/dashboard-transform/<id>.js returns 400 for an invalid id', async () => {
+    const app = createApp();
+    const response = await request(app)
+      .get('/admin/dashboard-transform/Bad%20Id.js')
+      .expect(400);
+    expect(response.body).toEqual({ error: 'invalid plugin id' });
+  });
+
+  it('GET /admin/dashboard-transform/<id>.js returns 404 for an unknown plugin', async () => {
+    const app = createApp();
+    const response = await request(app)
+      .get('/admin/dashboard-transform/does-not-exist.js')
+      .expect(404);
+    expect(response.body).toEqual({
+      error: 'plugin not found',
+      id: 'does-not-exist',
+    });
+  });
+
+  it('GET /admin/dashboard-transform/<id>.js returns 400 when the plugin is not a dashboard-transform', async () => {
+    const app = createApp();
+    const response = await request(app)
+      .get('/admin/dashboard-transform/default-policy.js')
+      .expect(400);
+    expect(response.body.error).toBe('plugin is not a dashboard-transform');
+    expect(response.body.id).toBe('default-policy');
+  });
+
+  it('GET /admin/dashboard-transform/<id>.js serves the enabled plugin script', async () => {
+    const app = createApp();
+    const response = await request(app)
+      .get('/admin/dashboard-transform/show-all-router-views.js')
+      .expect(200);
+    expect(response.headers['content-type']).toMatch(/application\/javascript/);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.text).toContain('PLUGIN_ID = \'show-all-router-views\'');
+  });
+
+  it('GET /admin/dashboard-transform/<id>.js returns 404 for a disabled plugin', async () => {
+    // Disable the plugin via setPluginEnabled, then re-fetch the
+    // single-plugin endpoint. The combined bundle still includes
+    // the bootstrap (always shipped) but the plugin's script is
+    // omitted. The single-plugin endpoint returns 404.
+    const app = createApp();
+    setPluginEnabled('show-all-router-views', false);
+    try {
+      const response = await request(app)
+        .get('/admin/dashboard-transform/show-all-router-views.js')
+        .expect(404);
+      expect(response.body).toEqual({
+        error: 'plugin is disabled',
+        id: 'show-all-router-views',
+      });
+    } finally {
+      // Re-enable so subsequent tests see the default state.
+      setPluginEnabled('show-all-router-views', true);
+    }
   });
 
   it('startAdminServer binds the configured port and closes cleanly', async () => {
