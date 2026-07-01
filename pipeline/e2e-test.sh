@@ -420,6 +420,68 @@ if [[ "$ADMIN_UI" == "1" ]]; then
     fail "GET / returned dashboard HTML without id=\"plugin-manager-root\" — dashboard overlay did not land" 7
   fi
   log "GET /                       → 200 (ADMIN_UI=1: dashboard contains plugin manager mount)"
+
+  # ---------------------------------------------------------------------
+  # Dashboard-transform bundle — validate that the show-all-router-views
+  # plugin's browser-side script is reachable on the same Express app
+  # AND that the overlay that injects the script tag landed in the
+  # dashboard index.html.
+  #
+  # The dashboard-transform overlay (mount-dashboard-transform.ts) writes
+  # a single <script src="/admin/dashboard-transform/all.js" defer
+  # data-mwp-dashboard-transform></script> tag before </body>. The
+  # combined bundle is served at runtime by the admin server from every
+  # enabled dashboard-transform plugin's getDashboardScript() output.
+  # The bundle must contain the bootstrap and the plugin's IIFE so the
+  # dashboard can actually load it.
+  #
+  # Failure exit code: 7 (same gate as the rest of ADMIN_UI=1 — a
+  # broken mount is a deploy-blocker, not a soft warning).
+  # ---------------------------------------------------------------------
+
+  # 1. The dashboard index.html must contain the data-mwp-dashboard-transform
+  #    marker (proving the overlay ran against this Manifest checkout).
+  if ! grep -q 'data-mwp-dashboard-transform' "$RESP_BODY"; then
+    fail "GET / returned dashboard HTML without data-mwp-dashboard-transform — dashboard-transform overlay did not land" 7
+  fi
+  log "GET /                       → 200 (ADMIN_UI=1: dashboard contains dashboard-transform mount marker)"
+
+  # 2. The combined bundle must be reachable + return valid JS that
+  #    contains the bootstrap and the show-all-router-views IIFE.
+  capture "http://127.0.0.1:${PORT}/admin/dashboard-transform/all.js"
+  [[ "$RESP_CODE" == "200" ]] \
+    || fail "GET /admin/dashboard-transform/all.js → $RESP_CODE (expected 200 — combined dashboard-transform bundle is missing or the admin Express app is not mounted)" 7
+  case "$RESP_TYPE" in
+    *javascript*) ;;
+    *) fail "GET /admin/dashboard-transform/all.js content-type: $RESP_TYPE (expected javascript)" 7 ;;
+  esac
+  if (( RESP_BYTES <= 1000 )); then
+    fail "GET /admin/dashboard-transform/all.js downloaded $RESP_BYTES bytes (expected > 1000 — bundle may be empty or truncated)" 7
+  fi
+  if ! grep -q '__manifestPluginsDashboardTransformBootstrap' "$RESP_BODY"; then
+    fail "GET /admin/dashboard-transform/all.js body does not contain the runtime bootstrap" 7
+  fi
+  if ! grep -q 'PLUGIN_ID = '"'"'show-all-router-views'"'"'' "$RESP_BODY"; then
+    fail "GET /admin/dashboard-transform/all.js body does not contain the show-all-router-views IIFE" 7
+  fi
+  log "GET /admin/dashboard-transform/all.js → 200 ($RESP_BYTES bytes, contains bootstrap + show-all-router-views IIFE)"
+
+  # 3. The single-plugin endpoint (debug aid) must be reachable for an
+  #    enabled dashboard-transform plugin and return its IIFE body.
+  capture "http://127.0.0.1:${PORT}/admin/dashboard-transform/show-all-router-views.js"
+  [[ "$RESP_CODE" == "200" ]] \
+    || fail "GET /admin/dashboard-transform/show-all-router-views.js → $RESP_CODE (expected 200)" 7
+  case "$RESP_TYPE" in
+    *javascript*) ;;
+    *) fail "GET /admin/dashboard-transform/show-all-router-views.js content-type: $RESP_TYPE (expected javascript)" 7 ;;
+  esac
+  if ! grep -q 'show-all-router-views-panel' "$RESP_BODY"; then
+    fail "GET /admin/dashboard-transform/show-all-router-views.js body does not contain the inline-panel mount logic" 7
+  fi
+  if ! grep -q 'Reveal all routing views' "$RESP_BODY"; then
+    fail "GET /admin/dashboard-transform/show-all-router-views.js body does not contain the 'Reveal all routing views' panel title" 7
+  fi
+  log "GET /admin/dashboard-transform/show-all-router-views.js → 200 (inline panel mount logic present)"
 fi
 
 # (g) (TIER_ROUTING_SMOKE=1 only) /v1/chat/completions with x-manifest-tier
@@ -537,7 +599,7 @@ if [[ "$MVP_UI" == "1" ]]; then
   echo "  MVP_UI=1: /api/v1/plugins reachable with JSON body"
 fi
 if [[ "$ADMIN_UI" == "1" ]]; then
-  echo "  ADMIN_UI=1: plugin admin API, bundle, and dashboard mount reachable"
+  echo "  ADMIN_UI=1: plugin admin API, bundle, dashboard mount, and dashboard-transform bundle reachable"
 fi
 if [[ "$TIER_ROUTING_SMOKE" == "1" ]]; then
   echo "  TIER_ROUTING_SMOKE=1: x-manifest-tier override honored"
