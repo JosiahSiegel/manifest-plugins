@@ -3,16 +3,25 @@
  * proxy-rate-limiter / proxy.service / provider-client shapes.
  *
  * These tests are RED only when one of the anchors has drifted.
- * They are GREEN for the three already-fixed anchors:
+ * They are GREEN for the already-fixed anchors:
  *
  *   1. `provider-client.ts` — Anthropic branch's `return { url, headers, requestBody }`.
  *   2. `proxy-rate-limiter.ts` — `const CONCURRENCY_MAX = positiveIntegerEnv(...)` line.
- *   3. `proxy.service.ts` — constructor block that assigns
- *      `this.maxMessagesPerRequest` from `process.env['MAX_MESSAGES_PER_REQUEST']` /
- *      `this.config.get<string>('MANIFEST_MAX_MESSAGES')`.
+ *
+ * Wave-history note: an earlier wave also asserted a third anchor on
+ * `proxy.service.ts` for the `maxMessagesPerRequest` constructor
+ * block. Upstream commit `c9009bcd5` removed that feature from
+ * `proxy.service.ts` entirely (import, field, constructor body, and
+ * `validatePayload` enforcement check all disappeared), so the
+ * corresponding `PROXY_SERVICE_OLD` constant was retired along with
+ * its drift check. The routing-override constructor anchor
+ * (`PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD`) covers the remaining
+ * drift surface on `proxy.service.ts`; if upstream renames or
+ * reorders the `providerParamSpecs` constructor parameter, the apply
+ * path will report drift on the routing-override patch instead.
  *
  * Strategy:
- *   - Read the three files from the upstream/main ref via
+ *   - Read the two files from the upstream/main ref via
  *     `git show upstream/main:<path>` (mirroring `tests/apply.spec.ts`).
  *     This guarantees we test against the unpatched upstream shape,
  *     not the local working tree (which may already have the
@@ -33,7 +42,6 @@ import {
   HELPER_MARKER_OLD,
   RETURN_OLD,
   RATE_LIMITER_OLD,
-  PROXY_SERVICE_OLD,
 } from '../src/host/snippet';
 import { assertAnchors, type AnchorMarker } from '../src/apply/anchor-drift';
 
@@ -42,7 +50,6 @@ const MANIFEST_REPO = process.env['MANIFEST_REPO'] ?? '../manifest';
 interface UpstreamFiles {
   readonly providerClient: string;
   readonly proxyRateLimiter: string;
-  readonly proxyService: string;
 }
 
 function readUpstreamFile(file: string): string {
@@ -68,9 +75,6 @@ function readAllUpstream(): UpstreamFiles {
     ),
     proxyRateLimiter: readUpstreamFile(
       'packages/backend/src/routing/proxy/proxy-rate-limiter.ts',
-    ),
-    proxyService: readUpstreamFile(
-      'packages/backend/src/routing/proxy/proxy.service.ts',
     ),
   };
 }
@@ -107,22 +111,7 @@ describe('assertAnchors against current upstream shapes', () => {
     expect(report.missing).toEqual([]);
   });
 
-  it('proxy.service.ts contains PROXY_SERVICE_OLD anchor', () => {
-    const upstream = readAllUpstream();
-    const anchors: AnchorMarker[] = [
-      { name: 'proxy.service/message-cap-old', marker: PROXY_SERVICE_OLD },
-    ];
-    const report = assertAnchors(upstream.proxyService, anchors);
-    if (!report.ok) {
-      throw new Error(
-        `proxy.service.ts anchors drifted: ${report.missing.join(', ')}`,
-      );
-    }
-    expect(report.ok).toBe(true);
-    expect(report.missing).toEqual([]);
-  });
-
-  it('all three files together: bundled anchor report is ok', () => {
+  it('all files together: bundled anchor report is ok', () => {
     // The canonical "is the apply orchestrator still safe to run?"
     // assertion: every anchor the orchestrator relies on, in one
     // report. If this fails, the apply path will produce drift on
@@ -130,7 +119,7 @@ describe('assertAnchors against current upstream shapes', () => {
     const upstream = readAllUpstream();
 
     const allAnchors: ReadonlyArray<{
-      readonly file: 'provider-client' | 'proxy-rate-limiter' | 'proxy.service';
+      readonly file: 'provider-client' | 'proxy-rate-limiter';
       readonly content: string;
       readonly markers: AnchorMarker[];
     }> = [
@@ -146,11 +135,6 @@ describe('assertAnchors against current upstream shapes', () => {
         file: 'proxy-rate-limiter',
         content: upstream.proxyRateLimiter,
         markers: [{ name: 'concurrency-old', marker: RATE_LIMITER_OLD }],
-      },
-      {
-        file: 'proxy.service',
-        content: upstream.proxyService,
-        markers: [{ name: 'message-cap-old', marker: PROXY_SERVICE_OLD }],
       },
     ];
 

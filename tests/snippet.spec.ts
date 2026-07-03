@@ -23,9 +23,6 @@ import {
   PROXY_ROUTING_OVERRIDE_IMPORT_OLD,
   PROXY_ROUTING_OVERRIDE_NEW,
   PROXY_ROUTING_OVERRIDE_OLD,
-  PROXY_SERVICE_HOST_SOURCE,
-  PROXY_SERVICE_NEW,
-  PROXY_SERVICE_OLD,
   RATE_LIMITER_HOST_SOURCE,
   RATE_LIMITER_NEW,
   RATE_LIMITER_OLD,
@@ -143,43 +140,6 @@ describe('host snippet: existing anchors (pre-existing fixtures, regression cove
     // guard and the plugin walk.
     expect(RATE_LIMITER_HOST_SOURCE).toContain('applyDisabledListFromEnv');
     expect(RATE_LIMITER_HOST_SOURCE).toContain(
-      "process.env['MANIFEST_PLUGINS_DISABLED']",
-    );
-  });
-
-  it('PROXY_SERVICE_OLD anchors on the constructor maxMessages assignment', () => {
-    expect(PROXY_SERVICE_OLD).toBe(
-      [
-        '    this.maxMessagesPerRequest = parseMaxMessagesPerRequest(',
-        '      this.config.get<string>(\'MANIFEST_MAX_MESSAGES\'),',
-        '    );',
-        '',
-      ].join('\n'),
-    );
-  });
-
-  it('PROXY_SERVICE_NEW delegates to getResolvedMaxMessagesPerRequest', () => {
-    expect(PROXY_SERVICE_NEW).toContain(
-      'this.maxMessagesPerRequest = getResolvedMaxMessagesPerRequest(this.config);',
-    );
-  });
-
-  it('PROXY_SERVICE_HOST_SOURCE declares the helper and reads from manifest-plugins', () => {
-    expect(PROXY_SERVICE_HOST_SOURCE).toContain(
-      'function getResolvedMaxMessagesPerRequest(',
-    );
-    expect(PROXY_SERVICE_HOST_SOURCE).toContain("require('manifest-plugins')");
-    expect(PROXY_SERVICE_HOST_SOURCE).toContain('getRateLimitPolicy');
-  });
-
-  it('PROXY_SERVICE_HOST_SOURCE honors MANIFEST_PLUGINS_DISABLED at module load', () => {
-    // Wave 5: the pasted snippet must call
-    // `require('manifest-plugins').applyDisabledListFromEnv(...)` so
-    // operators can flip plugins off at process start without a
-    // rebuild. The call sits between the `require('manifest-plugins')`
-    // guard and the plugin walk.
-    expect(PROXY_SERVICE_HOST_SOURCE).toContain('applyDisabledListFromEnv');
-    expect(PROXY_SERVICE_HOST_SOURCE).toContain(
       "process.env['MANIFEST_PLUGINS_DISABLED']",
     );
   });
@@ -326,13 +286,17 @@ describe('host snippet: PROXY_ROUTING_OVERRIDE_* (new routing-override anchor)',
   });
 
   it('PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD anchors on the providerParamSpecs closing line', () => {
-    // The existing constructor closes with `private readonly providerParamSpecs: ProviderParamSpecService,\n  ) {\n`.
-    // We anchor on this exact shape (trailing comma + close-paren + brace)
-    // so the patcher knows where to splice the new parameter.
+    // The existing constructor closes with `private readonly providerParamSpecs: ProviderParamSpecService,\n  ) {}\n`.
+    // We anchor on this exact shape (trailing comma + close-paren +
+    // empty-body brace) so the patcher knows where to splice the new
+    // parameter. The `) {}` shape (no body) is the upstream form as of
+    // commit `c9009bcd5`, which removed the legacy
+    // `this.maxMessagesPerRequest = parseMaxMessagesPerRequest(...)`
+    // constructor body.
     expect(PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD).toContain(
       'private readonly providerParamSpecs: ProviderParamSpecService,',
     );
-    expect(PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD).toContain('  ) {');
+    expect(PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD).toContain('  ) {}');
   });
 
   it('PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW adds the HeaderTierService parameter after providerParamSpecs', () => {
@@ -342,6 +306,7 @@ describe('host snippet: PROXY_ROUTING_OVERRIDE_* (new routing-override anchor)',
     expect(PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW).toContain(
       'private readonly headerTierService: HeaderTierService,',
     );
+    expect(PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW).toContain('  ) {}');
     const existingIdx = PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW.indexOf(
       'private readonly providerParamSpecs:',
     );
