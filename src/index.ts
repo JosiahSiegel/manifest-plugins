@@ -117,20 +117,13 @@ export interface RateLimitPolicy {
    * use the env-var default".
    */
   readonly concurrencyMax: number | null;
-  /**
-   * Per-request message-array cap (size of the `messages` array). `null`
-   * means "no opinion; use the env-var default (or upstream's default
-   * of 1000 if no env var is set)".
-   */
-  readonly maxMessagesPerRequest: number | null;
 }
 
 export interface RequestPolicyPlugin {
   /**
    * Called once per process. Return a static policy or `null` to defer.
    * The host walks the plugin array in order; the first non-null
-   * concurrencyMax wins, then the first non-null maxMessagesPerRequest
-   * wins, independently.
+   * `concurrencyMax` wins.
    */
   getRateLimitPolicy(): RateLimitPolicy | null;
 }
