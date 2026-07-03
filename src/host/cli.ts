@@ -2,11 +2,15 @@
 /**
  * `npm run apply -- <manifest-checkout-path>`
  *
- * Locates a Manifest checkout and patches three files to install the
+ * Locates a Manifest checkout and patches four files to install the
  * plugin host:
  *   - `packages/backend/src/routing/proxy/provider-client.ts`
  *   - `packages/backend/src/routing/proxy/proxy-rate-limiter.ts`
  *   - `packages/backend/src/routing/proxy/proxy.service.ts`
+ *       (routing-override hook only — the message-cap hook was retired
+ *        when upstream commit `c9009bcd5` removed the
+ *        `maxMessagesPerRequest` feature)
+ *   - `packages/backend/src/main.ts` (admin Express mount)
  *
  * Each patch is byte-exact against upstream/main and idempotent. The
  * tool fails loud if upstream restructures (anchor mismatch).
@@ -25,7 +29,7 @@
  *   - --mvp / MVP_UI=1: requires an explicit source — refuse to publish
  *              MVP UI against the implicit official clone.
  *
- * Exits 0 if all three patches applied (or were already no-op). Exits 1
+ * Exits 0 if all four patches applied (or were already no-op). Exits 1
  * if any file reported upstream drift (which is a real build failure —
  * the user must update `src/host/snippet.ts` to match new upstream shape).
  */
@@ -216,7 +220,6 @@ async function main(): Promise<number> {
     const all = await applyAllFour(checkoutPath);
     logResult('provider-client', all.providerClient);
     logResult('proxy-rate-limiter', all.proxyRateLimiter);
-    logResult('proxy-service', all.proxyService);
     logResult('proxy-routing-override', all.proxyRoutingOverride);
     logResult('admin-mount', all.adminMount);
 
@@ -229,7 +232,7 @@ async function main(): Promise<number> {
     }
 
     process.stdout.write(
-      '[manifest-plugins/apply] all five host hooks patched (or already no-op)\n',
+      '[manifest-plugins/apply] all four host hooks patched (or already no-op)\n',
     );
 
     if (parsed.applyOverlay) {

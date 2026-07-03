@@ -6,9 +6,10 @@
  *
  * The MVP overlay path is the typed + declarative surface that consumes
  * the host snippets already shipped in `src/host/snippet.ts`. It
- * performs the same three patches as `applyAll` from
- * `src/host/apply.ts` (provider-client, proxy-rate-limiter,
- * proxy.service) plus a SOURCE_COMMIT capture step via `git rev-parse HEAD`.
+ * performs the same patches as `applyAll` from `src/host/apply.ts`
+ * (provider-client, proxy-rate-limiter) plus the routing-override
+ * hook on `proxy.service.ts` plus a SOURCE_COMMIT capture step via
+ * `git rev-parse HEAD`.
  *
  * Behavior:
  *   - For each entry, the apply tool writes the overlay's content into
@@ -39,7 +40,6 @@ import {
   applyProviderClientHost,
   applyProxyRateLimiterHost,
   applyProxyRoutingOverrideHost,
-  applyProxyServiceHost,
   type ApplyResult,
 } from '../host/apply';
 import { OVERLAY_SPEC } from '../overlays/mvp';
@@ -183,8 +183,8 @@ export async function _applyOverlayForTesting(
   }
 
   // Apply the MVP overlay through the host's existing per-file
-  // apply path. The MVP overlay spec shares the four-file shape
-  // with the standard apply orchestrator, so we map each overlay id
+  // apply path. The MVP overlay spec shares the file shape with
+  // the standard apply orchestrator, so we map each overlay id
   // to its corresponding apply function and call it directly. The
   // try/catch guards against ENOENT (missing target) and write
   // errors that applyPatch surfaces as thrown exceptions rather
@@ -195,8 +195,6 @@ export async function _applyOverlayForTesting(
       result = await applyProviderClientHost(targetPath);
     } else if (overlay.id === 'proxy-rate-limiter-policy-host') {
       result = await applyProxyRateLimiterHost(targetPath);
-    } else if (overlay.id === 'proxy-service-policy-host') {
-      result = await applyProxyServiceHost(targetPath);
     } else if (overlay.id === 'proxy-service-routing-override-host') {
       result = await applyProxyRoutingOverrideHost(targetPath);
     } else {
