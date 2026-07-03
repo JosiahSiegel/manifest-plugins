@@ -33,7 +33,6 @@ At runtime, the host snippets `require('manifest-plugins')` and walk
 
 - `provider-client.ts::applyRequestTransformPlugins(...)` — request-transform hook
 - `proxy-rate-limiter.ts::getResolvedConcurrencyMax()` — config-time policy (concurrency)
-- `proxy.service.ts::getResolvedMaxMessagesPerRequest(config)` — config-time policy (message cap)
 - `proxy.service.ts::applyProxyRoutingOverridePlugins(...)` — pre-routing override
 
 Each snippet:
