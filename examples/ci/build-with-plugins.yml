@@ -127,9 +127,9 @@ jobs:
              console.log("provider-client host applied:",
                fs.readFileSync("/app/packages/backend/dist/routing/proxy/provider-client.js", "utf-8")
                  .includes("applyRequestTransformPlugins"));
-             console.log("rate-limiter host applied:",
-               fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy-rate-limiter.js", "utf-8")
-                 .includes("getResolvedConcurrencyMax"));
-             console.log("proxy-service host applied:",
-               fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy.service.js", "utf-8")
-                 .includes("getResolvedMaxMessagesPerRequest"));'
+console.log("rate-limiter host applied:",
+                fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy-rate-limiter.js", "utf-8")
+                  .includes("getResolvedConcurrencyMax"));
+              console.log("routing-override host applied:",
+                fs.readFileSync("/app/packages/backend/dist/routing/proxy/proxy.service.js", "utf-8")
+                  .includes("applyProxyRoutingOverridePlugins"));'

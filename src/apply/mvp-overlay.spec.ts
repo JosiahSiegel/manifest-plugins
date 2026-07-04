@@ -43,8 +43,13 @@ const UPSTREAM_FIXTURES: UpstreamFixtures = {
     'function stripVendorPrefix(model: string) {\n  return model;\n}\n\n@Injectable()\nexport class ProviderClient {\n  build() {\n    return {\n      url: "x",\n      headers: {},\n      requestBody: {},\n    };\n  }\n}\n',
   proxyRateLimiter:
     'const DEFAULT_CONCURRENCY_MAX = 10;\nconst CONCURRENCY_MAX = positiveIntegerEnv("CONCURRENCY_MAX", DEFAULT_CONCURRENCY_MAX);\n\n@Injectable()\nexport class ProxyRateLimiter implements OnModuleDestroy {\n  handle() {}\n}\n',
+  // As of upstream commit c9009bcd5 the `ProxyService` constructor
+  // closes with `) {}` (no body) — the `maxMessagesPerRequest` feature
+  // was removed entirely. The fixture mirrors that shape and keeps the
+  // `ProviderParamSpecService` import + parameter so the
+  // routing-override patcher has its anchors.
   proxyService:
-    "import { parseMaxMessagesPerRequest } from './message-limit';\n\nexport class ProxyService {\n  constructor() {\n    const maxMessagesRaw =\n      process.env['MAX_MESSAGES_PER_REQUEST'] ??\n      this.config.get<string>('MANIFEST_MAX_MESSAGES');\n    this.maxMessagesPerRequest =\n      maxMessagesRaw === undefined || maxMessagesRaw === '' || maxMessagesRaw === '0'\n        ? Infinity\n        : parseMaxMessagesPerRequest(maxMessagesRaw);\n  }\n}\n",
+    "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';\nexport class ProxyService {\n  constructor(private readonly providerParamSpecs: ProviderParamSpecService) {}\n}\n",
 };
 
 function seedUpstream(manifestRoot: string): void {
@@ -220,7 +225,7 @@ describe('applyMvpOverlay (synthesized Manifest checkout)', () => {
       );
       writeFileSync(
         proxyServicePath,
-        `${UPSTREAM_FIXTURES.proxyService}\nfunction getResolvedMaxMessagesPerRequest() {}\nfunction applyProxyRoutingOverridePlugins() {}\n`,
+        `${UPSTREAM_FIXTURES.proxyService}\nfunction applyProxyRoutingOverridePlugins() {}\n`,
         'utf-8',
       );
 
@@ -284,6 +289,13 @@ describe('applyMvpOverlay (synthesized Manifest checkout)', () => {
     // every target file containing its postPatchSymbol — this
     // triggers the idempotency noop branch in applyOne and is the
     // closest path we can drive without rewriting OVERLAY_SPEC.
+    //
+    // Wave-history note: a previous wave of this test also stubbed
+    // a `proxy-service-policy-host` overlay (which installed a
+    // `getResolvedMaxMessagesPerRequest` helper on `proxy.service.ts`).
+    // Upstream commit `c9009bcd5` removed the `maxMessagesPerRequest`
+    // feature from `proxy.service.ts`, so that overlay was retired
+    // from `MVP_OVERLAY_SPEC` along with its drift-detection entry.
     const tmp = tempDir('manifest-plugins-mvp-overlay-custom-');
     try {
       seedUpstream(tmp.path);
@@ -304,10 +316,6 @@ describe('applyMvpOverlay (synthesized Manifest checkout)', () => {
           postPatchSymbol: 'function getResolvedConcurrencyMax(',
         },
         {
-          id: 'proxy-service-policy-host',
-          postPatchSymbol: 'function getResolvedMaxMessagesPerRequest(',
-        },
-        {
           id: 'proxy-service-routing-override-host',
           postPatchSymbol: 'function applyProxyRoutingOverridePlugins(',
         },
@@ -316,33 +324,12 @@ describe('applyMvpOverlay (synthesized Manifest checkout)', () => {
       const fileMap: Readonly<Record<string, string>> = {
         'provider-client-transform-host': join(proxyDir, 'provider-client.ts'),
         'proxy-rate-limiter-policy-host': join(proxyDir, 'proxy-rate-limiter.ts'),
-        'proxy-service-policy-host': join(proxyDir, 'proxy.service.ts'),
-        // Both proxy-service-* overlays target the same file. The
-        // orchestrator's idempotency check sees the sentinel on each
-        // apply step.
         'proxy-service-routing-override-host': join(proxyDir, 'proxy.service.ts'),
       };
       for (const overlay of overlays) {
         const path = fileMap[overlay.id];
         if (path === undefined) {
           throw new Error(`missing fixture for ${overlay.id}`);
-        }
-        // Both proxy-service-* overlays target the same file. We write
-        // both post-patch sentinels into a single fixture so each
-        // overlay's idempotency check sees its own sentinel without
-        // the other overlay's apply step trying to run (and
-        // reporting drift because the anchor would be missing in a
-        // bare sentinel-only fixture).
-        if (
-          overlay.id === 'proxy-service-policy-host' ||
-          overlay.id === 'proxy-service-routing-override-host'
-        ) {
-          writeFileSync(
-            path,
-            `function getResolvedMaxMessagesPerRequest() {}\nfunction applyProxyRoutingOverridePlugins() {}\n`,
-            'utf-8',
-          );
-          continue;
         }
         writeFileSync(path, `${overlay.postPatchSymbol}\n`, 'utf-8');
       }
@@ -919,7 +906,7 @@ describe('OVERLAY_SPEC re-exports', () => {
   it('MVP_OVERLAY_SPEC and OVERLAY_SPEC reference the same frozen array', () => {
     expect(OVERLAY_SPEC).toBe(MVP_OVERLAY_SPEC);
     expect(Object.isFrozen(OVERLAY_SPEC)).toBe(true);
-    expect(OVERLAY_SPEC).toHaveLength(6);
+    expect(OVERLAY_SPEC).toHaveLength(5);
     for (const overlay of OVERLAY_SPEC) {
       expect(typeof overlay.id).toBe('string');
       expect(typeof overlay.target).toBe('string');
@@ -944,7 +931,7 @@ describe('OVERLAY_SPEC re-exports', () => {
     );
   });
 
-  it('includes the dashboard-plugin-manager-mount overlay (5th overlay)', () => {
+  it('includes the dashboard-plugin-manager-mount overlay (4th overlay)', () => {
     const mount = OVERLAY_SPEC.find(
       (overlay) => overlay.id === 'dashboard-plugin-manager-mount',
     );
@@ -953,7 +940,7 @@ describe('OVERLAY_SPEC re-exports', () => {
     expect(mount?.postPatchSymbol).toBe('id="plugin-manager-root"');
   });
 
-  it('includes the dashboard-transform-mount overlay (6th overlay)', () => {
+  it('includes the dashboard-transform-mount overlay (5th overlay)', () => {
     const mount = OVERLAY_SPEC.find(
       (overlay) => overlay.id === 'dashboard-transform-mount',
     );

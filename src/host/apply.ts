@@ -10,17 +10,28 @@
  *      replaces the `const CONCURRENCY_MAX = 10;` constant with a call
  *      to `getResolvedConcurrencyMax()`. Lets the RequestPolicyPlugin
  *      chain override the per-agent concurrent-request cap.
- *   3. `packages/backend/src/routing/proxy/proxy.service.ts` — replaces
- *      the constructor's `this.maxMessagesPerRequest = parseMaxMessagesPerRequest(...)`
- *      with a call to `getResolvedMaxMessagesPerRequest(this.config)`. Lets
- *      the RequestPolicyPlugin chain override the per-request message-array cap.
+ *   3. `packages/backend/src/routing/proxy/proxy.service.ts` — installs the
+ *      routing-override host (HeaderTierService import + constructor
+ *      parameter + `applyProxyRoutingOverridePlugins(...)` call spliced
+ *      into `resolveRouting()` BEFORE the upstream explicit-model
+ *      early-return).
+ *
+ * Wave-history note: an earlier wave of this fork also installed a
+ * `maxMessagesPerRequest` plugin host on `proxy.service.ts`. That host
+ * was removed when upstream commit `c9009bcd5` deleted the
+ * `maxMessagesPerRequest` feature from `proxy.service.ts` entirely
+ * (the import, the constructor field, the constructor body, and the
+ * `validatePayload` enforcement check all disappeared). With the cap
+ * gone from upstream, the fork plugin has nothing to override — the
+ * corresponding snippet constants (`PROXY_SERVICE_*`) and
+ * `applyProxyServiceHost` orchestrator entry point were retired.
  *
  * Each patch is byte-exact against upstream/main and idempotent (running
  * twice is a no-op). If upstream restructures, the patcher fails loudly
  * with the exact anchor that moved.
  *
  * The host query functions (`applyRequestTransformPlugins`,
- * `getResolvedConcurrencyMax`, `getResolvedMaxMessagesPerRequest`) are
+ * `getResolvedConcurrencyMax`, `applyProxyRoutingOverridePlugins`) are
  * file-private — they're added immediately above the relevant class
  * declaration by the apply tool.
  */
@@ -37,9 +48,6 @@ import {
   PROXY_ROUTING_OVERRIDE_IMPORT_OLD,
   PROXY_ROUTING_OVERRIDE_NEW,
   PROXY_ROUTING_OVERRIDE_OLD,
-  PROXY_SERVICE_HOST_SOURCE,
-  PROXY_SERVICE_NEW,
-  PROXY_SERVICE_OLD,
   RETURN_NEW,
   RETURN_OLD,
   RATE_LIMITER_NEW,
@@ -53,17 +61,6 @@ import {
 
 const HOUSEKEEPING_RATE_LIMITER_OLD = `const DEFAULT_CONCURRENCY_MAX = 10;
 const CONCURRENCY_MAX = positiveIntegerEnv('CONCURRENCY_MAX', DEFAULT_CONCURRENCY_MAX);
-`;
-
-const HOUSEKEEPING_PROXY_SERVICE_OLD = `    // Fork: disable message cap by default. Set MAX_MESSAGES_PER_REQUEST or
-    // MANIFEST_MAX_MESSAGES to a positive integer to re-enable.
-    const maxMessagesRaw =
-      process.env['MAX_MESSAGES_PER_REQUEST'] ??
-      this.config.get<string>('MANIFEST_MAX_MESSAGES');
-    this.maxMessagesPerRequest =
-      maxMessagesRaw === undefined || maxMessagesRaw === '' || maxMessagesRaw === '0'
-        ? Infinity
-        : parseMaxMessagesPerRequest(maxMessagesRaw);
 `;
 
 // =============================================================================
@@ -290,39 +287,6 @@ export class ProxyRateLimiter implements OnModuleDestroy {
 }
 
 /**
- * Patch `proxy.service.ts` to install the message-cap host. Two
- * operations: insert `getResolvedMaxMessagesPerRequest` helper before
- * the class, then replace the constructor's
- * `this.maxMessagesPerRequest = parseMaxMessagesPerRequest(...)` block
- * with a call to the helper.
- */
-export async function applyProxyServiceHost(
-  filePath: string,
-  options: ApplyOptions = {},
-): Promise<ApplyResult> {
-  // The helper marker here is the end of the `ProxyService` class's
-  // import block, ending with the import of `parseMaxMessagesPerRequest`
-  // and a blank line, before the class declaration. We use the line
-  // right before `@Injectable()` to anchor.
-  const helperMarkerOld = `import { parseMaxMessagesPerRequest } from './message-limit';
-`;
-  const helperMarkerNew = `${PROXY_SERVICE_HOST_SOURCE}import { parseMaxMessagesPerRequest } from './message-limit';
-`;
-  return applyPatch(
-    {
-      filePath,
-      postPatchSymbol: 'function getResolvedMaxMessagesPerRequest(',
-      oldText: PROXY_SERVICE_OLD,
-      oldTextAlternatives: [HOUSEKEEPING_PROXY_SERVICE_OLD],
-      newText: PROXY_SERVICE_NEW,
-      helperMarkerOld,
-      helperMarkerNew,
-    },
-    options,
-  );
-}
-
-/**
  * Patch `proxy.service.ts` to install the routing-override host.
  *
  * Three operations, all in one pass:
@@ -330,10 +294,10 @@ export async function applyProxyServiceHost(
  *      `ProviderParamSpecService` import line.
  *   2. Extend the constructor with a new `headerTierService` parameter
  *      after `providerParamSpecs`.
- *   3. Insert the `applyProxyRoutingOverridePlugins(...)` helper at the
- *      top of the class (above the existing message-cap helper), then
- *      splice the plugin call into `resolveRouting()` BEFORE the
- *      upstream `2ab748a6` explicit-model early-return.
+ *   3. Insert the `applyProxyRoutingOverridePlugins(...)` helper above
+ *      the existing class body, then splice the plugin call into
+ *      `resolveRouting()` BEFORE the upstream explicit-model
+ *      early-return.
  *
  * The function deliberately composes the three sub-edits as separate
  * `applyPatch` calls (rather than threading a multi-anchor PatchSpec)
@@ -458,7 +422,6 @@ export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
 export interface ApplyAllResult {
   providerClient: ApplyResult;
   proxyRateLimiter: ApplyResult;
-  proxyService: ApplyResult;
   /** True if all three patches are applied (or were already no-op). */
   fullyApplied: boolean;
   /** True if at least one file reported upstream drift. */
@@ -471,23 +434,19 @@ export async function applyAll(
   options: ApplyOptions = {},
 ): Promise<ApplyAllResult> {
   const resolve = (rel: string) => `${manifestRoot.replace(/\/$/, '')}/${rel}`;
-  const [providerClient, proxyRateLimiter, proxyService] = await Promise.all([
+  const [providerClient, proxyRateLimiter] = await Promise.all([
     applyProviderClientHost(resolve(files.providerClient), options),
     applyProxyRateLimiterHost(resolve(files.proxyRateLimiter), options),
-    applyProxyServiceHost(resolve(files.proxyService), options),
   ]);
   return {
     providerClient,
     proxyRateLimiter,
-    proxyService,
     fullyApplied:
       providerClient.status !== 'upstream-drift' &&
-      proxyRateLimiter.status !== 'upstream-drift' &&
-      proxyService.status !== 'upstream-drift',
+      proxyRateLimiter.status !== 'upstream-drift',
     hasDrift:
       providerClient.status === 'upstream-drift' ||
-      proxyRateLimiter.status === 'upstream-drift' ||
-      proxyService.status === 'upstream-drift',
+      proxyRateLimiter.status === 'upstream-drift',
   };
 }
 
@@ -498,9 +457,8 @@ export async function applyAll(
 export interface ApplyAllFourResult extends ApplyAllResult {
   /**
    * Result of the routing-override host patch on `proxy.service.ts`.
-   * Independent of the message-cap patch — they look at different
-   * anchors. Drift on this field does not block the other three
-   * patches from reporting `applied` / `noop`.
+   * Drift on this field does not block the other three patches from
+   * reporting `applied` / `noop`.
    */
   proxyRoutingOverride: ApplyResult;
   /**
@@ -515,20 +473,16 @@ export interface ApplyAllFourResult extends ApplyAllResult {
 /**
  * Run all four host patches against a Manifest checkout. Like
  * {@link applyAll} but additionally installs the routing-override
- * hook on `proxy.service.ts`. Use this when the upstream checkout
- * is at or after commit `2ab748a6` (2026-06-29); pre-`2ab748a6`
- * upstream will report `upstream-drift` on `proxyRoutingOverride`
- * (correct: that hook only exists post-`2ab748a6`).
+ * hook on `proxy.service.ts` and the admin Express mount on `main.ts`.
  *
- * Sequencing: the two `proxy.service.ts` patches (message-cap and
- * routing-override) are serialized — the message-cap patch runs
- * first so its helper insertion marker is present in the file
- * when the routing-override patch splices its own body anchor.
- * Running them in parallel would race on the shared file.
+ * Sequencing: the three independent files (provider-client,
+ * rate-limiter, main) are patched in parallel in Phase 1; the
+ * routing-override patch runs alone in Phase 2 so its anchor scan
+ * sees the post-Phase-1 file state. Running them all in parallel
+ * would race on the shared `proxy.service.ts` file.
  *
- * The aggregate `fullyApplied` / `hasDrift` include the new field
- * — pre-`2ab748a6` upstreams will see `fullyApplied: false` even
- * when the legacy three patches all succeeded.
+ * The aggregate `fullyApplied` / `hasDrift` include all four
+ * results — any single drift surfaces as `fullyApplied: false`.
  */
 export async function applyAllFour(
   manifestRoot: string,
@@ -545,16 +499,13 @@ export async function applyAllFour(
   const mainPath = resolve(files.main);
   // Phase 1: provider-client + rate-limiter + admin-mount run in parallel
   //          (each writes a different file).
-  // Phase 2: message-cap runs alone so the file is settled.
-  // Phase 3: routing-override runs alone so its anchor scan
-  //          sees the post-message-cap file state.
-  const [providerClient, proxyRateLimiter, proxyService, adminMount] =
-    await Promise.all([
-      applyProviderClientHost(resolve(files.providerClient), options),
-      applyProxyRateLimiterHost(resolve(files.proxyRateLimiter), options),
-      applyProxyServiceHost(proxyServicePath, options),
-      applyAdminMount(mainPath, options),
-    ]);
+  // Phase 2: routing-override runs alone so its anchor scan
+  //          sees the post-Phase-1 proxy.service.ts file state.
+  const [providerClient, proxyRateLimiter, adminMount] = await Promise.all([
+    applyProviderClientHost(resolve(files.providerClient), options),
+    applyProxyRateLimiterHost(resolve(files.proxyRateLimiter), options),
+    applyAdminMount(mainPath, options),
+  ]);
   const proxyRoutingOverride = await applyProxyRoutingOverrideHost(
     proxyServicePath,
     options,
@@ -562,19 +513,16 @@ export async function applyAllFour(
   return {
     providerClient,
     proxyRateLimiter,
-    proxyService,
     proxyRoutingOverride,
     adminMount,
     fullyApplied:
       providerClient.status !== 'upstream-drift' &&
       proxyRateLimiter.status !== 'upstream-drift' &&
-      proxyService.status !== 'upstream-drift' &&
       proxyRoutingOverride.status !== 'upstream-drift' &&
       adminMount.status !== 'upstream-drift',
     hasDrift:
       providerClient.status === 'upstream-drift' ||
       proxyRateLimiter.status === 'upstream-drift' ||
-      proxyService.status === 'upstream-drift' ||
       proxyRoutingOverride.status === 'upstream-drift' ||
       adminMount.status === 'upstream-drift',
   };

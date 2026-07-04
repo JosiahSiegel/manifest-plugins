@@ -7,7 +7,7 @@
 #      / --manifest-dir PATH).
 #   2. Builds the manifest-plugins package (this repo) so the apply
 #      CLI and the runtime dist/ are available.
-#   3. Applies the plugin host to all three target files in the
+#   3. Applies the plugin host to all four target files in the
 #      Manifest checkout (provider-client.ts, proxy-rate-limiter.ts,
 #      proxy.service.ts). Idempotent — safe to re-run.
 #   4. Builds a Docker image with the plugins baked in, using
@@ -239,7 +239,7 @@ for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER" "$PROXY_SERVICE"; do
   fi
 done
 
-echo "==> applying plugin host to three files in $MANIFEST_PATH"
+echo "==> applying plugin host to four files in $MANIFEST_PATH"
 echo "[manifest-plugins/apply] SOURCE_COMMIT=${SOURCE_COMMIT}"
 (
   cd "$PLUGINS_REPO_DIR"
@@ -258,11 +258,10 @@ echo "[manifest-plugins/apply] SOURCE_COMMIT=${SOURCE_COMMIT}"
 
 # Verify the patches actually landed (fail loud if upstream drifted and the
 # apply tool's fail-loud guard didn't catch it for some reason).
-for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER" "$PROXY_SERVICE"; do
+for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER"; do
   case "$(basename "$f")" in
     provider-client.ts)     SYM='function applyRequestTransformPlugins(' ;;
     proxy-rate-limiter.ts)  SYM='function getResolvedConcurrencyMax(' ;;
-    proxy.service.ts)       SYM='function getResolvedMaxMessagesPerRequest(' ;;
   esac
   if ! grep -q "$SYM" "$f"; then
     echo "error: post-apply check failed — $SYM not found in $f" >&2

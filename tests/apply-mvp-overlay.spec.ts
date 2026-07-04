@@ -134,7 +134,7 @@ describe('MVP overlay apply path (synthesized Manifest checkout)', () => {
         proxyRateLimiter:
           'const DEFAULT_CONCURRENCY_MAX = 10;\nconst CONCURRENCY_MAX = positiveIntegerEnv("CONCURRENCY_MAX", DEFAULT_CONCURRENCY_MAX);\n\n@Injectable()\nexport class ProxyRateLimiter implements OnModuleDestroy {\n  handle() {}\n}\n',
         proxyService:
-          "import { parseMaxMessagesPerRequest } from './message-limit';\n\nexport class ProxyService {\n  constructor() {\n    const maxMessagesRaw =\n      process.env['MAX_MESSAGES_PER_REQUEST'] ??\n      this.config.get<string>('MANIFEST_MAX_MESSAGES');\n    this.maxMessagesPerRequest =\n      maxMessagesRaw === undefined || maxMessagesRaw === '' || maxMessagesRaw === '0'\n        ? Infinity\n        : parseMaxMessagesPerRequest(maxMessagesRaw);\n  }\n}\n",
+          "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';\nexport class ProxyService {\n  constructor(private readonly providerParamSpecs: ProviderParamSpecService) {}\n}\n",
       };
       mkdirSync(join(tmp, 'packages/backend/src/routing/proxy'), { recursive: true });
       writeFileSync(

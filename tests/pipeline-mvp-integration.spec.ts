@@ -54,13 +54,12 @@ const PATCHED_MANIFEST_FILES = [
   {
     relativePath: 'packages/backend/src/routing/proxy/proxy.service.ts',
     content:
-      'function getResolvedMaxMessagesPerRequest() { return Infinity; }\n' +
       "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';\n" +
       "import { HeaderTierService } from '../header-tiers/header-tier.service';\n" +
       'function applyProxyRoutingOverridePlugins() {}\n' +
       '    private readonly providerParamSpecs: ProviderParamSpecService,\n' +
       '    private readonly headerTierService: HeaderTierService,\n' +
-      '  ) {\n',
+      '  ) {}\n',
   },
   {
     // Synthesized upstream `main.ts` carrying the listen anchor the
@@ -82,16 +81,24 @@ const PATCHED_MANIFEST_FILES = [
 
 /**
  * Minimal upstream-shaped `proxy.service.ts` carrying the
- * `2ab748a6` explicit-model early-return anchor so the apply CLI's
+ * explicit-model early-return anchor so the apply CLI's
  * `applyAllFour` path can install the routing-override hook
  * (Blocker #1). Mirrors the synthesized fixture shape used by
  * `tests/apply.spec.ts::applyProxyRoutingOverrideHost` so the CLI
  * integration test exercises the same upstream contract.
+ *
+ * Wave-history note: previous waves of this fixture also carried a
+ * `parseMaxMessagesPerRequest` import + a message-cap constructor
+ * body, since the proxy.service.ts hook installed a fork plugin
+ * that overrode `this.maxMessagesPerRequest`. Upstream commit
+ * `c9009bcd5` removed the `maxMessagesPerRequest` feature from
+ * `proxy.service.ts` entirely; the constructor now closes with
+ * `) {}` (no body), and the message-cap import is gone. This
+ * fixture mirrors the post-`c9009bcd5` shape.
  */
 const UPSTREAM_PROXY_SERVICE_FIXTURE = [
   "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';",
   "import { OPENAI_MODEL_ID_AUTO, routeForOpenAiModelId } from './openai-model-id';",
-  "import { parseMaxMessagesPerRequest } from './message-limit';",
   '',
   '@Injectable()',
   'export class ProxyService {',
@@ -102,11 +109,7 @@ const UPSTREAM_PROXY_SERVICE_FIXTURE = [
   '    private readonly tierService: TierService,',
   '    private readonly openaiOauth: OpenaiOauthService,',
   '    private readonly providerParamSpecs: ProviderParamSpecService,',
-  '  ) {',
-  "    this.maxMessagesPerRequest = parseMaxMessagesPerRequest(",
-  "      this.config.get<string>('MANIFEST_MAX_MESSAGES'),",
-  '    );',
-  '  }',
+  '  ) {}',
   '',
   '  private async resolveRouting(',
   '    agentId: string,',
@@ -331,7 +334,6 @@ describe('host/verify.ts reads routing-override sentinels from proxy.service.ts 
       writeFileSync(
         proxyServiceTarget,
         [
-          'function getResolvedMaxMessagesPerRequest(){return Infinity;}',
           "import { HeaderTierService } from '../header-tiers/header-tier.service';",
           'function applyProxyRoutingOverridePlugins(){}',
           'private readonly headerTierService: HeaderTierService,',
@@ -366,7 +368,6 @@ describe('host/verify.ts reads routing-override sentinels from proxy.service.ts 
       writeFileSync(
         proxyServiceTarget,
         [
-          'function getResolvedMaxMessagesPerRequest(){return Infinity;}',
           "import { HeaderTierService } from '../header-tiers/header-tier.service';",
           'private readonly headerTierService: HeaderTierService,',
           '',
@@ -412,7 +413,7 @@ describe('apply CLI integration', () => {
       expect(result.stderr).not.toContain('choose only one Manifest source');
       expect(result.stdout).toContain('[manifest-plugins/apply] SOURCE_COMMIT=');
       expect(result.stdout).toContain(
-        '[manifest-plugins/apply] all five host hooks patched (or already no-op)',
+        '[manifest-plugins/apply] all four host hooks patched (or already no-op)',
       );
     } finally {
       cleanup(tmp);

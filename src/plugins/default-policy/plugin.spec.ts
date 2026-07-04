@@ -19,24 +19,17 @@ describe('DefaultPolicyPlugin', () => {
     expect(policy.concurrencyMax).toBe(10);
   });
 
-  it('disables the per-request message-array cap by default (null = Infinity)', () => {
-    const policy = plugin.getRateLimitPolicy()!;
-    expect(policy.maxMessagesPerRequest).toBeNull();
-  });
-
   it('returns a fresh object on each call (host caches the result, never mutates)', () => {
     const a = plugin.getRateLimitPolicy()!;
     const b = plugin.getRateLimitPolicy()!;
     expect(a).not.toBe(b);
     expect(a.concurrencyMax).toBe(b.concurrencyMax);
-    expect(a.maxMessagesPerRequest).toBe(b.maxMessagesPerRequest);
   });
 
   it('matches the RateLimitPolicy interface shape exactly', () => {
     const policy: RateLimitPolicy = plugin.getRateLimitPolicy()!;
     expect(policy).toEqual({
       concurrencyMax: expect.any(Number),
-      maxMessagesPerRequest: null,
     });
   });
 });

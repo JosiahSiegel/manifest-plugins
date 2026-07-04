@@ -21,7 +21,6 @@ import {
   applyProviderClientHost,
   applyProxyRateLimiterHost,
   applyProxyRoutingOverrideHost,
-  applyProxyServiceHost,
   DEFAULT_MANIFEST_FILES,
   type ApplyResult,
 } from '../src/host/apply';
@@ -155,25 +154,26 @@ function withTempManifest(
  * directly; it works against whatever bytes are on disk. We
  * synthesize the upstream shape inline so the test is hermetic
  * and doesn't depend on the sibling Manifest checkout having a
- * specific post-`2ab748a6` commit checked out.
+ * specific post-`c9009bcd5` commit checked out.
  *
  * The shape mirrors upstream/main `proxy.service.ts` at commit
- * `2ab748a6` (2026-06-29), with the explicit-model early-return
- * block at the signature line `): Promise<ResolvedRouting> {`
- * down to `if (apiMode !== 'messages' && ... && requestedModel
- * !== OPENAI_MODEL_ID_AUTO) {`.
+ * `c9009bcd5` (2026-07-03), which closed the legacy `ProxyService`
+ * constructor with `) {}` (empty body) — the
+ * `this.maxMessagesPerRequest = parseMaxMessagesPerRequest(...)`
+ * initialization block was removed from upstream entirely.
  *
- * The fixture also carries the pre-existing message-cap anchors
- * (`parseMaxMessagesPerRequest` import + `getResolvedMaxMessagesPerRequest`
- * call site) so `applyProxyServiceHost` succeeds against it. The
- * `applyAllFour` orchestrator runs all four patches; each must
- * match its own anchor.
+ * The fixture therefore omits the `parseMaxMessagesPerRequest`
+ * import and the message-cap constructor body that previous waves
+ * of the patcher used to anchor on. The remaining
+ * `applyProxyRoutingOverrideHost` anchors (the `ProviderParamSpecService`
+ * import, the `providerParamSpecs: ProviderParamSpecService` constructor
+ * parameter, and the explicit-model early-return inside `resolveRouting()`)
+ * are still present verbatim.
  */
 function synthesizeProxyServiceFixture(): string {
   return [
     "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';",
     "import { OPENAI_MODEL_ID_AUTO, routeForOpenAiModelId } from './openai-model-id';",
-    "import { parseMaxMessagesPerRequest } from './message-limit';",
     '',
     '@Injectable()',
     'export class ProxyService {',
@@ -184,11 +184,7 @@ function synthesizeProxyServiceFixture(): string {
     '    private readonly tierService: TierService,',
     '    private readonly openaiOauth: OpenaiOauthService,',
     '    private readonly providerParamSpecs: ProviderParamSpecService,',
-    '  ) {',
-    "    this.maxMessagesPerRequest = parseMaxMessagesPerRequest(",
-    "      this.config.get<string>('MANIFEST_MAX_MESSAGES'),",
-    '    );',
-    '  }',
+    '  ) {}',
     '',
     '  private async resolveRouting(',
     '    agentId: string,',
@@ -252,14 +248,13 @@ function expectStatus(
   }
 }
 
-describe('applyAll (three-file patcher)', () => {
-  it('patches all three files against upstream shapes', async () => {
+describe('applyAll (two-file patcher)', () => {
+  it('patches both files against upstream shapes', async () => {
     await withTempManifest(async (files) => {
       const all = await applyAll(files.root);
 
       expectStatus('providerClient', all.providerClient, 'applied');
       expectStatus('proxyRateLimiter', all.proxyRateLimiter, 'applied');
-      expectStatus('proxyService', all.proxyService, 'applied');
       expect(all.fullyApplied).toBe(true);
       expect(all.hasDrift).toBe(false);
 
@@ -272,14 +267,10 @@ describe('applyAll (three-file patcher)', () => {
       expect(rateLimiter).toContain('function getResolvedConcurrencyMax(');
       expect(rateLimiter).not.toContain('const CONCURRENCY_MAX = 10;');
       expect(rateLimiter).toContain('const CONCURRENCY_MAX = getResolvedConcurrencyMax();');
-
-      const proxyService = readFileSync(files.proxyService, 'utf-8');
-      expect(proxyService).toContain('function getResolvedMaxMessagesPerRequest(');
-      expect(proxyService).toContain('this.maxMessagesPerRequest = getResolvedMaxMessagesPerRequest(this.config);');
     });
   });
 
-  it('is idempotent — second run on the same tempdir reports noop for all three files', async () => {
+  it('is idempotent — second run on the same tempdir reports noop for both files', async () => {
     await withTempManifest(async (files) => {
       const first = await applyAll(files.root);
       expect(first.fullyApplied).toBe(true);
@@ -287,7 +278,6 @@ describe('applyAll (three-file patcher)', () => {
       const second = await applyAll(files.root);
       expectStatus('providerClient', second.providerClient, 'noop');
       expectStatus('proxyRateLimiter', second.proxyRateLimiter, 'noop');
-      expectStatus('proxyService', second.proxyService, 'noop');
       expect(second.fullyApplied).toBe(true);
       expect(second.hasDrift).toBe(false);
     });
@@ -314,32 +304,8 @@ describe('applyAll (three-file patcher)', () => {
       const third = await applyAll(files.root);
       expectStatus('providerClient', third.providerClient, 'upstream-drift');
       expectStatus('proxyRateLimiter', third.proxyRateLimiter, 'noop');
-      expectStatus('proxyService', third.proxyService, 'noop');
       expect(third.fullyApplied).toBe(false);
       expect(third.hasDrift).toBe(true);
-    });
-  });
-
-  it('reports upstream-drift when the helper-marker is missing (old-text still present)', async () => {
-    // Construct a pathological upstream state: the constructor body
-    // (the old-text anchor) is still present, but the
-    // `import { parseMaxMessagesPerRequest } from './message-limit'`
-    // import (the helper-marker anchor) has been removed by an upstream
-    // refactor. The patcher should report drift on the helper-marker
-    // branch (line 119 in apply.ts), not the old-text branch.
-    await withTempManifest(async (files) => {
-      const upstream = readFileSync(files.proxyService, 'utf-8');
-      const stripped = upstream.replace(
-        "import { parseMaxMessagesPerRequest } from './message-limit';\n",
-        '',
-      );
-      writeFileSync(files.proxyService, stripped, 'utf-8');
-
-      const result = await applyProxyServiceHost(files.proxyService);
-      expectStatus('applyProxyServiceHost', result, 'upstream-drift');
-      if (result.status === 'upstream-drift') {
-        expect(result.reason).toContain('helper insertion marker');
-      }
     });
   });
 
@@ -366,7 +332,6 @@ describe('applyAll (three-file patcher)', () => {
       const before = {
         providerClient: readFileSync(files.providerClient, 'utf-8'),
         proxyRateLimiter: readFileSync(files.proxyRateLimiter, 'utf-8'),
-        proxyService: readFileSync(files.proxyService, 'utf-8'),
       };
 
       const all = await applyAll(files.root, undefined, { dryRun: true });
@@ -375,11 +340,9 @@ describe('applyAll (three-file patcher)', () => {
       const after = {
         providerClient: readFileSync(files.providerClient, 'utf-8'),
         proxyRateLimiter: readFileSync(files.proxyRateLimiter, 'utf-8'),
-        proxyService: readFileSync(files.proxyService, 'utf-8'),
       };
       expect(after.providerClient).toBe(before.providerClient);
       expect(after.proxyRateLimiter).toBe(before.proxyRateLimiter);
-      expect(after.proxyService).toBe(before.proxyService);
     });
   });
 });
@@ -403,25 +366,14 @@ describe('per-file wrappers', () => {
     });
   });
 
-  it('applyProxyServiceHost patches a single proxy.service.ts in isolation', async () => {
-    await withTempManifest(async (files) => {
-      const result = await applyProxyServiceHost(files.proxyService);
-      expectStatus('applyProxyServiceHost', result, 'applied');
-      const patched = readFileSync(files.proxyService, 'utf-8');
-      expect(patched).toContain('function getResolvedMaxMessagesPerRequest(');
-    });
-  });
-
   it('per-file wrappers accept a no-argument call (default options)', async () => {
     // Covers the `options: ApplyOptions = {}` default parameter in applyPatch.
     await withTempManifest(async (files) => {
       // Fresh upstream content — no dryRun flag, so file IS written.
       const r1 = await applyProviderClientHost(files.providerClient);
       const r2 = await applyProxyRateLimiterHost(files.proxyRateLimiter);
-      const r3 = await applyProxyServiceHost(files.proxyService);
       expectStatus('providerClient', r1, 'applied');
       expectStatus('proxyRateLimiter', r2, 'applied');
-      expectStatus('proxyService', r3, 'applied');
     });
   });
 });
@@ -472,7 +424,7 @@ describe('applyProxyRoutingOverrideHost (proxy.service.ts routing-override hook)
     });
   });
 
-  it('reports upstream-drift when the explicit-model anchor (2ab748a6 signature) is missing', async () => {
+  it('reports upstream-drift when the explicit-model anchor is missing', async () => {
     await withSynthProxyService(async (files) => {
       // Strip the entire explicit-model block so the anchor is gone.
       const original = readFileSync(files.proxyService, 'utf-8');
@@ -512,8 +464,8 @@ describe('applyProxyRoutingOverrideHost (proxy.service.ts routing-override hook)
       // closing line is gone. Use a different param name.
       const original = readFileSync(files.proxyService, 'utf-8');
       const stripped = original.replace(
-        '    private readonly providerParamSpecs: ProviderParamSpecService,\n  ) {',
-        '    private readonly providerSpecs: ProviderParamSpecService,\n  ) {',
+        '    private readonly providerParamSpecs: ProviderParamSpecService,\n  ) {}',
+        '    private readonly providerSpecs: ProviderParamSpecService,\n  ) {}',
       );
       writeFileSync(files.proxyService, stripped, 'utf-8');
 
@@ -541,7 +493,7 @@ describe('applyAllFour includes the routing-override patcher (four-file patcher)
   it('patches all four files against the upstream shapes', async () => {
     await withTempManifest(async (files) => {
       // Stage a synthesized proxy.service.ts shape with the
-      // 2ab748a6 anchor alongside the real provider-client.ts,
+      // c9009bcd5 anchor alongside the real provider-client.ts,
       // proxy-rate-limiter.ts, and the real (existing) proxy.service.ts
       // fixture the upstream tests already populated. We want the
       // synthesized routing-override content for proxy.service.ts so
@@ -553,7 +505,6 @@ describe('applyAllFour includes the routing-override patcher (four-file patcher)
 
       expectStatus('providerClient', all.providerClient, 'applied');
       expectStatus('proxyRateLimiter', all.proxyRateLimiter, 'applied');
-      expectStatus('proxyService', all.proxyService, 'applied');
       expectStatus(
         'proxyRoutingOverride',
         all.proxyRoutingOverride,
@@ -567,11 +518,11 @@ describe('applyAllFour includes the routing-override patcher (four-file patcher)
     });
   });
 
-  it('reports the routing-override drift independently when proxy.service.ts is missing the 2ab748a6 anchor', async () => {
+  it('reports the routing-override drift independently when proxy.service.ts is missing the explicit-model anchor', async () => {
     await withTempManifest(async (files) => {
-      // Write a proxy.service.ts WITHOUT the 2ab748a6 anchor so the
-      // routing-override patcher reports drift but the other three
-      // patches still apply.
+      // Write a proxy.service.ts WITHOUT the explicit-model anchor so
+      // the routing-override patcher reports drift but the other
+      // three patches still apply.
       const strippedProxyService = synthesizeProxyServiceFixture().replace(
         "    const requestedModel = typeof body.model === 'string' ? body.model : undefined;\n    // Anthropic Messages requests require a provider-native model field; only\n    // OpenAI-compatible surfaces use /v1/models IDs as route overrides.\n    if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {\n",
         '',
@@ -582,7 +533,6 @@ describe('applyAllFour includes the routing-override patcher (four-file patcher)
 
       expectStatus('providerClient', all.providerClient, 'applied');
       expectStatus('proxyRateLimiter', all.proxyRateLimiter, 'applied');
-      expectStatus('proxyService', all.proxyService, 'applied');
       expectStatus(
         'proxyRoutingOverride',
         all.proxyRoutingOverride,
@@ -621,10 +571,10 @@ describe('applyPatch direct invocation (covers internal defaults)', () => {
 describe('applyPatch preflight anchor drift', () => {
   it('reports upstream-drift when a preflight anchor marker is missing', async () => {
     await withTempManifest(async (files) => {
-      const result = await applyProxyServiceHost(files.proxyService, {
+      const result = await applyProxyRoutingOverrideHost(files.proxyService, {
         preflightAnchors: [
           { name: 'upstream-class', marker: 'class ProxyService {' },
-          { name: 'helper-symbol', marker: 'function getResolvedMaxMessagesPerRequest(' },
+          { name: 'helper-symbol', marker: 'function applyProxyRoutingOverridePlugins(' },
         ],
       });
       expectStatus('preflight-drift', result, 'upstream-drift');
@@ -651,7 +601,7 @@ describe('applyPatch preflight anchor drift', () => {
 
   it('treats an empty preflight anchor list as a no-op', async () => {
     await withTempManifest(async (files) => {
-      const result = await applyProxyServiceHost(files.proxyService, {
+      const result = await applyProxyRoutingOverrideHost(files.proxyService, {
         preflightAnchors: [],
       });
       expectStatus('preflight-empty', result, 'applied');
@@ -660,9 +610,9 @@ describe('applyPatch preflight anchor drift', () => {
 });
 
 describe('tsc check on patched files', () => {
-  it('all three files pass tsc --noEmit against the backend tsconfig', async () => {
+  it('all patched files pass tsc --noEmit against the backend tsconfig', async () => {
     await withTempManifest(async (files) => {
-      const all = await applyAll(files.root);
+      const all = await applyAllFour(files.root);
       expect(all.fullyApplied).toBe(true);
 
       // Place the patched files in the real backend tree so the
@@ -712,7 +662,7 @@ describe('tsc check on patched files', () => {
           'proxy-rate-limiter',
           'getResolvedConcurrencyMax',
           'proxy.service',
-          'getResolvedMaxMessagesPerRequest',
+          'applyProxyRoutingOverridePlugins',
         ];
         const errors = out.filter((line) =>
           watched.some((s) => line.includes(s)),
