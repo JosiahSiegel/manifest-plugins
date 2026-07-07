@@ -506,6 +506,205 @@ export const PROXY_ROUTING_OVERRIDE_NEW = `  ): Promise<ResolvedRouting> {
 `;
 
 // =============================================================================
+// Model-list override host (injected into model-fetcher.ts / /v1/models)
+// =============================================================================
+
+/**
+ * The host helper inserted into upstream's model-fetcher layer so a
+ * `ModelListOverridePlugin` can rewrite the `discoveredModels` array
+ * before upstream serializes it as the response body of
+ * `GET /v1/models`.
+ *
+ * Behavior:
+ *   - Plugins receive a fully-resolved context (`tenantId`, `agentId`,
+ *     `discoveredModels`, `requestMetadata`). The host does the upstream
+ *     `modelDiscovery.getModelsForAgent(...)` work; plugins only read.
+ *   - The FIRST non-null result wins. The host returns the plugin's
+ *     `discoveredModels` array verbatim as the replacement for the
+ *     upstream default. Later plugins are skipped for the same request.
+ *   - Plugin errors are non-fatal — the host catches and logs them and
+ *     continues with the next plugin (or upstream's default if every
+ *     plugin errored or returned `null`).
+ *
+ * Why `require()` and not `import`? Same rationale as the other host
+ * snippets: the helper is pasted into upstream Manifest source where
+ * `manifest-plugins` may not be installed. `require()` inside try/catch
+ * degrades to a no-op when the module is missing, so the upstream
+ * source stays compilable in either state.
+ *
+ * Trigger: Anthropic shipped (June 2026) several breaking changes that
+ * broke the upstream static `DiscoveredModel` catalog for the Anthropic
+ * provider — `claude-sonnet-4-20250514` and `claude-opus-4-20250514`
+ * were retired June 15, `claude-sonnet-5` (with breaking tokenizer /
+ * removed extended thinking / sampling-parameter 400s) shipped June 30,
+ * and fast-mode was removed from `claude-opus-4-6` on June 29. Until
+ * upstream re-syncs its catalog, operators need a way to surface the
+ * correct /v1/models list to clients without forking Manifest. This
+ * host hook is that mechanism.
+ */
+export const MODEL_LIST_OVERRIDE_HOST_SOURCE = `/**
+ * Fork: apply registered model-list-override plugins to the
+ * discovered-models list returned by upstream
+ * \`discoveryService.getModelsForAgent(...)\` BEFORE the upstream
+ * \`.map(...)\` transforms it into the wire-shape response body of
+ * the canonical \`GET :agentName/available-models\` endpoint. Plugins
+ * live in the sibling \`manifest-plugins\` repo and are loaded via
+ * \`require('manifest-plugins')\`. If the package is not installed
+ * (e.g. on upstream or in CI without the fork's plugin layer), this
+ * is a no-op.
+ *
+ * Plugin contract: each entry in \`require('manifest-plugins').plugins\`
+ * may implement \`overrideModelList(ctx)\` returning
+ * \`{ discoveredModels, reason? }\` or \`null\`. The host walks the
+ * plugin array in order and returns the first non-null result. Plugin
+ * errors are caught and logged; one broken plugin must not break the
+ * \`/v1/models\` response.
+ *
+ * Type-safety note: the parameter types below are intentionally
+ * structural / loose (\`ReadonlyArray<Record<string, unknown>>\`) so
+ * this host source compiles in BOTH contexts: (a) inside upstream
+ * Manifest where \`getModelsForAgent\` returns the upstream
+ * \`DiscoveredModel\` shape (with strongly-typed union fields like
+ * \`authType: 'api_key' | 'local' | 'subscription'\` and
+ * \`capabilities: readonly Modality[]\`) and (b) inside the
+ * \`manifest-plugins\` package where \`overrideModelList\` expects
+ * \`ModelListOverrideDiscoveredModel\`. Both shapes satisfy
+ * \`Record<string, unknown>\` (the index signature makes them
+ * structurally compatible), so the helper type-checks in either
+ * build without re-defining upstream's exact row shape here.
+ */
+function applyModelListOverridePlugins(
+  tenantId: string,
+  agentId: string,
+  discoveredModels: ReadonlyArray<unknown>,
+  requestMetadata: Record<string, unknown> | undefined,
+): {
+  discoveredModels: ReadonlyArray<unknown>;
+  reason: string | undefined;
+} | null {
+  let pkg: { plugins?: unknown } | undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    pkg = require('manifest-plugins') as { plugins?: unknown };
+  } catch {
+    return null;
+  }
+  if (!pkg || !Array.isArray(pkg.plugins)) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const toggle = (pkg as { applyDisabledListFromEnv?: unknown }).applyDisabledListFromEnv;
+    if (typeof toggle === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      (toggle as (v: unknown) => void)(process.env['MANIFEST_PLUGINS_DISABLED']);
+    }
+  } catch {
+    // env-toggle is best-effort; never block a request on it.
+  }
+  for (const plugin of pkg.plugins) {
+    if (!plugin || typeof (plugin as { overrideModelList?: unknown }).overrideModelList !== 'function') continue;
+    try {
+      const out = (plugin as {
+        overrideModelList: (ctx: unknown) => unknown;
+      }).overrideModelList({
+        tenantId,
+        agentId,
+        discoveredModels,
+        requestMetadata,
+      });
+      if (out && typeof out === 'object' && Array.isArray((out as { discoveredModels?: unknown }).discoveredModels)) {
+        const result = out as {
+          discoveredModels: ReadonlyArray<Record<string, unknown>>;
+          reason?: string;
+        };
+        return { discoveredModels: result.discoveredModels, reason: result.reason };
+      }
+    } catch (err) {
+      const name =
+        (plugin as { constructor?: { name?: string } }).constructor?.name ?? 'plugin';
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(\`[manifest-plugins] \${name} overrideModelList failed: \${msg}\`);
+    }
+  }
+  return null;
+}
+
+`;
+
+/**
+ * The exact text from upstream `packages/backend/src/routing/model.controller.ts`
+ * (`GET :agentName/available-models` handler — the canonical `/v1/models`
+ * endpoint in current upstream) that the apply tool replaces to insert
+ * the model-list-override hook.
+ *
+ * The replacement is byte-equivalent to the host's intent above: it
+ * runs the plugin array against the upstream `models` array BEFORE
+ * the upstream `models.map(...)` transforms it into the wire-shape
+ * response body. Plugins see raw `DiscoveredModel` rows (`id`,
+ * `provider`, `authType`) and their returned array is consumed by
+ * the upstream mapper unchanged.
+ *
+ * Anchor note: the anchor is the upstream `getModelsForAgent` call
+ * immediately followed by `customProviderService.list(...)` plus the
+ * `cpNameMap` build-up. If upstream restructures this block, update
+ * this anchor.
+ */
+export const MODEL_LIST_OVERRIDE_OLD = `    const models = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);
+
+    // Build display name map for custom providers (tenant-global)
+    const customProviders = await this.customProviderService.list(agent.tenant_id);`;
+
+/**
+ * The replacement text. The host calls `applyModelListOverridePlugins(...)`
+ * immediately after the upstream `getModelsForAgent` call and BEFORE
+ * the upstream `customProviderService.list(...)` call, so the plugin
+ * can rewrite the raw `models` array used by the wire-shape `.map`.
+ * If a plugin returns a non-null result the plugin's `discoveredModels`
+ * array replaces `models` for the rest of the handler.
+ *
+ * `reason` is surfaced via `console.info` so operators can audit why a
+ * client sees a different model list than upstream's static catalog
+ * would suggest.
+ */
+export const MODEL_LIST_OVERRIDE_NEW = `    const discovered = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);
+    const pluginOverride = applyModelListOverridePlugins(
+      agent.tenant_id,
+      agent.id,
+      discovered,
+      { source: 'model-controller.available-models' },
+    );
+    const models = (pluginOverride ? pluginOverride.discoveredModels : discovered) as typeof discovered;
+    if (pluginOverride) {
+      if (pluginOverride.reason) {
+        // eslint-disable-next-line no-console
+        console.info(\`[manifest-plugins] /v1/models overridden: \${pluginOverride.reason}\`);
+      }
+    }
+    // Build display name map for custom providers (tenant-global)
+    const customProviders = await this.customProviderService.list(agent.tenant_id);`;
+
+/**
+ * Helper-marker anchor for inserting the
+ * `applyModelListOverridePlugins` function definition above the
+ * ModelController class. Mirrors the pattern used by the
+ * routing-override host: insert the helper immediately above the
+ * `@Controller(...)` decorator, which is a stable, byte-exact line in
+ * upstream.
+ */
+export const MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD =
+  "@Controller('api/v1/routing')\nexport class ModelController {\n";
+
+/**
+ * Build the post-helper-insertion marker text: same anchor as
+ * `_HELPER_MARKER_OLD` but prefixed with the helper definition so the
+ * `apply.ts` patcher's `next.replace(helperMarkerOld, helperMarkerNew)`
+ * call inserts the function above the call site.
+ */
+export function buildModelListOverrideHelperMarkerNew(): string {
+  return `${MODEL_LIST_OVERRIDE_HOST_SOURCE}${MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD}`;
+}
+
+// =============================================================================
 // Admin Express app mount (injected into main.ts)
 // =============================================================================
 

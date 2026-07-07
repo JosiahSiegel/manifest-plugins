@@ -41,6 +41,10 @@ import {
   ADMIN_MOUNT_OLD,
   HELPER_MARKER_OLD,
   HOST_HELPER_SOURCE,
+  MODEL_LIST_OVERRIDE_HOST_SOURCE,
+  MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD,
+  MODEL_LIST_OVERRIDE_NEW,
+  MODEL_LIST_OVERRIDE_OLD,
   PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW,
   PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD,
   PROXY_ROUTING_OVERRIDE_HOST_SOURCE,
@@ -53,6 +57,7 @@ import {
   RATE_LIMITER_NEW,
   RATE_LIMITER_OLD,
   buildHelperMarkerNew,
+  buildModelListOverrideHelperMarkerNew,
 } from './snippet';
 import {
   assertAnchors,
@@ -305,6 +310,27 @@ export class ProxyRateLimiter implements OnModuleDestroy {
  * idempotency check, and its own upstream-drift detection. If any
  * sub-edit fails, the caller can still see which one drifted.
  */
+export async function applyModelListOverrideHost(
+  filePath: string,
+  options: ApplyOptions = {},
+): Promise<ApplyResult> {
+  // Two operations, all in one pass:
+  //   1. Insert the `applyModelListOverridePlugins` helper above the
+  //      `modelDiscovery.getModelsForAgent` call site.
+  //   2. Wrap the call site so a plugin can replace the discovered
+  //      list before it lands in the `/v1/models` response body.
+  return applyPatch(
+    {
+      filePath,
+      postPatchSymbol: 'function applyModelListOverridePlugins(',
+      oldText: MODEL_LIST_OVERRIDE_OLD,
+      newText: MODEL_LIST_OVERRIDE_NEW,
+      helperMarkerOld: MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD,
+      helperMarkerNew: buildModelListOverrideHelperMarkerNew(),
+    },
+    options,
+  );
+}
 export async function applyAdminMount(
   filePath: string,
   options: ApplyOptions = {},
@@ -410,6 +436,13 @@ export interface ManifestFileSpec {
    * 3-file patcher) which leaves it untouched.
    */
   main?: string;
+  /**
+   * Path to upstream's `model-fetcher.ts` (or whichever file serves
+   * `GET /v1/models`). Used by `applyAllFive` to install the
+   * model-list-override host. Optional for `applyAll` and
+   * `applyAllFour` which leave it untouched.
+   */
+  modelFetcher?: string;
 }
 
 export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
@@ -417,6 +450,7 @@ export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
   proxyRateLimiter: 'packages/backend/src/routing/proxy/proxy-rate-limiter.ts',
   proxyService: 'packages/backend/src/routing/proxy/proxy.service.ts',
   main: 'packages/backend/src/main.ts',
+  modelFetcher: 'packages/backend/src/routing/model.controller.ts',
 };
 
 export interface ApplyAllResult {
@@ -525,5 +559,69 @@ export async function applyAllFour(
       proxyRateLimiter.status === 'upstream-drift' ||
       proxyRoutingOverride.status === 'upstream-drift' ||
       adminMount.status === 'upstream-drift',
+  };
+}
+
+/**
+ * Result of the five-file patch surface (the four-file set +
+ * model-list-override). See {@link applyAllFive}.
+ */
+export interface ApplyAllFiveResult extends ApplyAllFourResult {
+  /**
+   * Result of the model-list-override host patch on `model-fetcher.ts`.
+   * Drift on this field does not block the other four patches from
+   * reporting `applied` / `noop`.
+   */
+  modelListOverride: ApplyResult;
+}
+
+/**
+ * Run all five host patches against a Manifest checkout. Like
+ * {@link applyAllFour} but additionally installs the
+ * model-list-override hook on `model-fetcher.ts` (or whichever file
+ * upstream uses to serialize the `GET /v1/models` response).
+ *
+ * Sequencing: the four-file set runs in
+ * {@link applyAllFour}'s two-phase plan (independent files in parallel
+ * in Phase 1; the `proxy.service.ts` patch alone in Phase 2). The
+ * model-list-override patch runs in its own Phase 3 because it targets
+ * a different file but follows the same upstream-drift detection
+ * pattern (read-anchor → write-replacement); running it in parallel
+ * with the Phase-2 routing-override patch would race on the
+ * `extractSentinelFromNew` post-patch sentinel scan for unrelated
+ * symbols in different files — not a correctness bug but a needless
+ * entanglement.
+ *
+ * The aggregate `fullyApplied` / `hasDrift` include all five results.
+ * The model-list-override patch is optional: when
+ * `files.modelFetcher === undefined`, the orchestrator returns the
+ * four-file result unchanged with a synthetic `modelListOverride`
+ * field set to `{ status: 'noop', file: '<not requested>' }`.
+ */
+export async function applyAllFive(
+  manifestRoot: string,
+  files: ManifestFileSpec = DEFAULT_MANIFEST_FILES,
+  options: ApplyOptions = {},
+): Promise<ApplyAllFiveResult> {
+  const fourFileResult = await applyAllFour(manifestRoot, files, options);
+  if (files.modelFetcher === undefined) {
+    return {
+      ...fourFileResult,
+      modelListOverride: { status: 'noop', file: '<modelFetcher not requested>' },
+      // Re-evaluate the aggregates since we added a synthetic noop.
+      fullyApplied: fourFileResult.fullyApplied,
+      hasDrift: fourFileResult.hasDrift,
+    };
+  }
+  const resolve = (rel: string) => `${manifestRoot.replace(/\/$/, '')}/${rel}`;
+  const modelListOverride = await applyModelListOverrideHost(
+    resolve(files.modelFetcher),
+    options,
+  );
+  return {
+    ...fourFileResult,
+    modelListOverride,
+    fullyApplied: fourFileResult.fullyApplied && modelListOverride.status !== 'upstream-drift',
+    hasDrift: fourFileResult.hasDrift || modelListOverride.status === 'upstream-drift',
   };
 }
