@@ -77,12 +77,35 @@ const PATCHED_MANIFEST_FILES = [
       '  await app.listen(port, host);\n' +
       '}\n',
   },
+  {
+    // Synthesized upstream `model.controller.ts` carrying the
+    // getAvailableModels body the model-list-override patch anchors on.
+    // Mirrors the `apply.ts` test fixture shape (the apply.ts anchor is
+    // the `getModelsForAgent` call immediately followed by the
+    // `customProviderService.list` build-up comment + call).
+    relativePath: 'packages/backend/src/routing/model.controller.ts',
+    content:
+      "import { Controller, Get } from '@nestjs/common';\n" +
+      '\n' +
+      "@Controller('api/v1/routing')\n" +
+      'export class ModelController {\n' +
+      '  @Get(":agentName/available-models")\n' +
+      '  async getAvailableModels(): Promise<unknown[]> {\n' +
+      '    const agent = { tenant_id: "t", id: "a" };\n' +
+      '    const models = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);\n' +
+      '\n' +
+      '    // Build display name map for custom providers (tenant-global)\n' +
+      '    const customProviders = await this.customProviderService.list(agent.tenant_id);\n' +
+      '    return models;\n' +
+      '  }\n' +
+      '}\n',
+  },
 ] as const;
 
 /**
  * Minimal upstream-shaped `proxy.service.ts` carrying the
  * explicit-model early-return anchor so the apply CLI's
- * `applyAllFour` path can install the routing-override hook
+ * `applyAllFive` path can install the routing-override hook
  * (Blocker #1). Mirrors the synthesized fixture shape used by
  * `tests/apply.spec.ts::applyProxyRoutingOverrideHost` so the CLI
  * integration test exercises the same upstream contract.
@@ -232,21 +255,22 @@ describe('apply CLI installs the routing-override hook by default (Blocker #1)',
     }
   });
 
-  it('cli.ts source imports `applyAllFour` (regression lock for the four-file installer)', () => {
+  it('cli.ts source imports `applyAllFive` (regression lock for the five-file installer)', () => {
     // Blocker #1 regression lock: the CLI module MUST import
-    // `applyAllFour` (not just `applyAll`). This is a static-source
+    // `applyAllFive` (not just `applyAll`). This is a static-source
     // assertion so a future refactor cannot silently revert to the
-    // three-file installer.
+    // three-file installer or drop the new model-list-override patch.
     const cli = readFileSync(join(REPO_ROOT, 'src/host/cli.ts'), 'utf-8');
-    expect(cli).toMatch(/import\s*\{[^}]*\bapplyAllFour\b[^}]*\}\s*from\s*['"]\.\/apply['"]/);
+    expect(cli).toMatch(/import\s*\{[^}]*\bapplyAllFive\b[^}]*\}\s*from\s*['"]\.\/apply['"]/);
   });
 
-  it('cli.ts source calls `applyAllFour` (not `applyAll`) in the default path', () => {
+  it('cli.ts source calls `applyAllFive` (not `applyAll`) in the default path', () => {
     // Regression lock for the production default. The CLI's main
-    // function must invoke `applyAllFour(checkoutPath, ...)` so the
-    // routing-override hook is part of the default apply surface.
+    // function must invoke `applyAllFive(checkoutPath, ...)` so the
+    // routing-override AND model-list-override hooks are part of the
+    // default apply surface.
     const cli = readFileSync(join(REPO_ROOT, 'src/host/cli.ts'), 'utf-8');
-    expect(cli).toMatch(/await\s+applyAllFour\s*\(/);
+    expect(cli).toMatch(/await\s+applyAllFive\s*\(/);
     expect(cli).not.toMatch(/await\s+applyAll\s*\(\s*checkoutPath\s*\)/);
   });
 });
@@ -295,19 +319,19 @@ describe('host/verify.ts reads routing-override sentinels from proxy.service.ts 
     expect(verify).toContain('const transformed = applyRequestTransformPlugins(');
   });
 
-  it('verify.ts integration: succeeds when both files carry their host hooks; fails when proxy.service.ts is unpatched', () => {
-    // End-to-end: build a tempdir with both patched files and run the
-    // verifier. Then drop the routing-override hook from
-    // `proxy.service.ts` and assert the verifier reports the missing
-    // hook. Pre-fix, this test failed because the verifier only read
-    // `provider-client.ts` and the proxy.service.ts file was never
+  it('verify.ts integration: succeeds when all three files carry their host hooks; fails when proxy.service.ts is unpatched', () => {
+    // End-to-end: build a tempdir with all three patched files (provider-client,
+    // proxy.service, model-fetcher) and run the verifier. Then drop the
+    // routing-override hook from `proxy.service.ts` and assert the verifier
+    // reports the missing hook. Pre-fix, this test failed because the verifier
+    // only read `provider-client.ts` and the proxy.service.ts file was never
     // inspected.
     const tmp = tempDir('manifest-verify-routing-override-');
     try {
       // Patch provider-client.ts with the request-transform hook
-      // (so the existing verifier path passes), and write
-      // proxy.service.ts carrying both the message-cap helper AND the
-      // routing-override helper + constructor param.
+      // (so the existing verifier path passes), write proxy.service.ts
+      // carrying the routing-override helper + constructor param, and
+      // write model-fetcher.ts carrying the model-list-override helper.
       const providerClientTarget = join(
         tmp,
         'packages/backend/src/routing/proxy/provider-client.ts',
@@ -316,8 +340,13 @@ describe('host/verify.ts reads routing-override sentinels from proxy.service.ts 
         tmp,
         'packages/backend/src/routing/proxy/proxy.service.ts',
       );
+      const modelFetcherTarget = join(
+        tmp,
+        'packages/backend/src/routing/model.controller.ts',
+      );
       mkdirSync(dirname(providerClientTarget), { recursive: true });
       mkdirSync(dirname(proxyServiceTarget), { recursive: true });
+      mkdirSync(dirname(modelFetcherTarget), { recursive: true });
 
       writeFileSync(
         providerClientTarget,
@@ -344,6 +373,19 @@ describe('host/verify.ts reads routing-override sentinels from proxy.service.ts 
         ].join('\n'),
         'utf-8',
       );
+      writeFileSync(
+        modelFetcherTarget,
+        [
+          'function applyModelListOverridePlugins(){}',
+          'const pluginOverride = applyModelListOverridePlugins();',
+          // Wave 5: env-toggle sentinel — pasted model-fetcher.ts snippet
+          // must reference the helper so MANIFEST_PLUGINS_DISABLED is honored
+          // when the host snippet loads.
+          "const _toggle3 = (require('manifest-plugins')).applyDisabledListFromEnv(process.env['MANIFEST_PLUGINS_DISABLED']);",
+          '',
+        ].join('\n'),
+        'utf-8',
+      );
 
       const passEnv: NodeJS.ProcessEnv = {
         ...process.env,
@@ -355,12 +397,13 @@ describe('host/verify.ts reads routing-override sentinels from proxy.service.ts 
       };
 
       const okResult = run(process.execPath, [TSX_CLI, 'src/host/verify.ts'], passEnv, REPO_ROOT);
-      // The verifier should report OK and exit 0 when both hooks
+      // The verifier should report OK and exit 0 when all three hooks
       // are present. Pre-fix this would have exited 0 too (because
       // the verifier never read proxy.service.ts), so we rely on
       // the stdout message shape to detect the fix.
       expect(okResult.stdout).toMatch(/OK/);
       expect(okResult.stdout).toMatch(/routing-override hook/);
+      expect(okResult.stdout).toMatch(/model-list-override hook/);
 
       // Now drop the routing-override helper from proxy.service.ts
       // and re-run. The verifier MUST report the missing hook and
@@ -413,7 +456,7 @@ describe('apply CLI integration', () => {
       expect(result.stderr).not.toContain('choose only one Manifest source');
       expect(result.stdout).toContain('[manifest-plugins/apply] SOURCE_COMMIT=');
       expect(result.stdout).toContain(
-        '[manifest-plugins/apply] all four host hooks patched (or already no-op)',
+        '[manifest-plugins/apply] all five host hooks patched (or already no-op)',
       );
     } finally {
       cleanup(tmp);
@@ -555,7 +598,7 @@ describe('.github/workflows/build-image.yml default build (Blocker #1)', () => {
     );
     // The default ARGS construction must include the
     // routing-override install flag. The pipeline exposes this as
-    // `--apply-overlay` (the documented flag for the four-file
+    // `--apply-overlay` (the documented flag for the five-file
     // installer), so we assert the workflow passes it.
     expect(workflow).toMatch(/ARGS=\([^)]*\)/);
     expect(workflow).toMatch(/ARGS\+=?\(\s*--apply-overlay\s*\)/);

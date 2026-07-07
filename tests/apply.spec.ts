@@ -18,11 +18,13 @@ import { join, dirname } from 'path';
 import {
   applyAll,
   applyAllFour,
+  applyAllFive,
   applyProviderClientHost,
   applyProxyRateLimiterHost,
   applyProxyRoutingOverrideHost,
   DEFAULT_MANIFEST_FILES,
   type ApplyResult,
+  type ManifestFileSpec,
 } from '../src/host/apply';
 import {
   buildHelperMarkerNew,
@@ -114,6 +116,7 @@ interface TempFiles {
   proxyRateLimiter: string;
   proxyService: string;
   main: string;
+  modelFetcher: string;
   cleanup: () => void;
 }
 
@@ -135,6 +138,40 @@ function withTempManifest(
     FILES.main ?? 'packages/backend/src/main.ts',
     upstream.main !== '' ? upstream.main : SYNTHESIZED_MAIN_TS,
   );
+  // Best-effort: synthesize a `model.controller.ts` upstream-shape fixture
+  // when the sibling Manifest checkout has no `model.controller.ts` at
+  // upstream/main (e.g. a stale fork or a refactor in flight). The
+  // synthesized shape mirrors the `getAvailableModels` body the apply.ts
+  // model-list-override patcher anchors on.
+  const synthesizedModelFetcher = [
+    "import { Controller, Get } from '@nestjs/common';",
+    '',
+    "@Controller('api/v1/routing')",
+    'export class ModelController {',
+    '  @Get(":agentName/available-models")',
+    '  async getAvailableModels(): Promise<unknown[]> {',
+    '    const agent = { tenant_id: "t", id: "a" };',
+    '    const models = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);',
+    '',
+    '    // Build display name map for custom providers (tenant-global)',
+    '    const customProviders = await this.customProviderService.list(agent.tenant_id);',
+    '    return models;',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+  let modelFetcherUpstream = '';
+  try {
+    modelFetcherUpstream = FILES.modelFetcher
+      ? readUpstream(FILES.modelFetcher)
+      : '';
+  } catch {
+    modelFetcherUpstream = '';
+  }
+  writeFile(
+    FILES.modelFetcher ?? 'packages/backend/src/routing/model.controller.ts',
+    modelFetcherUpstream !== '' ? modelFetcherUpstream : synthesizedModelFetcher,
+  );
 
   const files: TempFiles = {
     root: tmp,
@@ -142,6 +179,10 @@ function withTempManifest(
     proxyRateLimiter: join(tmp, FILES.proxyRateLimiter),
     proxyService: join(tmp, FILES.proxyService),
     main: join(tmp, FILES.main ?? 'packages/backend/src/main.ts'),
+    modelFetcher: join(
+      tmp,
+      FILES.modelFetcher ?? 'packages/backend/src/routing/model.controller.ts',
+    ),
     cleanup: () => rmSync(tmp, { recursive: true, force: true }),
   };
   return Promise.resolve(fn(files)).finally(files.cleanup);
@@ -538,6 +579,86 @@ describe('applyAllFour includes the routing-override patcher (four-file patcher)
         all.proxyRoutingOverride,
         'upstream-drift',
       );
+      expect(all.fullyApplied).toBe(false);
+      expect(all.hasDrift).toBe(true);
+    });
+  });
+});
+
+describe('applyAllFive extends the four-file patcher with the model-list-override patcher (five-file patcher)', () => {
+  it('patches all five files against the upstream shapes', async () => {
+    await withTempManifest(async (files) => {
+      const synthProxyService = synthesizeProxyServiceFixture();
+      writeFileSync(files.proxyService, synthProxyService, 'utf-8');
+
+      const all = await applyAllFive(files.root);
+
+      expectStatus('providerClient', all.providerClient, 'applied');
+      expectStatus('proxyRateLimiter', all.proxyRateLimiter, 'applied');
+      expectStatus(
+        'proxyRoutingOverride',
+        all.proxyRoutingOverride,
+        'applied',
+      );
+      expectStatus('adminMount', all.adminMount, 'applied');
+      expectStatus('modelListOverride', all.modelListOverride, 'applied');
+      expect(all.fullyApplied).toBe(true);
+      expect(all.hasDrift).toBe(false);
+
+      const patchedModelFetcher = readFileSync(files.modelFetcher, 'utf-8');
+      expect(patchedModelFetcher).toContain('function applyModelListOverridePlugins(');
+    });
+  });
+
+  it('returns a synthetic noop for modelListOverride when files.modelFetcher is undefined', async () => {
+    await withTempManifest(async (files) => {
+      const synthProxyService = synthesizeProxyServiceFixture();
+      writeFileSync(files.proxyService, synthProxyService, 'utf-8');
+
+      const specWithoutModelFetcher: ManifestFileSpec = {
+        providerClient: FILES.providerClient,
+        proxyRateLimiter: FILES.proxyRateLimiter,
+        proxyService: FILES.proxyService,
+        main: FILES.main,
+      };
+      const all = await applyAllFive(files.root, specWithoutModelFetcher);
+
+      expectStatus('modelListOverride', all.modelListOverride, 'noop');
+      // The four-file patchers still ran.
+      expectStatus('providerClient', all.providerClient, 'applied');
+      expectStatus('proxyRateLimiter', all.proxyRateLimiter, 'applied');
+      expectStatus('proxyRoutingOverride', all.proxyRoutingOverride, 'applied');
+      expectStatus('adminMount', all.adminMount, 'applied');
+      // No drift, so fullyApplied stays true.
+      expect(all.fullyApplied).toBe(true);
+      expect(all.hasDrift).toBe(false);
+    });
+  });
+
+  it('reports the model-list-override drift independently when model.controller.ts is missing the getModelsForAgent anchor', async () => {
+    await withTempManifest(async (files) => {
+      const synthProxyService = synthesizeProxyServiceFixture();
+      writeFileSync(files.proxyService, synthProxyService, 'utf-8');
+      // Drop the model-list-override anchor so the patcher reports drift
+      // but the other four patches still apply.
+      const strippedModelFetcher = readFileSync(files.modelFetcher, 'utf-8')
+        .replace(
+          '    const models = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);\n',
+          '    const models: unknown[] = [];\n',
+        );
+      writeFileSync(files.modelFetcher, strippedModelFetcher, 'utf-8');
+
+      const all = await applyAllFive(files.root);
+
+      expectStatus('providerClient', all.providerClient, 'applied');
+      expectStatus('proxyRateLimiter', all.proxyRateLimiter, 'applied');
+      expectStatus(
+        'proxyRoutingOverride',
+        all.proxyRoutingOverride,
+        'applied',
+      );
+      expectStatus('adminMount', all.adminMount, 'applied');
+      expectStatus('modelListOverride', all.modelListOverride, 'upstream-drift');
       expect(all.fullyApplied).toBe(false);
       expect(all.hasDrift).toBe(true);
     });
