@@ -642,9 +642,16 @@ describe('applyAllFive extends the four-file patcher with the model-list-overrid
       // Drop the model-list-override anchor so the patcher reports drift
       // but the other four patches still apply.
       const strippedModelFetcher = readFileSync(files.modelFetcher, 'utf-8')
+        // Strip both the old anchor and the post-patch sentinel so the
+        // patcher's `extractSentinelFromNew` noop short-circuit doesn't
+        // mask a real drift.
         .replace(
           '    const models = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);\n',
           '    const models: unknown[] = [];\n',
+        )
+        .replace(
+          '    const customProviders = await this.customProviderService.list(agent.tenant_id);',
+          '    const customProviders: unknown[] = [];',
         );
       writeFileSync(files.modelFetcher, strippedModelFetcher, 'utf-8');
 
