@@ -31,6 +31,7 @@ type PluginJson = {
 };
 
 const EXPECTED_PLUGIN_IDS = [
+  'anthropic-models-fix',
   'default-policy',
   'header-tier-router',
   'show-all-router-views',

@@ -68,18 +68,19 @@ function writeBrokenPlugin(
 }
 
 describe('discoverPlugins (filesystem enumeration)', () => {
-  it('discovers the three built-in plugins from src/plugins/', () => {
+  it('discovers the four built-in plugins from src/plugins/', () => {
     const discovered = discoverPlugins(PLUGINS_SRC_DIR);
 
     const classNames = discovered.map((entry) => entry.pluginClassName);
     expect(classNames).toEqual(
       expect.arrayContaining([
+        'AnthropicModelsFixPlugin',
         'DefaultPolicyPlugin',
         'HeaderTierRouterPlugin',
         'ShowAllRouterViewsPlugin',
       ]),
     );
-    expect(discovered).toHaveLength(3);
+    expect(discovered).toHaveLength(4);
   });
 
   it('returns plugin entries with a non-empty id, kind, and instance', () => {
@@ -88,7 +89,9 @@ describe('discoverPlugins (filesystem enumeration)', () => {
       expect(entry.metadata.id).toEqual(expect.any(String));
       expect(entry.metadata.id.length).toBeGreaterThan(0);
       expect(entry.metadata.kind).toEqual(
-        expect.stringMatching(/^(transform|policy|routing-override|dashboard-transform)$/),
+        expect.stringMatching(
+          /^(transform|policy|routing-override|dashboard-transform|model-list-override)$/,
+        ),
       );
       expect(entry.instance).toBeDefined();
     }
