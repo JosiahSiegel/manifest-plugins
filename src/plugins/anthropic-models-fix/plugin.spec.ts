@@ -12,6 +12,32 @@ import {
   resolveDefaultAuthType,
 } from './plugin';
 
+/**
+ * Build a full upstream-compatible ModelListOverrideDiscoveredModel row
+ * for tests. Real upstream `DiscoveredModel` requires every field;
+ * the plugin must preserve this contract when it adds new rows.
+ */
+function row(
+  id: string,
+  provider: string,
+  authType: string = 'api_key',
+  overrides: Partial<ModelListOverrideDiscoveredModel> = {},
+): ModelListOverrideDiscoveredModel {
+  return Object.freeze({
+    id,
+    displayName: id,
+    provider,
+    contextWindow: 200_000,
+    inputPricePerToken: null,
+    outputPricePerToken: null,
+    capabilityReasoning: false,
+    capabilityCode: true,
+    qualityScore: 3,
+    authType,
+    ...overrides,
+  });
+}
+
 describe('AnthropicModelsFixPlugin (metadata + construction)', () => {
   it('declares metadata with the scaffolder id and a non-empty shape', () => {
     expect(ANTHROPIC_MODELS_FIX_PLUGIN_METADATA.id).toBe('anthropic-models-fix');
@@ -47,13 +73,30 @@ describe('AnthropicModelsFixPlugin (metadata + construction)', () => {
     expect(ids).toContain('claude-haiku-4-5');
     expect(LATEST_STABLE_ANTHROPIC_MODELS.length).toBe(3);
   });
+
+  it('catalog rows populate every required upstream DiscoveredModel field', () => {
+    // Regression lock: a row missing ANY of these required fields would
+    // surface as `undefined` in the upstream /v1/models JSON response
+    // and break the frontend's AvailableModel interface (e.g. the
+    // routing page's "Add fallback" button would 500). See plugin.ts
+    // header comment for the full contract.
+    for (const entry of LATEST_STABLE_ANTHROPIC_MODELS) {
+      expect(entry.contextWindow).toEqual(expect.any(Number));
+      expect(entry.contextWindow).toBeGreaterThan(0);
+      expect(entry.inputPricePerToken === null || typeof entry.inputPricePerToken === 'number').toBe(true);
+      expect(entry.outputPricePerToken === null || typeof entry.outputPricePerToken === 'number').toBe(true);
+      expect(typeof entry.capabilityReasoning).toBe('boolean');
+      expect(typeof entry.capabilityCode).toBe('boolean');
+      expect(entry.qualityScore).toEqual(expect.any(Number));
+      expect(entry.qualityScore).toBeGreaterThanOrEqual(1);
+      expect(entry.qualityScore).toBeLessThanOrEqual(5);
+      expect(typeof entry.displayName).toBe('string');
+      expect(entry.displayName.length).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe('buildAnthropicModelList (pure helper)', () => {
-  function row(id: string, provider: string, authType: string = 'api_key'): ModelListOverrideDiscoveredModel {
-    return Object.freeze({ id, provider, authType });
-  }
-
   it('drops retired IDs from the Anthropic slice', () => {
     const input = [
       row('claude-sonnet-4-20250514', 'anthropic'),
@@ -135,7 +178,7 @@ describe('buildAnthropicModelList (pure helper)', () => {
     expect(second).toEqual(first);
   });
 
-  it('surfaces the displayed name + capabilities for added rows', () => {
+  it('surfaces displayName + capabilities for added rows', () => {
     const input: ModelListOverrideDiscoveredModel[] = [];
     const out = buildAnthropicModelList(input, 'api_key');
     const sonnet5 = out.find((m) => m.id === 'claude-sonnet-5');
@@ -147,6 +190,40 @@ describe('buildAnthropicModelList (pure helper)', () => {
     ).toBe(1_000_000);
   });
 
+  it('populates every required upstream DiscoveredModel field on added rows', () => {
+    // Regression lock: a row missing ANY required field surfaces as
+    // undefined in /v1/models JSON response and breaks the frontend.
+    const input: ModelListOverrideDiscoveredModel[] = [];
+    const out = buildAnthropicModelList(input, 'api_key');
+    const required: ReadonlyArray<keyof ModelListOverrideDiscoveredModel> = [
+      'id',
+      'displayName',
+      'provider',
+      'contextWindow',
+      'inputPricePerToken',
+      'outputPricePerToken',
+      'capabilityReasoning',
+      'capabilityCode',
+      'qualityScore',
+    ];
+    const anthropic = out.filter((m) => m.provider === 'anthropic');
+    expect(anthropic.length).toBeGreaterThan(0);
+    for (const m of anthropic) {
+      for (const key of required) {
+        expect(m[key]).toBeDefined();
+        // Specifically: numeric fields must not be NaN / Infinity / null.
+        if (
+          key === 'contextWindow' ||
+          key === 'inputPricePerToken' ||
+          key === 'outputPricePerToken' ||
+          key === 'qualityScore'
+        ) {
+          expect(typeof m[key]).toBe('number');
+        }
+      }
+    }
+  });
+
   it('scopes added rows to subscription authType when requested', () => {
     const input: ModelListOverrideDiscoveredModel[] = [];
     const out = buildAnthropicModelList(input, 'subscription');
@@ -156,13 +233,29 @@ describe('buildAnthropicModelList (pure helper)', () => {
       expect(m.authType).toBe('subscription');
     }
   });
+
+  it('preserves upstream pricing/capability fields on surviving rows verbatim', () => {
+    // Regression lock: the plugin must not overwrite upstream's
+    // pricing/capability data on rows that are already in the catalog
+    // — only the LATEST_STABLE_ANTHROPIC_MODELS additions get the
+    // plugin's hardcoded values; everything else flows through.
+    const upstreamRow = row('claude-opus-4-6', 'anthropic', 'api_key', {
+      inputPricePerToken: 99.99,
+      outputPricePerToken: 88.88,
+      contextWindow: 123456,
+      qualityScore: 5,
+    });
+    const out = buildAnthropicModelList([upstreamRow], 'api_key');
+    const passthrough = out.find((m) => m.id === 'claude-opus-4-6');
+    expect(passthrough).toBeDefined();
+    expect(passthrough?.inputPricePerToken).toBe(99.99);
+    expect(passthrough?.outputPricePerToken).toBe(88.88);
+    expect(passthrough?.contextWindow).toBe(123456);
+    expect(passthrough?.qualityScore).toBe(5);
+  });
 });
 
 describe('buildReason (audit-trail helper)', () => {
-  function row(id: string, provider: string, authType: string = 'api_key'): ModelListOverrideDiscoveredModel {
-    return Object.freeze({ id, provider, authType });
-  }
-
   it('reports retired count and added count', () => {
     const input = [
       row('claude-sonnet-4-20250514', 'anthropic'),
@@ -208,10 +301,6 @@ describe('resolveDefaultAuthType (env-var resolution)', () => {
 describe('AnthropicModelsFixPlugin.overrideModelList (integration)', () => {
   const plugin = new AnthropicModelsFixPlugin();
 
-  function row(id: string, provider: string, authType: string = 'api_key'): ModelListOverrideDiscoveredModel {
-    return Object.freeze({ id, provider, authType });
-  }
-
   it('returns a non-null no-op result when no Anthropic rows are present', () => {
     const ctx = Object.freeze({
       tenantId: 'tenant-1',
@@ -246,32 +335,54 @@ describe('AnthropicModelsFixPlugin.overrideModelList (integration)', () => {
     expect(out?.reason).toMatch(/anthropic-models-fix:/);
     expect(out?.reason).toMatch(/retired=2/);
   });
+
+  it('returns upstream-compatible rows ready for the controllers models.map() block', () => {
+    // Regression lock for the "Add fallback button fails" bug. The
+    // controller does `m.inputPricePerToken`, `m.contextWindow`, etc.
+    // without null-guards; if any field is undefined the JSON response
+    // ships undefined values, the frontend's strict AvailableModel
+    // interface breaks, and `extractOriginPath` throws because URL
+    // construction cannot interpolate `undefined`. Every returned
+    // row MUST have every required DiscoveredModel field defined.
+    const ctx = Object.freeze({
+      tenantId: 'tenant-1',
+      agentId: 'agent-1',
+      discoveredModels: Object.freeze([]),
+    });
+    const out = plugin.overrideModelList(ctx);
+    expect(out).not.toBeNull();
+    const requiredFields: ReadonlyArray<keyof ModelListOverrideDiscoveredModel> = [
+      'id',
+      'displayName',
+      'provider',
+      'contextWindow',
+      'inputPricePerToken',
+      'outputPricePerToken',
+      'capabilityReasoning',
+      'capabilityCode',
+      'qualityScore',
+    ];
+    for (const m of out?.discoveredModels ?? []) {
+      for (const field of requiredFields) {
+        expect(m[field]).toBeDefined();
+      }
+    }
+  });
 });
 
 describe('additional coverage', () => {
-  function row(id: string, provider: string, authType?: string): ModelListOverrideDiscoveredModel {
-    return Object.freeze({ id, provider, authType });
+  function fullRow(
+    id: string,
+    provider: string,
+    authType: string = 'api_key',
+  ): ModelListOverrideDiscoveredModel {
+    return row(id, provider, authType);
   }
 
   it('sorts by authType as a tie-breaker within the same provider and id', () => {
-    // Force the secondary sort key (authType) by giving two rows with the
-    // same provider and id but different authType.
-    const input: ModelListOverrideDiscoveredModel[] = [
-      row('claude-sonnet-5', 'anthropic', 'subscription'),
-      row('claude-sonnet-5', 'anthropic', 'api_key'),
-    ];
-    const out = buildAnthropicModelList([], 'api_key');
-    // Seed with explicit authType-scoped duplicates so the sort hits line 78.
-    // We pass through buildAnthropicModelList so the surviving+augment step
-    // removes duplicates — instead, validate the sort comparator by reading
-    // two rows with distinct authType from the fresh-augment output.
-    const augmented = out.filter((m) => m.provider === 'anthropic');
-    // The augmented rows carry the requested authType only; verify that when
-    // we mix authType-different rows, the api_key one comes before the
-    // subscription one (because 'a' < 's').
     const mixed = [
-      row('claude-haiku-4-5', 'anthropic', 'subscription'),
-      row('claude-haiku-4-5', 'anthropic', 'api_key'),
+      fullRow('claude-haiku-4-5', 'anthropic', 'subscription'),
+      fullRow('claude-haiku-4-5', 'anthropic', 'api_key'),
     ];
     mixed.sort((a, b) => {
       if (a.provider !== b.provider) return a.provider.localeCompare(b.provider);
@@ -280,17 +391,12 @@ describe('additional coverage', () => {
     });
     expect(mixed[0]?.authType).toBe('api_key');
     expect(mixed[1]?.authType).toBe('subscription');
-    expect(augmented.length).toBeGreaterThan(0);
   });
 
   it('returns null and logs a warning when buildAnthropicModelList throws', () => {
-    // We force the inner build to throw by injecting a discoveredModels
-    // proxy that satisfies `.some()` (so the plugin enters the try block)
-    // but throws when `.filter()` is called by buildAnthropicModelList.
-    // The plugin's try/catch MUST log + return null (never throw).
-    // Use a Proxy so we don't fight Object.freeze + defineProperty.
-    const inner = Object.freeze({ id: 'claude-sonnet-5', provider: 'anthropic', authType: 'api_key' });
-    const trap: unknown = new Proxy([inner] as unknown[], {
+    // Force the inner build to throw by injecting a discoveredModels
+    // proxy that satisfies `.some()` but throws when `.filter()` is called.
+    const trap: unknown = new Proxy([{}] as unknown[], {
       get(target, prop, receiver) {
         if (prop === 'filter') {
           return () => {
@@ -298,12 +404,8 @@ describe('additional coverage', () => {
           };
         }
         if (prop === 'some') {
-          return (fn: (m: { provider: string }) => boolean) => {
-            for (const m of target as ReadonlyArray<{ provider: string }>) if (fn(m)) return true;
-            return false;
-          };
+          return () => true;
         }
-        // Default array behavior for length / Symbol.iterator / index lookups.
         return Reflect.get(target as object, prop, receiver);
       },
     });

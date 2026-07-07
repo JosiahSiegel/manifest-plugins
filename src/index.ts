@@ -337,22 +337,45 @@ export interface DashboardTransformPlugin {
  * (the host treats it as immutable). Plugins return a new array via
  * {@link ModelListOverrideResult.discoveredModels}.
  */
+/**
+ * The shape every plugin must return for each row in
+ * {@link ModelListOverrideResult.discoveredModels}.
+ *
+ * This is the upstream `mnfst/manifest` `DiscoveredModel` shape from
+ * `packages/backend/src/model-discovery/model-fetcher.ts`. Plugins MUST
+ * include every required field (id, displayName, provider, contextWindow,
+ * inputPricePerToken, outputPricePerToken, capabilityReasoning,
+ * capabilityCode, qualityScore, authType). The host source pastes the
+ * plugin's output verbatim into upstream's `models.map(...)` block,
+ * which dereferences all of these fields without null-guards — any
+ * missing field surfaces downstream as `undefined` in the JSON
+ * response, breaking the frontend's strict `AvailableModel` interface
+ * (e.g. the routing page's "Add fallback" button triggers a 500 because
+ * `extractOriginPath` tries to construct a URL from `undefined`).
+ *
+ * Plugins that only need to filter or augment can preserve the input
+ * row's values verbatim; plugins that add NEW rows must populate every
+ * required field with sensible defaults (or `null` for pricing).
+ *
+ * `capabilities` and the modality arrays remain optional because the
+ * upstream mapper degrades gracefully when they're absent (the controller
+ * falls back to `modelsDevSync.lookupModel(...)` for capability metadata).
+ */
 export interface ModelListOverrideDiscoveredModel {
   readonly id: string;
+  readonly displayName: string;
   readonly provider: string;
+  readonly contextWindow: number;
+  readonly inputPricePerToken: number | null;
+  readonly outputPricePerToken: number | null;
+  readonly capabilityReasoning: boolean;
+  readonly capabilityCode: boolean;
+  readonly qualityScore: number;
   readonly authType?: string;
-  /**
-   * Optional display label / friendly name surfaced by some upstream
-   * model sources. Plugins MAY set, rename, or omit this. The host
-   * preserves whatever the plugin returns.
-   */
-  readonly displayName?: string;
-  /**
-   * Optional free-form capabilities object (e.g. `context_window`,
-   * `max_output_tokens`, `supports_vision`). Plugins MAY add or
-   * rewrite fields; the host preserves whatever the plugin returns.
-   */
   readonly capabilities?: Readonly<Record<string, unknown>>;
+  readonly inputModalities?: ReadonlyArray<string>;
+  readonly outputModalities?: ReadonlyArray<string>;
+  readonly supportedEndpoints?: ReadonlyArray<string>;
 }
 
 /**
