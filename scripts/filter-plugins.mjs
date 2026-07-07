@@ -43,6 +43,8 @@ const DIST_PLUGINS = resolve(repoRoot, 'dist/plugins');
 const PLUGIN_CLASS_NAMES = [
   'DefaultPolicyPlugin',
   'HeaderTierRouterPlugin',
+  'ShowAllRouterViewsPlugin',
+  'AnthropicModelsFixPlugin',
 ];
 
 function loadConfig() {
@@ -134,6 +136,7 @@ function annotateEnabledDefaults(distSource, disabledClassNames) {
     DefaultPolicyPlugin: 'default-policy',
     HeaderTierRouterPlugin: 'header-tier-router',
     ShowAllRouterViewsPlugin: 'show-all-router-views',
+    AnthropicModelsFixPlugin: 'anthropic-models-fix',
   };
   let next = distSource;
   for (const className of disabledClassNames) {

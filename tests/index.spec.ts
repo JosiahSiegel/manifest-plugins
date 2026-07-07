@@ -3,11 +3,12 @@ import {
   DefaultPolicyPlugin,
   HeaderTierRouterPlugin,
   ShowAllRouterViewsPlugin,
+  AnthropicModelsFixPlugin,
 } from '../src/index';
 
 describe('plugin registry', () => {
-  it('exports the three built-in plugins', () => {
-    expect(plugins).toHaveLength(3);
+  it('exports the four built-in plugins', () => {
+    expect(plugins).toHaveLength(4);
   });
 
   it('includes the DefaultPolicyPlugin', () => {
@@ -20,6 +21,10 @@ describe('plugin registry', () => {
 
   it('includes the ShowAllRouterViewsPlugin', () => {
     expect(plugins).toContainEqual(expect.any(ShowAllRouterViewsPlugin));
+  });
+
+  it('includes the AnthropicModelsFixPlugin', () => {
+    expect(plugins).toContainEqual(expect.any(AnthropicModelsFixPlugin));
   });
 
   it('freezes the registry to prevent runtime mutation', () => {
