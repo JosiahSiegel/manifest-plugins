@@ -58,6 +58,7 @@ const PATCHED_MANIFEST_FILES = [
       "import { HeaderTierService } from '../header-tiers/header-tier.service';\n" +
       'function applyProxyRoutingOverridePlugins() {}\n' +
       '    private readonly providerParamSpecs: ProviderParamSpecService,\n' +
+      '    private readonly autofixService: AutofixService,\n' +
       '    private readonly headerTierService: HeaderTierService,\n' +
       '  ) {}\n',
   },
@@ -132,6 +133,7 @@ const UPSTREAM_PROXY_SERVICE_FIXTURE = [
   '    private readonly tierService: TierService,',
   '    private readonly openaiOauth: OpenaiOauthService,',
   '    private readonly providerParamSpecs: ProviderParamSpecService,',
+  '    private readonly autofixService: AutofixService,',
   '  ) {}',
   '',
   '  private async resolveRouting(',

@@ -225,6 +225,7 @@ function synthesizeProxyServiceFixture(): string {
     '    private readonly tierService: TierService,',
     '    private readonly openaiOauth: OpenaiOauthService,',
     '    private readonly providerParamSpecs: ProviderParamSpecService,',
+    '    private readonly autofixService: AutofixService,',
     '  ) {}',
     '',
     '  private async resolveRouting(',
@@ -505,8 +506,8 @@ describe('applyProxyRoutingOverrideHost (proxy.service.ts routing-override hook)
       // closing line is gone. Use a different param name.
       const original = readFileSync(files.proxyService, 'utf-8');
       const stripped = original.replace(
-        '    private readonly providerParamSpecs: ProviderParamSpecService,\n  ) {}',
-        '    private readonly providerSpecs: ProviderParamSpecService,\n  ) {}',
+        '    private readonly providerParamSpecs: ProviderParamSpecService,\n    private readonly autofixService: AutofixService,\n  ) {}',
+        '    private readonly providerSpecs: ProviderParamSpecService,\n    private readonly autofixService: AutofixService,\n  ) {}',
       );
       writeFileSync(files.proxyService, stripped, 'utf-8');
 

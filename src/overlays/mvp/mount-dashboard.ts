@@ -34,7 +34,6 @@ import {
   rmSync,
   writeFileSync,
 } from 'fs';
-import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 
 const MOUNT_MARKER = 'id="plugin-manager-root"';
@@ -60,6 +59,12 @@ function buildMountBlock(): string {
  * written atomically.
  *
  * If the file does not exist, the function is a no-op (silent skip).
+ *
+ * Atomicity note: the temp file is created in the SAME directory as
+ * the target (not `os.tmpdir()`). On Windows, `os.tmpdir()` is on
+ * `C:` while the manifest checkout may be on `D:`, and `renameSync`
+ * across drives throws `EXDEV: cross-device link not permitted`. A
+ * same-directory temp file guarantees the rename stays on one drive.
  */
 export async function mountDashboardPluginManager(
   manifestRoot: string,
@@ -81,7 +86,7 @@ export async function mountDashboardPluginManager(
     : current + mountBlock;
   const dir = dirname(targetPath);
   mkdirSync(dir, { recursive: true });
-  const tmpRoot = mkdtempSync(join(tmpdir(), 'mwp-mount-'));
+  const tmpRoot = mkdtempSync(join(dir, '.mwp-mount-'));
   const tmpFile = join(tmpRoot, 'index.html');
   try {
     writeFileSync(tmpFile, next, 'utf-8');

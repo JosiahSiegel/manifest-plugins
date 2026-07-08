@@ -436,12 +436,19 @@ function applyProxyRoutingOverridePlugins(
  * with `headerTierService` immediately before the closing
  * `) {}`. If upstream renames the `providerParamSpecs` param or
  * reorders the constructor, update this anchor.
+ *
+ * Wave-history note: upstream commit `849f6e3a0` ("feat/autofix-healing")
+ * inserted a new `autofixService: AutofixService` parameter immediately
+ * AFTER `providerParamSpecs` and BEFORE the closing `) {}`. This anchor
+ * now spans from `providerParamSpecs` through `autofixService` so the
+ * patcher's text replacement still finds the unique closing-brace
+ * sequence in the new constructor shape.
  */
 export const PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD =
-  '    private readonly providerParamSpecs: ProviderParamSpecService,\n  ) {}\n';
+  '    private readonly providerParamSpecs: ProviderParamSpecService,\n    private readonly autofixService: AutofixService,\n  ) {}\n';
 
 export const PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW =
-  '    private readonly providerParamSpecs: ProviderParamSpecService,\n    private readonly headerTierService: HeaderTierService,\n  ) {}\n';
+  '    private readonly providerParamSpecs: ProviderParamSpecService,\n    private readonly autofixService: AutofixService,\n    private readonly headerTierService: HeaderTierService,\n  ) {}\n';
 
 /**
  * The exact import line in upstream/main's `proxy.service.ts` that the
