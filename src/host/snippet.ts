@@ -761,27 +761,27 @@ export function buildModelListOverrideHelperMarkerNew(): string {
 export const ROUTING_MODEL_LIST_OVERRIDE_OLD = `    const available = await this.discoveryService.getModelsForAgent(tenantId, agentId);`;
 
 export const ROUTING_MODEL_LIST_OVERRIDE_NEW = `    const __availableRaw = await this.discoveryService.getModelsForAgent(tenantId, agentId);
-    const available = await (async () => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const __pkg = require('manifest-plugins') as { plugins?: ReadonlyArray<{ overrideModelList?: (ctx: { tenantId: string; agentId: string; discoveredModels: ReadonlyArray<unknown>; requestMetadata?: Readonly<Record<string, unknown>> }) => { discoveredModels: ReadonlyArray<unknown> } | null }> };
-        if (!__pkg || !Array.isArray(__pkg.plugins)) return __availableRaw;
+    let available: typeof __availableRaw = __availableRaw;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const __pkg = require('manifest-plugins') as { plugins?: ReadonlyArray<{ overrideModelList?: (ctx: { tenantId: string; agentId: string; discoveredModels: ReadonlyArray<unknown>; requestMetadata?: Readonly<Record<string, unknown>> }) => { discoveredModels: ReadonlyArray<unknown> } | null }> };
+      if (Array.isArray(__pkg.plugins)) {
         for (const __p of __pkg.plugins) {
           if (!__p || typeof __p.overrideModelList !== 'function') continue;
           try {
             const __out = __p.overrideModelList({ tenantId, agentId, discoveredModels: __availableRaw, requestMetadata: { source: 'routing.build-fallback-routes' } });
             if (__out && typeof __out === 'object' && Array.isArray((__out as { discoveredModels?: unknown }).discoveredModels)) {
-              return (__out as { discoveredModels: ReadonlyArray<unknown> }).discoveredModels;
+              available = (__out as { discoveredModels: typeof __availableRaw }).discoveredModels;
+              break;
             }
           } catch {
             // plugin failed; fall through to next plugin or upstream default
           }
         }
-      } catch {
-        // manifest-plugins not installed; fall through
       }
-      return __availableRaw;
-    })();`;
+    } catch {
+      // manifest-plugins not installed; fall through to upstream default
+    }`;
 
 /**
  * The list of (helperMarkerOld, helperMarkerNew) pairs for each
