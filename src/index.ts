@@ -357,9 +357,16 @@ export interface DashboardTransformPlugin {
  * row's values verbatim; plugins that add NEW rows must populate every
  * required field with sensible defaults (or `null` for pricing).
  *
- * `capabilities` and the modality arrays remain optional because the
- * upstream mapper degrades gracefully when they're absent (the controller
- * falls back to `modelsDevSync.lookupModel(...)` for capability metadata).
+ * `capabilities` is an ARRAY of capability strings (`'text' | 'image' |
+ * 'audio' | 'video' | 'tools' | 'stream'`), NOT an object map. The
+ * upstream `mergeModelCapabilities()` helper iterates this with
+ * `for...of`, which throws `TypeError: object is not iterable` on a
+ * plain object and 500s the whole `/v1/models` request. Plugins adding
+ * new rows MUST populate `capabilities` as `readonly string[]` (e.g.
+ * `Object.freeze(['text', 'tools', 'stream'])`).
+ *
+ * `inputModalities` and `outputModalities` are arrays of `ModelModality`
+ * enum values (the same constraint as `capabilities`).
  */
 export interface ModelListOverrideDiscoveredModel {
   readonly id: string;
@@ -372,7 +379,7 @@ export interface ModelListOverrideDiscoveredModel {
   readonly capabilityCode: boolean;
   readonly qualityScore: number;
   readonly authType?: string;
-  readonly capabilities?: Readonly<Record<string, unknown>>;
+  readonly capabilities?: ReadonlyArray<string>;
   readonly inputModalities?: ReadonlyArray<string>;
   readonly outputModalities?: ReadonlyArray<string>;
   readonly supportedEndpoints?: ReadonlyArray<string>;

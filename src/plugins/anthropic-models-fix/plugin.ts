@@ -50,7 +50,7 @@ export const ANTHROPIC_MODELS_FIX_PLUGIN_KIND: PluginKind = 'model-list-override
 export const ANTHROPIC_MODELS_FIX_PLUGIN_METADATA: PluginMetadata = Object.freeze({
   id: 'anthropic-models-fix',
   name: 'Anthropic models fix (July 2026)',
-  version: '0.2.0',
+  version: '0.3.0',
   description:
     'Fixes the Anthropic model list per Anthropic June/July 2026 changes.',
   kind: ANTHROPIC_MODELS_FIX_PLUGIN_KIND,
@@ -78,7 +78,14 @@ export interface LatestStableAnthropicModel {
   readonly capabilityReasoning: boolean;
   readonly capabilityCode: boolean;
   readonly qualityScore: number;
-  readonly capabilities: Readonly<Record<string, unknown>>;
+  /**
+   * Upstream `DiscoveredModel.capabilities` is `readonly ModelCapability[]`
+   * (an array of capability strings like 'text', 'stream', 'tools'), NOT
+   * an object map. The upstream `mergeModelCapabilities()` helper iterates
+   * this with `for...of`, which throws `TypeError: object is not iterable`
+   * on a plain object, causing a 500 on every `/v1/models` request.
+   */
+  readonly capabilities: readonly string[];
   readonly addedOn: string;
 }
 
@@ -92,18 +99,7 @@ export const LATEST_STABLE_ANTHROPIC_MODELS: readonly LatestStableAnthropicModel
     capabilityReasoning: true,      // adaptive thinking on by default
     capabilityCode: true,
     qualityScore: 5,
-    capabilities: Object.freeze({
-      context_window: 1_000_000,
-      max_output_tokens: 128_000,
-      supports_vision: true,
-      supports_tools: true,
-      tokenizer_version: 'sonnet-5-2026-06-30',
-      breaking_changes_since_predecessor: Object.freeze([
-        'extended_thinking_removed',
-        'sampling_params_strict',
-        'priority_tier_unavailable',
-      ]),
-    }),
+    capabilities: Object.freeze(['text', 'image', 'tools', 'stream']),
     addedOn: '2026-06-30',
   },
   {
@@ -115,13 +111,7 @@ export const LATEST_STABLE_ANTHROPIC_MODELS: readonly LatestStableAnthropicModel
     capabilityReasoning: true,
     capabilityCode: true,
     qualityScore: 5,
-    capabilities: Object.freeze({
-      context_window: 200_000,
-      max_output_tokens: 32_000,
-      supports_vision: true,
-      supports_tools: true,
-      speed_modes_supported: Object.freeze(['standard']),
-    }),
+    capabilities: Object.freeze(['text', 'image', 'tools', 'stream']),
     addedOn: '2026-06-29',
   },
   {
@@ -133,12 +123,7 @@ export const LATEST_STABLE_ANTHROPIC_MODELS: readonly LatestStableAnthropicModel
     capabilityReasoning: false,
     capabilityCode: true,
     qualityScore: 4,
-    capabilities: Object.freeze({
-      context_window: 200_000,
-      max_output_tokens: 8_192,
-      supports_vision: false,
-      supports_tools: true,
-    }),
+    capabilities: Object.freeze(['text', 'tools', 'stream']),
     addedOn: '2025-10-01',
   },
 ]);

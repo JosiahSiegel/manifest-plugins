@@ -94,6 +94,23 @@ describe('AnthropicModelsFixPlugin (metadata + construction)', () => {
       expect(entry.displayName.length).toBeGreaterThan(0);
     }
   });
+
+  it('catalog capabilities is an iterable array, not an object (regression: 500 on /v1/models)', () => {
+    // Regression lock: upstream's mergeModelCapabilities() does
+    // `for (const capability of m.capabilities ?? [])`. If capabilities
+    // is a plain object (e.g. { context_window: 1000000, ... }), this
+    // throws `TypeError: object is not iterable` and 500s every
+    // /v1/models request. Every catalog entry MUST use an array of
+    // ModelCapability strings ('text', 'image', 'tools', 'stream').
+    for (const entry of LATEST_STABLE_ANTHROPIC_MODELS) {
+      expect(Array.isArray(entry.capabilities)).toBe(true);
+      expect(entry.capabilities.length).toBeGreaterThan(0);
+      for (const cap of entry.capabilities) {
+        expect(typeof cap).toBe('string');
+        expect(cap.length).toBeGreaterThan(0);
+      }
+    }
+  });
 });
 
 describe('buildAnthropicModelList (pure helper)', () => {
@@ -185,9 +202,14 @@ describe('buildAnthropicModelList (pure helper)', () => {
     expect(sonnet5).toBeDefined();
     expect(sonnet5?.displayName).toBe('Claude Sonnet 5');
     expect(sonnet5?.capabilities).toBeDefined();
-    expect(
-      (sonnet5?.capabilities as Record<string, unknown> | undefined)?.['context_window'],
-    ).toBe(1_000_000);
+    // capabilities MUST be an array of ModelCapability strings, not an
+    // object map. Upstream's mergeModelCapabilities() iterates with
+    // for...of — a plain object throws TypeError: object is not iterable
+    // and 500s the whole /v1/models response.
+    expect(Array.isArray(sonnet5?.capabilities)).toBe(true);
+    expect(sonnet5?.capabilities).toContain('text');
+    expect(sonnet5?.capabilities).toContain('tools');
+    expect(sonnet5?.capabilities).toContain('stream');
   });
 
   it('populates every required upstream DiscoveredModel field on added rows', () => {
@@ -365,6 +387,33 @@ describe('AnthropicModelsFixPlugin.overrideModelList (integration)', () => {
     for (const m of out?.discoveredModels ?? []) {
       for (const field of requiredFields) {
         expect(m[field]).toBeDefined();
+      }
+    }
+  });
+
+  it('returned capabilities is always an iterable array (regression: 500 on /v1/models)', () => {
+    // Regression lock for the /v1/models 500 caused by the plugin
+    // returning `capabilities: { context_window: 1000000, ... }` (a
+    // plain object). Upstream's mergeModelCapabilities() iterates with
+    // for...of, which throws `TypeError: object is not iterable` on a
+    // plain object and 500s the whole response. Every returned row's
+    // `capabilities` MUST be `Array.isArray() === true`.
+    const ctx = Object.freeze({
+      tenantId: 'tenant-1',
+      agentId: 'agent-1',
+      discoveredModels: Object.freeze([
+        row('claude-sonnet-5', 'anthropic', 'api_key', {
+          capabilities: ['text', 'tools'],
+        }),
+      ]),
+    });
+    const out = plugin.overrideModelList(ctx);
+    expect(out).not.toBeNull();
+    for (const m of out?.discoveredModels ?? []) {
+      if (m.capabilities !== undefined) {
+        expect(Array.isArray(m.capabilities)).toBe(true);
+        // For...of must not throw.
+        expect(() => [...m.capabilities!]).not.toThrow();
       }
     }
   });
