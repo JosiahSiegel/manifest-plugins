@@ -45,6 +45,11 @@ import {
   MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD,
   MODEL_LIST_OVERRIDE_NEW,
   MODEL_LIST_OVERRIDE_OLD,
+  ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_HEADER_TIER,
+  ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_SPECIFICITY,
+  ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_TIER,
+  ROUTING_MODEL_LIST_OVERRIDE_NEW,
+  ROUTING_MODEL_LIST_OVERRIDE_OLD,
   PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW,
   PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD,
   PROXY_ROUTING_OVERRIDE_HOST_SOURCE,
@@ -331,6 +336,59 @@ export async function applyModelListOverrideHost(
     options,
   );
 }
+
+/**
+ * Patch one of the routing-layer services (tier.service.ts,
+ * specificity.service.ts, or header-tier.service.ts) to install
+ * the routing-layer model-list-override call site. The helper
+ * function `applyModelListOverridePlugins` is already defined in
+ * `model.controller.ts` (installed by `applyModelListOverrideHost`),
+ * so this patch only inserts the call-site wrapper — it does NOT
+ * re-insert the helper definition.
+ *
+ * The `helperMarkerOld` and `helperMarkerNew` are identical
+ * (byte-equal) so the `applyPatch` helper-insertion step is a
+ * no-op; the call-site replacement still runs.
+ *
+ * @param filePath  Absolute or relative path to the routing-layer
+ *                  service source file.
+ * @param className One of `'TierService'`, `'SpecificityService'`,
+ *                  `'HeaderTierService'`. Selects the byte-exact
+ *                  `@Injectable()` + class declaration anchor for
+ *                  the no-op helper-marker step.
+ */
+export async function applyRoutingModelListOverrideHost(
+  filePath: string,
+  className: 'TierService' | 'SpecificityService' | 'HeaderTierService',
+  options: ApplyOptions = {},
+): Promise<ApplyResult> {
+  const helperMarkerOld =
+    className === 'TierService'
+      ? ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_TIER
+      : className === 'SpecificityService'
+        ? ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_SPECIFICITY
+        : ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_HEADER_TIER;
+  return applyPatch(
+    {
+      filePath,
+      // Use the call-site anchor as the post-patch symbol so
+      // idempotency is detected correctly: the post-patch state
+      // contains `__availableRaw` (the renamed local), so we use
+      // that as the sentinel. If the file already contains the
+      // wrapper, the patch is a no-op.
+      postPatchSymbol: 'const __availableRaw = await this.discoveryService.getModelsForAgent(',
+      oldText: ROUTING_MODEL_LIST_OVERRIDE_OLD,
+      newText: ROUTING_MODEL_LIST_OVERRIDE_NEW,
+      helperMarkerOld,
+      // byte-equal: no helper insertion. The `applyModelListOverridePlugins`
+      // function is already defined in `model.controller.ts` (installed
+      // by `applyModelListOverrideHost`) and is `require()`d at the
+      // call site via the wrapper.
+      helperMarkerNew: helperMarkerOld,
+    },
+    options,
+  );
+}
 export async function applyAdminMount(
   filePath: string,
   options: ApplyOptions = {},
@@ -443,6 +501,26 @@ export interface ManifestFileSpec {
    * `applyAllFour` which leave it untouched.
    */
   modelFetcher?: string;
+  /**
+   * Path to upstream's `routing-core/tier.service.ts`. Used by
+   * `applyAllFive` to install the routing-layer model-list-override
+   * host (so the routing layer can resolve plugin-added model IDs).
+   * Optional; when omitted, the routing-layer tier-service patch is
+   * skipped.
+   */
+  tierService?: string;
+  /**
+   * Path to upstream's `routing-core/specificity.service.ts`. Used
+   * by `applyAllFive` to install the routing-layer model-list-
+   * override host. Optional.
+   */
+  specificityService?: string;
+  /**
+   * Path to upstream's `header-tiers/header-tier.service.ts`. Used
+   * by `applyAllFive` to install the routing-layer model-list-
+   * override host. Optional.
+   */
+  headerTierService?: string;
 }
 
 export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
@@ -451,6 +529,9 @@ export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
   proxyService: 'packages/backend/src/routing/proxy/proxy.service.ts',
   main: 'packages/backend/src/main.ts',
   modelFetcher: 'packages/backend/src/routing/model.controller.ts',
+  tierService: 'packages/backend/src/routing/routing-core/tier.service.ts',
+  specificityService: 'packages/backend/src/routing/routing-core/specificity.service.ts',
+  headerTierService: 'packages/backend/src/routing/header-tiers/header-tier.service.ts',
 };
 
 export interface ApplyAllResult {
@@ -598,6 +679,19 @@ export interface ApplyAllFiveResult extends ApplyAllFourResult {
  * four-file result unchanged with a synthetic `modelListOverride`
  * field set to `{ status: 'noop', file: '<not requested>' }`.
  */
+/**
+ * Result of the eight-file patch surface (the five-file set +
+ * routing-layer model-list-override). See {@link applyAllEight}.
+ */
+export interface ApplyAllEightResult extends ApplyAllFiveResult {
+  /** Result of the routing-layer model-list-override patch on `tier.service.ts`. */
+  tierServiceRoutingModelList: ApplyResult;
+  /** Result of the routing-layer model-list-override patch on `specificity.service.ts`. */
+  specificityServiceRoutingModelList: ApplyResult;
+  /** Result of the routing-layer model-list-override patch on `header-tier.service.ts`. */
+  headerTierServiceRoutingModelList: ApplyResult;
+}
+
 export async function applyAllFive(
   manifestRoot: string,
   files: ManifestFileSpec = DEFAULT_MANIFEST_FILES,
@@ -623,5 +717,96 @@ export async function applyAllFive(
     modelListOverride,
     fullyApplied: fourFileResult.fullyApplied && modelListOverride.status !== 'upstream-drift',
     hasDrift: fourFileResult.hasDrift || modelListOverride.status === 'upstream-drift',
+  };
+}
+
+/**
+ * Run all eight host patches against a Manifest checkout. Like
+ * {@link applyAllFive} but additionally installs the routing-layer
+ * model-list-override call sites on `tier.service.ts`,
+ * `specificity.service.ts`, and `header-tier.service.ts` so the
+ * routing layer can resolve plugin-added model IDs (closes the
+ * "Cannot resolve fallback model" gap).
+ *
+ * Sequencing: the five-file set runs in {@link applyAllFive}'s
+ * plan. The three routing-layer patches run in parallel in their
+ * own phase (different files, no shared state).
+ *
+ * Each routing-layer patch is optional: when the corresponding
+ * `files.<service> === undefined`, the orchestrator returns a
+ * synthetic `noop` for that service.
+ *
+ * Drift on any routing-layer patch does NOT block the five-file
+ * set — the `applyAllFive` result is reported as-is. The
+ * `applyAllEight`-level aggregates include all eight results.
+ */
+export async function applyAllEight(
+  manifestRoot: string,
+  files: ManifestFileSpec = DEFAULT_MANIFEST_FILES,
+  options: ApplyOptions = {},
+): Promise<ApplyAllEightResult> {
+  const fiveFileResult = await applyAllFive(manifestRoot, files, options);
+  const resolve = (rel: string) => `${manifestRoot.replace(/\/$/, '')}/${rel}`;
+
+  const routingPatches: Array<Promise<{ key: 'tierServiceRoutingModelList' | 'specificityServiceRoutingModelList' | 'headerTierServiceRoutingModelList'; result: ApplyResult }>> = [];
+
+  if (files.tierService !== undefined) {
+    routingPatches.push(
+      applyRoutingModelListOverrideHost(resolve(files.tierService), 'TierService', options).then(
+        (result) => ({ key: 'tierServiceRoutingModelList' as const, result }),
+      ),
+    );
+  }
+  if (files.specificityService !== undefined) {
+    routingPatches.push(
+      applyRoutingModelListOverrideHost(
+        resolve(files.specificityService),
+        'SpecificityService',
+        options,
+      ).then((result) => ({ key: 'specificityServiceRoutingModelList' as const, result })),
+    );
+  }
+  if (files.headerTierService !== undefined) {
+    routingPatches.push(
+      applyRoutingModelListOverrideHost(
+        resolve(files.headerTierService),
+        'HeaderTierService',
+        options,
+      ).then((result) => ({ key: 'headerTierServiceRoutingModelList' as const, result })),
+    );
+  }
+
+  const resolved = await Promise.all(routingPatches);
+  const tierServiceRoutingModelList: ApplyResult =
+    resolved.find((r) => r.key === 'tierServiceRoutingModelList')?.result ?? {
+      status: 'noop',
+      file: '<tierService not requested>',
+    };
+  const specificityServiceRoutingModelList: ApplyResult =
+    resolved.find((r) => r.key === 'specificityServiceRoutingModelList')?.result ?? {
+      status: 'noop',
+      file: '<specificityService not requested>',
+    };
+  const headerTierServiceRoutingModelList: ApplyResult =
+    resolved.find((r) => r.key === 'headerTierServiceRoutingModelList')?.result ?? {
+      status: 'noop',
+      file: '<headerTierService not requested>',
+    };
+
+  const allDrift = [
+    tierServiceRoutingModelList,
+    specificityServiceRoutingModelList,
+    headerTierServiceRoutingModelList,
+  ];
+  const hasDrift = fiveFileResult.hasDrift || allDrift.some((r) => r.status === 'upstream-drift');
+  const fullyApplied = fiveFileResult.fullyApplied && allDrift.every((r) => r.status !== 'upstream-drift');
+
+  return {
+    ...fiveFileResult,
+    tierServiceRoutingModelList,
+    specificityServiceRoutingModelList,
+    headerTierServiceRoutingModelList,
+    fullyApplied,
+    hasDrift,
   };
 }

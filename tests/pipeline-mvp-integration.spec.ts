@@ -101,6 +101,56 @@ const PATCHED_MANIFEST_FILES = [
       '  }\n' +
       '}\n',
   },
+  {
+    // Synthesized upstream `routing-core/tier.service.ts` carrying
+    // the getModelsForAgent call site the routing-layer model-list-
+    // override patch anchors on.
+    relativePath: 'packages/backend/src/routing/routing-core/tier.service.ts',
+    content:
+      "import { Injectable } from '@nestjs/common';\n" +
+      "import { DiscoveryService } from '../../model-discovery/discovery.service';\n" +
+      '\n' +
+      '@Injectable()\n' +
+      'export class TierService {\n' +
+      '  constructor(private readonly discoveryService: DiscoveryService) {}\n' +
+      '  async buildFallbackRoutes(tenantId: string, agentId: string) {\n' +
+      '    const available = await this.discoveryService.getModelsForAgent(tenantId, agentId);\n' +
+      '    return available;\n' +
+      '  }\n' +
+      '}\n',
+  },
+  {
+    // Synthesized upstream `routing-core/specificity.service.ts`.
+    relativePath: 'packages/backend/src/routing/routing-core/specificity.service.ts',
+    content:
+      "import { Injectable } from '@nestjs/common';\n" +
+      "import { DiscoveryService } from '../../model-discovery/discovery.service';\n" +
+      '\n' +
+      '@Injectable()\n' +
+      'export class SpecificityService {\n' +
+      '  constructor(private readonly discoveryService: DiscoveryService) {}\n' +
+      '  async buildFallbackRoutes(tenantId: string, agentId: string) {\n' +
+      '    const available = await this.discoveryService.getModelsForAgent(tenantId, agentId);\n' +
+      '    return available;\n' +
+      '  }\n' +
+      '}\n',
+  },
+  {
+    // Synthesized upstream `header-tiers/header-tier.service.ts`.
+    relativePath: 'packages/backend/src/routing/header-tiers/header-tier.service.ts',
+    content:
+      "import { Injectable } from '@nestjs/common';\n" +
+      "import { DiscoveryService } from '../../model-discovery/discovery.service';\n" +
+      '\n' +
+      '@Injectable()\n' +
+      'export class HeaderTierService {\n' +
+      '  constructor(private readonly discoveryService: DiscoveryService) {}\n' +
+      '  async buildFallbackRoutes(tenantId: string, agentId: string) {\n' +
+      '    const available = await this.discoveryService.getModelsForAgent(tenantId, agentId);\n' +
+      '    return available;\n' +
+      '  }\n' +
+      '}\n',
+  },
 ] as const;
 
 /**
@@ -257,22 +307,22 @@ describe('apply CLI installs the routing-override hook by default (Blocker #1)',
     }
   });
 
-  it('cli.ts source imports `applyAllFive` (regression lock for the five-file installer)', () => {
+  it('cli.ts source imports `applyAllEight` (regression lock for the eight-file installer)', () => {
     // Blocker #1 regression lock: the CLI module MUST import
-    // `applyAllFive` (not just `applyAll`). This is a static-source
+    // `applyAllEight` (not just `applyAllFive`). This is a static-source
     // assertion so a future refactor cannot silently revert to the
-    // three-file installer or drop the new model-list-override patch.
+    // five-file installer or drop the routing-layer model-list-override
+    // patches that close the "Cannot resolve fallback model" gap.
     const cli = readFileSync(join(REPO_ROOT, 'src/host/cli.ts'), 'utf-8');
-    expect(cli).toMatch(/import\s*\{[^}]*\bapplyAllFive\b[^}]*\}\s*from\s*['"]\.\/apply['"]/);
+    expect(cli).toMatch(/import\s*\{[^}]*\bapplyAllEight\b[^}]*\}\s*from\s*['"]\.\/apply['"]/);
   });
 
-  it('cli.ts source calls `applyAllFive` (not `applyAll`) in the default path', () => {
+  it('cli.ts source calls `applyAllEight` (not `applyAll`) in the default path', () => {
     // Regression lock for the production default. The CLI's main
-    // function must invoke `applyAllFive(checkoutPath, ...)` so the
-    // routing-override AND model-list-override hooks are part of the
-    // default apply surface.
+    // function must invoke `applyAllEight(checkoutPath, ...)` so all
+    // eight host hooks are part of the default apply surface.
     const cli = readFileSync(join(REPO_ROOT, 'src/host/cli.ts'), 'utf-8');
-    expect(cli).toMatch(/await\s+applyAllFive\s*\(/);
+    expect(cli).toMatch(/await\s+applyAllEight\s*\(/);
     expect(cli).not.toMatch(/await\s+applyAll\s*\(\s*checkoutPath\s*\)/);
   });
 });
@@ -458,7 +508,7 @@ describe('apply CLI integration', () => {
       expect(result.stderr).not.toContain('choose only one Manifest source');
       expect(result.stdout).toContain('[manifest-plugins/apply] SOURCE_COMMIT=');
       expect(result.stdout).toContain(
-        '[manifest-plugins/apply] all five host hooks patched (or already no-op)',
+        '[manifest-plugins/apply] all eight host hooks patched (or already no-op)',
       );
     } finally {
       cleanup(tmp);

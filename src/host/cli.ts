@@ -41,7 +41,7 @@ import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve, join } from 'path';
 import { promises as fs } from 'fs';
-import { applyAllFive, type ApplyResult } from './apply';
+import { applyAllEight, type ApplyResult } from './apply';
 import {
   OFFICIAL_MANIFEST_URL,
   resolveManifestSource,
@@ -221,12 +221,21 @@ async function main(): Promise<number> {
   }
 
   try {
-    const all = await applyAllFive(checkoutPath);
+    const all = await applyAllEight(checkoutPath);
     logResult('provider-client', all.providerClient);
     logResult('proxy-rate-limiter', all.proxyRateLimiter);
     logResult('proxy-routing-override', all.proxyRoutingOverride);
     logResult('admin-mount', all.adminMount);
     logResult('model-list-override', all.modelListOverride);
+    logResult('tier-service-routing-model-list', all.tierServiceRoutingModelList);
+    logResult(
+      'specificity-service-routing-model-list',
+      all.specificityServiceRoutingModelList,
+    );
+    logResult(
+      'header-tier-service-routing-model-list',
+      all.headerTierServiceRoutingModelList,
+    );
 
     if (all.hasDrift) {
       process.stderr.write(
@@ -237,7 +246,7 @@ async function main(): Promise<number> {
     }
 
     process.stdout.write(
-      '[manifest-plugins/apply] all five host hooks patched (or already no-op)\n',
+      '[manifest-plugins/apply] all eight host hooks patched (or already no-op)\n',
     );
 
     if (parsed.applyOverlay) {

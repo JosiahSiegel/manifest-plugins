@@ -712,6 +712,97 @@ export function buildModelListOverrideHelperMarkerNew(): string {
 }
 
 // =============================================================================
+// Routing-layer model-list override host (injected into tier.service.ts,
+// specificity.service.ts, header-tier.service.ts::buildFallbackRoutes)
+// =============================================================================
+
+/**
+ * The host call-site inserted into upstream's routing-layer services so a
+ * `ModelListOverridePlugin` can rewrite the `available` array used by
+ * `unambiguousRoute()` BEFORE the routing layer resolves a model to a
+ * `(provider, authType, model)` tuple.
+ *
+ * Why this hook exists in addition to the model-list-override hook on
+ * `model.controller.ts::getAvailableModels`:
+ *   The `GET /v1/models` endpoint and the routing/fallback resolution
+ *   both consume the discovered-model catalog, but they go through
+ *   different code paths:
+ *     - `model.controller.ts::getAvailableModels` is the wire-shape
+ *       endpoint that surfaces the list to the UI. The model-list-
+ *       override hook on that endpoint lets plugins ADD or REMOVE
+ *       rows that the user sees in the dropdown.
+ *     - `tier.service.ts::buildFallbackRoutes` (and the analogous
+ *       methods in `specificity.service.ts` and
+ *       `header-tier.service.ts`) call
+ *       `discoveryService.getModelsForAgent(...)` directly and pass
+ *       the result to `unambiguousRoute(model, available)`. If a
+ *       plugin added a row to the `GET /v1/models` response that
+ *       upstream's static catalog doesn't know about, the routing
+ *       layer would 400 with "Cannot resolve fallback model
+ *       'claude-sonnet-5' to a single connected provider" — the UI
+ *       shows the model but selecting it as a fallback fails.
+ *
+ *   This hook closes that gap: every routing-layer consumer of
+ *   `getModelsForAgent` is patched to run the same plugin chain
+ *   against the returned array BEFORE `unambiguousRoute` is called.
+ *   The plugin's added rows (with full upstream-compatible shape)
+ *   become visible to the routing layer, so a user-selected
+ *   `claude-sonnet-5` resolves to the plugin-supplied
+ *   `(provider: 'anthropic', authType, model: 'claude-sonnet-5')`.
+ *
+ * Implementation: the routing-layer files get a TRY-CATCH wrapper
+ * that `require()`s `manifest-plugins` and invokes the SAME
+ * `applyModelListOverridePlugins` helper that's already defined in
+ * the `model.controller.ts` host snippet. We use `require()` (not
+ * `import`) so the upstream TS source stays compilable in CI
+ * without the fork's plugin layer. The wrapper is silent on
+ * failure (no plugin = upstream behavior).
+ */
+export const ROUTING_MODEL_LIST_OVERRIDE_OLD = `    const available = await this.discoveryService.getModelsForAgent(tenantId, agentId);`;
+
+export const ROUTING_MODEL_LIST_OVERRIDE_NEW = `    const __availableRaw = await this.discoveryService.getModelsForAgent(tenantId, agentId);
+    const available = await (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const __pkg = require('manifest-plugins') as { plugins?: ReadonlyArray<{ overrideModelList?: (ctx: { tenantId: string; agentId: string; discoveredModels: ReadonlyArray<unknown>; requestMetadata?: Readonly<Record<string, unknown>> }) => { discoveredModels: ReadonlyArray<unknown> } | null }> };
+        if (!__pkg || !Array.isArray(__pkg.plugins)) return __availableRaw;
+        for (const __p of __pkg.plugins) {
+          if (!__p || typeof __p.overrideModelList !== 'function') continue;
+          try {
+            const __out = __p.overrideModelList({ tenantId, agentId, discoveredModels: __availableRaw, requestMetadata: { source: 'routing.build-fallback-routes' } });
+            if (__out && typeof __out === 'object' && Array.isArray((__out as { discoveredModels?: unknown }).discoveredModels)) {
+              return (__out as { discoveredModels: ReadonlyArray<unknown> }).discoveredModels;
+            }
+          } catch {
+            // plugin failed; fall through to next plugin or upstream default
+          }
+        }
+      } catch {
+        // manifest-plugins not installed; fall through
+      }
+      return __availableRaw;
+    })();`;
+
+/**
+ * The list of (helperMarkerOld, helperMarkerNew) pairs for each
+ * routing-layer file. The helper-marker is the class declaration
+ * line; we DO NOT insert the `applyModelListOverridePlugins` helper
+ * again in these files (it's already defined in
+ * `model.controller.ts` from the first model-list-override patch),
+ * so the new marker is byte-equal to the old marker (no-op for
+ * the helper insertion step). The `apply.ts` patcher treats
+ * `helperMarkerNew === helperMarkerOld` as a no-op for the helper
+ * step and still applies the `oldText -> newText` replacement at
+ * the call site.
+ */
+export const ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_TIER =
+  '@Injectable()\nexport class TierService {\n';
+export const ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_SPECIFICITY =
+  '@Injectable()\nexport class SpecificityService {\n';
+export const ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_HEADER_TIER =
+  '@Injectable()\nexport class HeaderTierService {\n';
+
+// =============================================================================
 // Admin Express app mount (injected into main.ts)
 // =============================================================================
 
