@@ -54,7 +54,12 @@
 import { createElement, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
-export type PluginKind = 'transform' | 'policy' | 'routing-override' | 'dashboard-transform';
+export type PluginKind =
+  | 'transform'
+  | 'policy'
+  | 'routing-override'
+  | 'dashboard-transform'
+  | 'model-list-override';
 
 export interface PluginMetadata {
   readonly id: string;
@@ -127,6 +132,7 @@ const KIND_PILL_TINT: Readonly<Record<PluginKind, { readonly bg: string; readonl
   policy: { bg: 'hsl(var(--success) / 0.12)', fg: 'hsl(var(--success))' },              // emerald
   'routing-override': { bg: 'hsl(var(--chart-5) / 0.15)', fg: 'hsl(var(--chart-5))' }, // amber
   'dashboard-transform': { bg: 'hsl(var(--chart-2) / 0.15)', fg: 'hsl(var(--chart-2))' }, // blue/indigo
+  'model-list-override': { bg: 'hsl(var(--chart-4) / 0.15)', fg: 'hsl(var(--chart-4))' }, // pink/rose
 };
 
 // =============================================================================

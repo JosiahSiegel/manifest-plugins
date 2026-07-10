@@ -25,8 +25,8 @@
  *
  * Usage examples:
  *   node scripts/plugins-cli.mjs list
- *   node scripts/plugins-cli.mjs disable default-policy
- *   node scripts/plugins-cli.mjs enable default-policy
+ *   node scripts/plugins-cli.mjs disable show-all-router-views
+ *   node scripts/plugins-cli.mjs enable show-all-router-views
  *   node scripts/plugins-cli.mjs reset
  */
 
@@ -156,8 +156,8 @@ function usage() {
     '',
     'Examples:',
     '  node scripts/plugins-cli.mjs list',
-    '  node scripts/plugins-cli.mjs disable default-policy',
-    '  node scripts/plugins-cli.mjs enable default-policy',
+    '  node scripts/plugins-cli.mjs disable show-all-router-views',
+    '  node scripts/plugins-cli.mjs enable show-all-router-views',
     '  node scripts/plugins-cli.mjs reset',
     '',
   ].join('\n'));

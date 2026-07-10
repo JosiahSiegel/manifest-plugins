@@ -39,7 +39,6 @@ import { join } from 'path';
 import {
   applyProviderClientHost,
   applyProxyRateLimiterHost,
-  applyProxyRoutingOverrideHost,
   type ApplyResult,
 } from '../host/apply';
 import { OVERLAY_SPEC } from '../overlays/mvp';
@@ -195,13 +194,15 @@ export async function _applyOverlayForTesting(
       result = await applyProviderClientHost(targetPath);
     } else if (overlay.id === 'proxy-rate-limiter-policy-host') {
       result = await applyProxyRateLimiterHost(targetPath);
-    } else if (overlay.id === 'proxy-service-routing-override-host') {
-      result = await applyProxyRoutingOverrideHost(targetPath);
     } else {
       // The MVP overlay spec is closed (OVERLAY_SPEC in the manifest
       // module is the only producer). Any other id is a bug in the
       // caller. Surface it as a structured failure rather than an
       // unhandled rejection.
+      //
+      // Wave-history note: the `proxy-service-routing-override-host`
+      // overlay was retired on 2026-07-10 when upstream PR #2468
+      // subsumed the behavior. See OVERLAY_SPEC.
       return { status: 'failed', id: overlay.id };
     }
   } catch {

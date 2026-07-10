@@ -1,7 +1,7 @@
 # External plugins
 
-`manifest-plugins` ships two built-in plugins (`default-policy`,
-`header-tier-router`). This document explains how to add **external plugins**:
+`manifest-plugins` ships two built-in plugins (`anthropic-models-fix`,
+`show-all-router-views`). This document explains how to add **external plugins**:
 plugins that live in separate repositories and are fetched at build/test time
 into `src/plugins/<name>/` so the existing auto-discovery picks them up.
 

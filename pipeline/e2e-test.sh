@@ -13,8 +13,9 @@
 #                                (i.e. the dashboard's JS bundle is reachable)
 #   4. Runtime plugin registry smoke inside the app container: requiring
 #      `manifest-plugins` must expose enabled plugins, and
-#      HeaderTierRouterPlugin.overrideRouting() must return a header-match
-#      routing override for an in-memory header-tier fixture.
+#      AnthropicModelsFixPlugin.overrideModelList() must add claude-sonnet-5
+#      and retire claude-sonnet-4-20250514 against an in-memory DiscoveredModel
+#      fixture (the Anthropic July 2026 catalog surface).
 #   5. (MVP_UI=1 only) GET /api/v1/plugins → HTTP 200, JSON body with a
 #                                top-level "plugins" array. When MVP_UI=1
 #                                is set, a 404 or non-JSON response on this
@@ -298,50 +299,46 @@ if docker exec "$APP_NAME" node -e '
 const pkg = require("/app/node_modules/manifest-plugins");
 const installed = pkg.getInstalledPlugins();
 if (!Array.isArray(installed)) throw new Error("getInstalledPlugins() did not return an array");
-if (!installed.some((plugin) => plugin.id === "header-tier-router")) {
-  throw new Error(`header-tier-router missing from installed plugins: ${JSON.stringify(installed)}`);
+if (!installed.some((plugin) => plugin.id === "anthropic-models-fix")) {
+  throw new Error(`anthropic-models-fix missing from installed plugins: ${JSON.stringify(installed)}`);
 }
 if (!Array.isArray(pkg.plugins) || pkg.plugins.length === 0) {
   throw new Error("enabled plugin registry is empty");
 }
-const router = pkg.plugins.find((plugin) => typeof plugin.overrideRouting === "function");
-if (!router) throw new Error("no enabled plugin exposes overrideRouting()");
-const route = { provider: "anthropic", authType: "api_key", model: "claude-sonnet-4-5" };
-const result = router.overrideRouting({
-  agentId: "agent-smoke",
+const mlop = pkg.plugins.find((plugin) => typeof plugin.overrideModelList === "function");
+if (!mlop) throw new Error("no enabled plugin exposes overrideModelList()");
+const result = mlop.overrideModelList({
   tenantId: "tenant-smoke",
-  apiMode: "chat_completions",
-  body: { model: "openai/gpt-4o-mini" },
-  headers: { "x-manifest-tier": "smoke-test" },
-  requestedModel: "openai/gpt-4o-mini",
-  discoveredModels: [{ id: route.model, provider: route.provider, authType: route.authType }],
-  headerTiers: [{
-    id: "smoke-tier",
-    name: "Smoke Test",
-    header_key: "x-manifest-tier",
-    header_value: "smoke-test",
-    enabled: true,
-    sort_order: 0,
-    badge_color: "#f59e0b",
-    override_route: route,
-    fallback_routes: null,
-    output_modality: "text",
-    response_mode: "buffered",
-  }],
+  agentId: "agent-smoke",
+  discoveredModels: [
+    {
+      id: "claude-sonnet-4-20250514",
+      displayName: "Claude Sonnet 4 (old)",
+      provider: "anthropic",
+      contextWindow: 200000,
+      inputPricePerToken: 3e-6,
+      outputPricePerToken: 15e-6,
+      capabilityReasoning: true,
+      capabilityCode: true,
+      qualityScore: 4,
+      authType: "api_key",
+    },
+  ],
 });
-if (!result || result.reason !== "header-match" || result.header_tier_id !== "smoke-tier") {
-  throw new Error(`HeaderTierRouterPlugin returned unexpected result: ${JSON.stringify(result)}`);
+if (!result || !Array.isArray(result.discoveredModels)) {
+  throw new Error(`AnthropicModelsFixPlugin returned no discoveredModels: ${JSON.stringify(result)}`);
 }
-if (!result.route || result.route.model !== route.model) {
-  throw new Error(`HeaderTierRouterPlugin returned wrong route: ${JSON.stringify(result)}`);
+const ids = result.discoveredModels.map((m) => m.id);
+if (!ids.includes("claude-sonnet-5")) {
+  throw new Error(`AnthropicModelsFixPlugin did not add claude-sonnet-5: ${JSON.stringify(ids)}`);
 }
-if (result.explicit_model_override !== false) {
-  throw new Error(`HeaderTierRouterPlugin set explicit_model_override incorrectly: ${JSON.stringify(result)}`);
+if (ids.includes("claude-sonnet-4-20250514")) {
+  throw new Error(`AnthropicModelsFixPlugin did not retire claude-sonnet-4-20250514: ${JSON.stringify(ids)}`);
 }
 ' >/dev/null; then
-  log "plugin registry smoke      → pass (header-tier-router installed + overrideRouting returns header-match)"
+  log "plugin registry smoke      → pass (anthropic-models-fix installed + overrideModelList adds claude-sonnet-5 and retires claude-sonnet-4-20250514)"
 else
-  fail "plugin registry smoke failed — manifest-plugins is missing, empty, or header-tier-router is not executable in the built image" 3
+  fail "plugin registry smoke failed — manifest-plugins is missing, empty, or anthropic-models-fix is not executable in the built image" 3
 fi
 
 # (e) (MVP_UI=1 only) /api/v1/plugins — assert the upstream Manifest
@@ -379,15 +376,15 @@ if [[ "$ADMIN_UI" == "1" ]]; then
   PLUGIN_COUNT=$(jq -r '.plugins | length' "$RESP_BODY")
   log "GET /api/plugins             → 200 (ADMIN_UI=1: JSON body has $PLUGIN_COUNT plugins)"
 
-  capture "http://127.0.0.1:${PORT}/api/plugins/header-tier-router"
+  capture "http://127.0.0.1:${PORT}/api/plugins/anthropic-models-fix"
   [[ "$RESP_CODE" == "200" ]] \
-    || fail "GET /api/plugins/header-tier-router → $RESP_CODE (expected 200)" 7
+    || fail "GET /api/plugins/anthropic-models-fix → $RESP_CODE (expected 200)" 7
   [[ "$RESP_TYPE" == application/json* ]] \
-    || fail "GET /api/plugins/header-tier-router content-type: $RESP_TYPE (expected application/json)" 7
-  if ! jq -e 'type == "object" and (.plugin.id == "header-tier-router") and (.plugin.name | type == "string") and (.plugin.version | type == "string") and (.plugin.kind | type == "string")' "$RESP_BODY" >/dev/null 2>&1; then
-    fail "GET /api/plugins/header-tier-router JSON body does not contain plugin metadata: $(cat "$RESP_BODY")" 7
+    || fail "GET /api/plugins/anthropic-models-fix content-type: $RESP_TYPE (expected application/json)" 7
+  if ! jq -e 'type == "object" and (.plugin.id == "anthropic-models-fix") and (.plugin.name | type == "string") and (.plugin.version | type == "string") and (.plugin.kind | type == "string")' "$RESP_BODY" >/dev/null 2>&1; then
+    fail "GET /api/plugins/anthropic-models-fix JSON body does not contain plugin metadata: $(cat "$RESP_BODY")" 7
   fi
-  log "GET /api/plugins/header-tier-router → 200 (metadata present)"
+  log "GET /api/plugins/anthropic-models-fix → 200 (metadata present)"
 
   capture "http://127.0.0.1:${PORT}/api/plugins/health"
   [[ "$RESP_CODE" == "200" ]] \
@@ -581,12 +578,10 @@ if [[ "$TIER_ROUTING_SMOKE" == "1" ]]; then
     fail "tier-routing smoke → header tier NOT honored. " \
          "Expected X-Manifest-Tier: standard and X-Manifest-Reason: header-match, " \
          "got X-Manifest-Tier: '$RESP_TIER' and X-Manifest-Reason: '$RESP_REASON'. " \
-         "This means upstream commit 2ab748a6's explicit-model early-return " \
-         "is bypassing the configured header_tiers rule — " \
-         "body.model=$TIER_BODY_MODEL won over x-manifest-tier=$TIER_HEADER_NAME. " \
-         "Fix: verify the routing-override host hook " \
-         "(proxy-service-routing-override-host overlay) was applied to this " \
-         "image and that the HeaderTierRouterPlugin is enabled in the plugin registry." 6
+"This means the routing-override hook is no longer compensating for the upstream regression. " \
+          "Upstream PR #2468 (merged 2026-07-10) restored header_tiers precedence over body.model, so the proxy-service-routing-override-host overlay was retired. " \
+          "If an operator still configures x-manifest-tier=$TIER_HEADER_NAME expecting body.model=$TIER_BODY_MODEL to lose, " \
+          "they are likely hitting an old image build; rebuild against current main and re-test." 6
   fi
 fi
 

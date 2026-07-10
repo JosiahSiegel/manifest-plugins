@@ -32,9 +32,8 @@ interface LoadedModule {
   }[];
   readonly getPersistedStateFile: () => string;
   readonly resetPersistedPluginState: () => void;
-  readonly DefaultPolicyPlugin: new (...args: never[]) => unknown;
-  readonly HeaderTierRouterPlugin: new (...args: never[]) => unknown;
   readonly ShowAllRouterViewsPlugin: new (...args: never[]) => unknown;
+  readonly AnthropicModelsFixPlugin: new (...args: never[]) => unknown;
 }
 
 function freshStateFile(): string {
@@ -68,7 +67,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
   it('applies a persisted false entry by removing the plugin from the runtime array', () => {
     writeFileSync(
       stateFile,
-      JSON.stringify({ 'default-policy': false }) + '\n',
+      JSON.stringify({ 'show-all-router-views': false }) + '\n',
       'utf-8',
     );
 
@@ -78,16 +77,15 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    expect(mod!.plugins).toHaveLength(2);
-    expect(mod!.plugins).not.toContainEqual(expect.any(mod!.DefaultPolicyPlugin));
-    expect(mod!.plugins).toContainEqual(expect.any(mod!.HeaderTierRouterPlugin));
-    expect(mod!.plugins).toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
+    expect(mod!.plugins).toHaveLength(1);
+    expect(mod!.plugins).not.toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
+    expect(mod!.plugins).toContainEqual(expect.any(mod!.AnthropicModelsFixPlugin));
   });
 
   it('applies a persisted true entry so getInstalledPlugins reports enabled=true for that id', () => {
     writeFileSync(
       stateFile,
-      JSON.stringify({ 'header-tier-router': true }) + '\n',
+      JSON.stringify({ 'anthropic-models-fix': true }) + '\n',
       'utf-8',
     );
 
@@ -98,10 +96,10 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     });
 
     const installed = mod!.getInstalledPlugins();
-    const headerTier = installed.find((p) => p.id === 'header-tier-router');
-    expect(headerTier).toBeDefined();
-    expect(headerTier!.enabled).toBe(true);
-    expect(headerTier!.enabledByDefault).toBe(true);
+    const mlop = installed.find((p) => p.id === 'anthropic-models-fix');
+    expect(mlop).toBeDefined();
+    expect(mlop!.enabled).toBe(true);
+    expect(mlop!.enabledByDefault).toBe(true);
   });
 
   it('falls back to all-defaults when the state file is missing', () => {
@@ -112,7 +110,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    expect(mod!.plugins).toHaveLength(3);
+    expect(mod!.plugins).toHaveLength(2);
     const installed = mod!.getInstalledPlugins();
     for (const p of installed) {
       expect(p.enabled).toBe(true);
@@ -134,8 +132,8 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     writeFileSync(
       stateFile,
       JSON.stringify({
-        'default-policy': false,
-        'header-tier-router': false,
+        'show-all-router-views': false,
+        'anthropic-models-fix': false,
       }) + '\n',
       'utf-8',
     );
@@ -147,7 +145,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     });
 
     // Boot has dropped both plugins from the runtime array.
-    expect(mod!.plugins).toHaveLength(1);
+    expect(mod!.plugins).toHaveLength(0);
 
     mod!.resetPersistedPluginState();
 
@@ -159,6 +157,6 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       expect(p.enabledByDefault).toBe(true);
     }
     // Every plugin is back in the runtime array.
-    expect(mod!.plugins).toHaveLength(3);
+    expect(mod!.plugins).toHaveLength(2);
   });
 });

@@ -41,6 +41,21 @@ function tempMountRoots(): readonly string[] {
     .sort();
 }
 
+/**
+ * Returns any leftover `.mwp-mount-*` temp directories inside the
+ * given target directory. After the atomic rename, there should be
+ * zero of them — the finally-block rmSync must have cleaned up.
+ *
+ * The mount function switched from `os.tmpdir()` to the target
+ * directory for the temp file (to avoid EXDEV on Windows when
+ * `os.tmpdir()` is on a different drive than the manifest checkout).
+ */
+function targetMountTemps(targetDir: string): readonly string[] {
+  return readdirSync(targetDir)
+    .filter((entry) => entry.startsWith('.mwp-mount-'))
+    .sort();
+}
+
 describe('mountDashboardPluginManager', () => {
   it('injects the plugin manager div and script into packages/frontend/index.html that ends with </body>', async () => {
     const tmp = tempDir('manifest-plugins-mount-dashboard-inject-');
@@ -127,12 +142,18 @@ describe('mountDashboardPluginManager', () => {
   it('removes the atomic-write temp directory after rename', async () => {
     const tmp = tempDir('manifest-plugins-mount-dashboard-atomic-');
     try {
-      writeDashboardIndex(tmp.path, '<html><body><main>Dashboard</main></body></html>');
-      const before = tempMountRoots();
+      const indexPath = writeDashboardIndex(tmp.path, '<html><body><main>Dashboard</main></body></html>');
+      const targetDir = join(tmp.path, 'packages', 'frontend');
 
       await mountDashboardPluginManager(tmp.path);
 
-      expect(tempMountRoots()).toEqual(before);
+      // The temp dir now lives in the target directory (not os.tmpdir())
+      // to avoid EXDEV on Windows when the manifest checkout is on a
+      // different drive than the OS temp dir. The finally-block rmSync
+      // must still clean it up.
+      expect(targetMountTemps(targetDir)).toEqual([]);
+      // And os.tmpdir() must not have any mwp-mount-* leftovers either.
+      expect(tempMountRoots()).toEqual([]);
     } finally {
       tmp.cleanup();
     }

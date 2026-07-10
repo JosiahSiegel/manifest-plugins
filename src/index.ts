@@ -177,7 +177,7 @@ export interface RoutingOverrideRoute {
 
 /**
  * The structural shape of a single discovered model row (mirrors
- * `mnfst/manifest` `packages/backend/src/routing/model-discovery/model-fetcher.ts`
+ * `mnfst/manifest` `packages/backend/src/model-discovery/model-fetcher.ts`
  * `DiscoveredModel`).
  */
 export interface RoutingOverrideDiscoveredModel {
@@ -315,10 +315,165 @@ export interface DashboardTransformPlugin {
 }
 
 // =============================================================================
+// ModelListOverridePlugin — pre-/v1/models response hook
+// =============================================================================
+
+/**
+ * The structural shape of a single discovered-model row that flows
+ * into and out of the model-list-override host. Mirrors the upstream
+ * `mnfst/manifest` `DiscoveredModel` shape
+ * (`packages/backend/src/model-discovery/model-fetcher.ts`)
+ * but typed loosely so this plugins package can compile without
+ * importing upstream sources.
+ *
+ * The host fetches the agent's discovered-models list once via
+ * upstream `modelDiscovery.getModelsForAgent(tenantId, agentId)`
+ * and passes it in {@link ModelListOverrideContext.discoveredModels}.
+ * Each `ModelListOverridePlugin` may mutate that list (filter,
+ * rename, augment) before upstream serializes it as the response
+ * body of `GET /v1/models`.
+ *
+ * Plugins MUST NOT mutate the array passed in via `discoveredModels`
+ * (the host treats it as immutable). Plugins return a new array via
+ * {@link ModelListOverrideResult.discoveredModels}.
+ */
+/**
+ * The shape every plugin must return for each row in
+ * {@link ModelListOverrideResult.discoveredModels}.
+ *
+ * This is the upstream `mnfst/manifest` `DiscoveredModel` shape from
+ * `packages/backend/src/model-discovery/model-fetcher.ts`. Plugins MUST
+ * include every required field (id, displayName, provider, contextWindow,
+ * inputPricePerToken, outputPricePerToken, capabilityReasoning,
+ * capabilityCode, qualityScore, authType). The host source pastes the
+ * plugin's output verbatim into upstream's `models.map(...)` block,
+ * which dereferences all of these fields without null-guards — any
+ * missing field surfaces downstream as `undefined` in the JSON
+ * response, breaking the frontend's strict `AvailableModel` interface
+ * (e.g. the routing page's "Add fallback" button triggers a 500 because
+ * `extractOriginPath` tries to construct a URL from `undefined`).
+ *
+ * Plugins that only need to filter or augment can preserve the input
+ * row's values verbatim; plugins that add NEW rows must populate every
+ * required field with sensible defaults (or `null` for pricing).
+ *
+ * `capabilities` is an ARRAY of capability strings (`'text' | 'image' |
+ * 'audio' | 'video' | 'tools' | 'stream'`), NOT an object map. The
+ * upstream `mergeModelCapabilities()` helper iterates this with
+ * `for...of`, which throws `TypeError: object is not iterable` on a
+ * plain object and 500s the whole `/v1/models` request. Plugins adding
+ * new rows MUST populate `capabilities` as `readonly string[]` (e.g.
+ * `Object.freeze(['text', 'tools', 'stream'])`).
+ *
+ * `inputModalities` and `outputModalities` are arrays of `ModelModality`
+ * enum values (the same constraint as `capabilities`).
+ */
+export interface ModelListOverrideDiscoveredModel {
+  readonly id: string;
+  readonly displayName: string;
+  readonly provider: string;
+  readonly contextWindow: number;
+  readonly inputPricePerToken: number | null;
+  readonly outputPricePerToken: number | null;
+  readonly capabilityReasoning: boolean;
+  readonly capabilityCode: boolean;
+  readonly qualityScore: number;
+  readonly authType?: string;
+  readonly capabilities?: ReadonlyArray<string>;
+  readonly inputModalities?: ReadonlyArray<string>;
+  readonly outputModalities?: ReadonlyArray<string>;
+  readonly supportedEndpoints?: ReadonlyArray<string>;
+}
+
+/**
+ * The host-supplied context passed to every `ModelListOverridePlugin`
+ * during `GET /v1/models`. The host does all the upstream
+ * discovery work; plugins only read.
+ */
+export interface ModelListOverrideContext {
+  /** Tenant id the upstream `getModelsForAgent` was called for. */
+  readonly tenantId: string;
+  /** Agent id the upstream `getModelsForAgent` was called for. */
+  readonly agentId: string;
+  /**
+   * The discovered-models list upstream produced before any plugin
+   * ran. Plugins read this to decide which rows to keep, drop, or
+   * rewrite. Treat as immutable — return your changes via
+   * {@link ModelListOverrideResult.discoveredModels}.
+   */
+  readonly discoveredModels: readonly ModelListOverrideDiscoveredModel[];
+  /**
+   * Free-form request metadata for cache-keying / debug logging
+   * (e.g. the upstream request id). Plugins MAY log this; plugins
+   * MUST NOT depend on specific fields being present.
+   */
+  readonly requestMetadata?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * The structural shape of a successful `overrideModelList()` return.
+ *
+ * The host walks the plugin array in order. The FIRST non-null
+ * result wins — its `discoveredModels` array replaces the upstream
+ * list in the `/v1/models` response body. Later plugins are skipped
+ * for the same request.
+ *
+ * Returning `{ discoveredModels: ctx.discoveredModels }` is a no-op
+ * (pass-through). Returning an empty array hides every model from
+ * `/v1/models` — useful for hard maintenance windows but normally
+ * undesirable.
+ *
+ * Plugins SHOULD log the reason for a non-trivial override so
+ * operators can audit why a client sees a different model list than
+ * upstream's static catalog would suggest.
+ */
+export interface ModelListOverrideResult {
+  /**
+   * Replacement for the upstream `discoveredModels` list. The host
+   * uses this array verbatim as the response body of `GET /v1/models`
+   * (subject to any response-shape filter upstream applies — this
+   * plugin type does NOT change the wire shape, only the rows).
+   */
+  readonly discoveredModels: readonly ModelListOverrideDiscoveredModel[];
+  /**
+   * Optional human-readable reason for the override. Logged by the
+   * host (and surfaced via the admin UI's audit trail when one
+   * exists). Plugins SHOULD set this whenever the returned list
+   * differs from `ctx.discoveredModels` so operators can correlate
+   * a client-side model-list view with the plugin's intent.
+   */
+  readonly reason?: string;
+}
+
+export interface ModelListOverridePlugin {
+  /**
+   * Called once per `GET /v1/models` request by the host, AFTER
+   * upstream `modelDiscovery.getModelsForAgent(...)` returns and
+   * BEFORE the response body is serialized. Return a
+   * {@link ModelListOverrideResult} to replace the discovered-models
+   * list, or `null` to defer to the next plugin (and ultimately to
+   * upstream's default).
+   *
+   * Plugin errors MUST be non-fatal: the host catches and logs
+   * them and continues with the next plugin (or upstream's default
+   * if every plugin errored or returned `null`). Never throw to
+   * abort the request.
+   */
+  overrideModelList(
+    ctx: ModelListOverrideContext,
+  ): ModelListOverrideResult | null;
+}
+
+// =============================================================================
 // Plugin registry metadata + runtime toggles
 // =============================================================================
 
-export type PluginKind = 'transform' | 'policy' | 'routing-override' | 'dashboard-transform';
+export type PluginKind =
+  | 'transform'
+  | 'policy'
+  | 'routing-override'
+  | 'dashboard-transform'
+  | 'model-list-override';
 
 export interface PluginMetadata {
   readonly id: string;
@@ -336,7 +491,8 @@ export interface InstalledPluginMetadata extends PluginMetadata {
 type ManifestPlugin = Partial<RequestTransformPlugin> &
   Partial<RequestPolicyPlugin> &
   Partial<RoutingOverridePlugin> &
-  Partial<DashboardTransformPlugin>;
+  Partial<DashboardTransformPlugin> &
+  Partial<ModelListOverridePlugin>;
 
 interface PluginRegistryEntry {
   readonly pluginClassName: string;
@@ -421,13 +577,21 @@ export function setPluginEnabled(pluginId: string, enabled: boolean): void {
 // because their source doesn't live in this repo; consumers fetch them via
 // the external-plugins loader and `require('manifest-plugins').loadPlugin(...)`.
 
-export { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
-export { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';
+// `header-tier-router` was retired on 2026-07-10. Upstream PR #2468
+// (commit `fccb0e2`) restored header-tier precedence over explicit
+// `body.model` directly in `proxy.service.ts::resolveExplicitModel`
+// and `resolve.service.ts::resolve()`, making the plugin's purpose
+// fully subsumed. See CHANGELOG of the `chore/retire-obsolete-plugins`
+// branch for the full diff.
 export {
   ShowAllRouterViewsPlugin,
   SHOW_ALL_ROUTER_VIEWS_PLUGIN_METADATA,
   SHOW_ALL_ROUTER_VIEWS_SCRIPT,
 } from './plugins/show-all-router-views/plugin';
+export {
+  AnthropicModelsFixPlugin,
+  ANTHROPIC_MODELS_FIX_PLUGIN_METADATA,
+} from './plugins/anthropic-models-fix/plugin';
 
 // =============================================================================
 // Re-exports for the pasted host snippets

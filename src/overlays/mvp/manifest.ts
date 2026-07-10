@@ -47,19 +47,18 @@ export interface MvpOverlaySpec {
  * The overlays mirror the patch sites in `src/host/apply.ts`:
  *   - `provider-client-transform-host`         → Anthropic request-transform host
  *   - `proxy-rate-limiter-policy-host`         → per-agent concurrency cap host
- *   - `proxy-service-routing-override-host`    → routing-override hook on
- *     `proxy.service.ts::resolveRouting()`, installed BEFORE the upstream
- *     explicit-model early-return so configured `header_tiers`
- *     rules (e.g. `x-manifest-tier`) win over `body.model`.
+ *   - `model-controller-list-override-host`    → model-list-override hook on
+ *     `model.controller.ts::getAvailableModels`, so `ModelListOverridePlugin`
+ *     rows reach the `/v1/models` response body.
  *   - `dashboard-plugin-manager-mount`       → plugin admin UI mount in
  *     `packages/frontend/index.html`.
  *
- * Wave-history note: a previous wave included a
- * `proxy-service-policy-host` entry that installed a plugin-driven
- * `maxMessagesPerRequest` cap on `proxy.service.ts`. That overlay was
- * retired when upstream commit `c9009bcd5` removed the
- * `maxMessagesPerRequest` feature from `proxy.service.ts` entirely —
- * the fork plugin has nothing to override once the feature is gone.
+ * Wave-history note: the `proxy-service-policy-host` overlay
+ * (plugin-driven `maxMessagesPerRequest` cap) was retired when
+ * upstream commit `c9009bcd5` removed the `maxMessagesPerRequest`
+ * feature from `proxy.service.ts` entirely. Then on 2026-07-10, the
+ * `proxy-service-routing-override-host` overlay was retired when
+ * upstream PR #2468 subsumed the routing-override behavior directly.
  */
 export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
   Object.freeze({
@@ -71,11 +70,6 @@ export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
     id: 'proxy-rate-limiter-policy-host',
     target: 'packages/backend/src/routing/proxy/proxy-rate-limiter.ts',
     postPatchSymbol: 'function getResolvedConcurrencyMax(',
-  }),
-  Object.freeze({
-    id: 'proxy-service-routing-override-host',
-    target: 'packages/backend/src/routing/proxy/proxy.service.ts',
-    postPatchSymbol: 'function applyProxyRoutingOverridePlugins(',
   }),
   Object.freeze({
     id: 'dashboard-plugin-manager-mount',

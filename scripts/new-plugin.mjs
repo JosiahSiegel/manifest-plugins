@@ -40,12 +40,18 @@ const __dirname = dirname(__filename);
 const REPO_ROOT = resolve(__dirname, '..');
 
 const NAME_RE = /^[a-z][a-z0-9-]*$/;
-const VALID_KINDS = new Set(['transform', 'policy', 'routing-override']);
+const VALID_KINDS = new Set([
+  'transform',
+  'policy',
+  'routing-override',
+  'dashboard-transform',
+  'model-list-override',
+]);
 
 function usage() {
   process.stdout.write(
     [
-      'Usage: npm run new-plugin -- <name> [--kind=transform|policy|routing-override]',
+      'Usage: npm run new-plugin -- <name> [--kind=transform|policy|routing-override|dashboard-transform|model-list-override]',
       '',
       '  <name>   Plugin directory name (kebab-case, lowercase, starts with a letter)',
       '  --kind   Plugin kind (default: transform)',
@@ -54,6 +60,8 @@ function usage() {
       '  npm run new-plugin -- my-header',
       '  npm run new-plugin -- tier-router --kind=routing-override',
       '  npm run new-plugin -- rate-cap --kind=policy',
+      '  npm run new-plugin -- my-dashboard --kind=dashboard-transform',
+      '  npm run new-plugin -- anthropic-models-fix --kind=model-list-override',
       '',
     ].join('\n'),
   );
@@ -169,6 +177,64 @@ function templatePlugin(name, className, kind, metadataConst) {
         `}`,
         ``,
       ].join('\n');
+    case 'dashboard-transform':
+      return [
+        `import type {`,
+        `  DashboardTransformPlugin,`,
+        `  PluginMetadata,`,
+        `} from '../..';`,
+        ``,
+        `export const ${metadataConst} = Object.freeze({`,
+        `  id: '${name}',`,
+        `  name: '${name}',`,
+        `  version: '0.1.0',`,
+        `  description: 'TODO: describe ${name}',`,
+        `  kind: 'dashboard-transform' as const,`,
+        `});`,
+        ``,
+        `export class ${className} implements DashboardTransformPlugin {`,
+        `  static readonly metadata: PluginMetadata = ${metadataConst};`,
+        ``,
+        `  getDashboardScript(): string | null {`,
+        `    // TODO: return a self-contained IIFE string. The host concatenates`,
+        `    // every enabled dashboard-transform plugin's script into a single`,
+        `    // bundle served at /admin/dashboard-transform/all.js.`,
+        `    return null;`,
+        `  }`,
+        `}`,
+        ``,
+      ].join('\n');
+    case 'model-list-override':
+      return [
+        `import type {`,
+        `  ModelListOverrideContext,`,
+        `  ModelListOverridePlugin,`,
+        `  ModelListOverrideResult,`,
+        `  PluginMetadata,`,
+        `} from '../..';`,
+        ``,
+        `export const ${metadataConst} = Object.freeze({`,
+        `  id: '${name}',`,
+        `  name: '${name}',`,
+        `  version: '0.1.0',`,
+        `  description: 'TODO: describe ${name}',`,
+        `  kind: 'model-list-override' as const,`,
+        `});`,
+        ``,
+        `export class ${className} implements ModelListOverridePlugin {`,
+        `  static readonly metadata: PluginMetadata = ${metadataConst};`,
+        ``,
+        `  overrideModelList(`,
+        `    ctx: ModelListOverrideContext,`,
+        `  ): ModelListOverrideResult | null {`,
+        `    // TODO: read ctx.discoveredModels and return a replacement array.`,
+        `    // Return null to defer (upstream's default list ships).`,
+        `    void ctx;`,
+        `    return null;`,
+        `  }`,
+        `}`,
+        ``,
+      ].join('\n');
     default:
       // Should be unreachable because we validate `kind` above.
       throw new Error(`unknown kind: ${kind}`);
@@ -196,7 +262,9 @@ function templateSpec(name, className, metadataConst) {
     `    expect(${metadataConst}.name).toEqual(expect.any(String));`,
     `    expect((${metadataConst}.name as string).length).toBeGreaterThan(0);`,
     `    expect(${metadataConst}.kind).toEqual(`,
-    `      expect.stringMatching(/^(transform|policy|routing-override)$/),`,
+    `      expect.stringMatching(
+        /^(transform|policy|routing-override|dashboard-transform|model-list-override)$/,
+      ),`,
     `    );`,
     `  });`,
     ``,
@@ -271,7 +339,7 @@ function main() {
   }
   if (!VALID_KINDS.has(kind)) {
     process.stderr.write(
-      `new-plugin: invalid --kind '${kind}' (must be one of: transform, policy, routing-override)\n`,
+      `new-plugin: invalid --kind '${kind}' (must be one of: transform, policy, routing-override, dashboard-transform, model-list-override)\n`,
     );
     process.exit(2);
   }

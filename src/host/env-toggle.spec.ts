@@ -35,8 +35,8 @@ describe('parseDisabledList', () => {
   });
 
   it('returns a single id from a bare string', () => {
-    expect(parseDisabledList('header-tier-router')).toEqual([
-      'header-tier-router',
+    expect(parseDisabledList('show-all-router-views')).toEqual([
+      'show-all-router-views',
     ]);
   });
 

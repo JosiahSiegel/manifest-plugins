@@ -48,7 +48,6 @@ import {
   rmSync,
   writeFileSync,
 } from 'fs';
-import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 
 const MOUNT_MARKER = 'data-mwp-dashboard-transform';
@@ -74,6 +73,12 @@ function buildMountBlock(): string {
  * written atomically.
  *
  * If the file does not exist, the function is a no-op (silent skip).
+ *
+ * Atomicity note: the temp file is created in the SAME directory as
+ * the target (not `os.tmpdir()`). On Windows, `os.tmpdir()` is on
+ * `C:` while the manifest checkout may be on `D:`, and `renameSync`
+ * across drives throws `EXDEV: cross-device link not permitted`. A
+ * same-directory temp file guarantees the rename stays on one drive.
  */
 export async function mountDashboardTransform(manifestRoot: string): Promise<void> {
   const targetPath = join(manifestRoot, 'packages', 'frontend', 'index.html');
@@ -90,7 +95,7 @@ export async function mountDashboardTransform(manifestRoot: string): Promise<voi
     : current + mountBlock;
   const dir = dirname(targetPath);
   mkdirSync(dir, { recursive: true });
-  const tmpRoot = mkdtempSync(join(tmpdir(), 'mwp-dt-mount-'));
+  const tmpRoot = mkdtempSync(join(dir, '.mwp-dt-mount-'));
   const tmpFile = join(tmpRoot, 'index.html');
   try {
     writeFileSync(tmpFile, next, 'utf-8');

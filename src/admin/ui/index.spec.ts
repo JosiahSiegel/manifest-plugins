@@ -18,8 +18,8 @@
  * the spec file does the same so both compile under the existing config.
  *
  * NOTE: The UI is generic — it renders whatever plugins the API returns.
- * The fixture below uses only the two in-tree plugins (default-policy,
- * header-tier-router). External plugins like anthropic-billing-header
+ * The fixture below uses only the in-tree plugins (anthropic-models-fix,
+ * show-all-router-views). External plugins like anthropic-billing-header
  * can be added by the operator via external-plugins.local.json — the UI
  * shows them transparently.
  */
@@ -49,22 +49,13 @@ function jsonResponse(body: unknown, status = 200): FetchResponseLike {
 
 const SAMPLE_PLUGINS: readonly PluginMetadata[] = [
   {
-    id: 'default-policy',
-    name: 'Default policy',
-    version: '0.1.0',
-    description: 'Applies the default request policy.',
-    kind: 'policy',
+    id: 'anthropic-models-fix',
+    name: 'Anthropic models fix',
+    version: '0.3.0',
+    description: 'Anthropic model list override.',
+    kind: 'model-list-override',
     enabledByDefault: true,
     enabled: true,
-  },
-  {
-    id: 'header-tier-router',
-    name: 'Header tier router',
-    version: '0.1.0',
-    description: 'Routes by request header.',
-    kind: 'routing-override',
-    enabledByDefault: false,
-    enabled: false,
   },
   {
     id: 'show-all-router-views',
@@ -136,7 +127,7 @@ describe('PluginManager UI', () => {
   });
 
   it('renders plugin names + checkboxes after the fetch resolves', async () => {
-    // Given: a fetch that resolves with the two in-tree plugins.
+    // Given: a fetch that resolves with the in-tree plugins.
     const fetchMock = createAlwaysResolvingFetch();
     const target = document.createElement('div');
     document.body.appendChild(target);
@@ -147,18 +138,18 @@ describe('PluginManager UI', () => {
 
     // Then: each plugin name and a checkbox is rendered, with the right
     // initial checked state.
-    expect(screen.getByText('Default policy')).toBeTruthy();
-    expect(screen.getByText('Header tier router')).toBeTruthy();
-    const policyCheckbox = screen.getByTestId(
-      'plugin-toggle-default-policy',
+    expect(screen.getByText('Anthropic models fix')).toBeTruthy();
+    expect(screen.getByText('Show all router views')).toBeTruthy();
+    const anthropicCheckbox = screen.getByTestId(
+      'plugin-toggle-anthropic-models-fix',
     ) as HTMLInputElement;
     const routerCheckbox = screen.getByTestId(
-      'plugin-toggle-header-tier-router',
+      'plugin-toggle-show-all-router-views',
     ) as HTMLInputElement;
-    expect(policyCheckbox.tagName).toBe('INPUT');
-    expect(policyCheckbox.type).toBe('checkbox');
-    expect(policyCheckbox.checked).toBe(true);
-    expect(routerCheckbox.checked).toBe(false);
+    expect(anthropicCheckbox.tagName).toBe('INPUT');
+    expect(anthropicCheckbox.type).toBe('checkbox');
+    expect(anthropicCheckbox.checked).toBe(true);
+    expect(routerCheckbox.checked).toBe(true);
   });
 
   it('clicking a checkbox PATCHes the API with the new enabled value', async () => {
@@ -193,9 +184,9 @@ describe('PluginManager UI', () => {
     mountPluginManager(target);
     await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
 
-    // When: the header-tier-router checkbox is clicked (it starts unchecked).
+    // When: the show-all-router-views checkbox is clicked (it starts checked).
     const routerCheckbox = screen.getByTestId(
-      'plugin-toggle-header-tier-router',
+      'plugin-toggle-show-all-router-views',
     ) as HTMLInputElement;
     await act(async () => {
       routerCheckbox.click();
@@ -203,7 +194,7 @@ describe('PluginManager UI', () => {
       await Promise.resolve();
     });
 
-    // Then: the component issues a PATCH with enabled=true against the
+    // Then: the component issues a PATCH with enabled=false against the
     // right endpoint and JSON body.
     expect(patchCalls).toBe(1);
     const patchCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH');
@@ -211,8 +202,8 @@ describe('PluginManager UI', () => {
     const [urlArg, initArg] = patchCall as [string, RequestInit];
     expect(initArg.method).toBe('PATCH');
     expect(initArg.headers).toMatchObject({ 'Content-Type': 'application/json' });
-    expect(JSON.parse(initArg.body as string)).toEqual({ enabled: true });
-    expect(urlArg).toBe('/api/plugins/header-tier-router');
+    expect(JSON.parse(initArg.body as string)).toEqual({ enabled: false });
+    expect(urlArg).toBe('/api/plugins/show-all-router-views');
   });
 
   it('PATCH failure reverts the checkbox to its previous state', async () => {
@@ -235,7 +226,7 @@ describe('PluginManager UI', () => {
     // When: the checkbox is clicked (initial value: checked=true), the
     // optimistic update flips it to false, and the PATCH fails.
     const policyCheckbox = screen.getByTestId(
-      'plugin-toggle-default-policy',
+      'plugin-toggle-anthropic-models-fix',
     ) as HTMLInputElement;
     expect(policyCheckbox.checked).toBe(true);
 
@@ -310,10 +301,9 @@ describe('PluginManager UI', () => {
     mountPluginManager(target);
     await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
 
-    // All three plugin kinds must render a kind pill with the right text.
-    expect(screen.getByTestId('plugin-kind-default-policy')).toHaveTextContent('policy');
-    expect(screen.getByTestId('plugin-kind-header-tier-router')).toHaveTextContent(
-      'routing-override',
+    // Both plugin kinds must render a kind pill with the right text.
+    expect(screen.getByTestId('plugin-kind-anthropic-models-fix')).toHaveTextContent(
+      'model-list-override',
     );
     expect(screen.getByTestId('plugin-kind-show-all-router-views')).toHaveTextContent(
       'dashboard-transform',

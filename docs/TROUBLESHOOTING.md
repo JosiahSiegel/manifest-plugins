@@ -107,7 +107,7 @@ Verify the plugin is actually loaded:
 ```bash
 docker run --rm -p 2099:2099 <image> /nodejs/bin/node -e \
   'console.log(require("/app/node_modules/manifest-plugins/dist/index.js").plugins.map(p => p.constructor.name))'
-# Expected: [ 'AnthropicBillingHeaderPlugin', 'DefaultPolicyPlugin' ]
+# Expected: [ 'AnthropicBillingHeaderPlugin', 'AnthropicModelsFixPlugin', 'ShowAllRouterViewsPlugin' ]
 ```
 
 ## Development environment issues
@@ -164,7 +164,7 @@ Verify with:
 
 ```bash
 node -e "console.log(require('./dist/index.js').getInstalledPlugins().map(p => p.id))"
-# Expected: [ 'default-policy', 'header-tier-router', '<your-id>' ]
+# Expected: [ 'anthropic-models-fix', 'show-all-router-views', '<your-id>' ]
 ```
 
 ### `npm run new-plugin` exits with code 2
@@ -190,7 +190,7 @@ discoverer emits `exports.<ClassName> = ...`). A typo here causes the build
 script to error out:
 
 ```
-manifest-plugins.config.json: unknown plugin "AnthropicBillingPlugin" — valid plugins are: AnthropicBillingHeaderPlugin, DefaultPolicyPlugin, HeaderTierRouterPlugin. If you added a new plugin, update PLUGIN_CLASS_NAMES in scripts/filter-plugins.mjs.
+manifest-plugins.config.json: unknown plugin "AnthropicBillingPlugin" — valid plugins are: AnthropicBillingHeaderPlugin, AnthropicModelsFixPlugin, ShowAllRouterViewsPlugin. If you added a new plugin, update PLUGIN_CLASS_NAMES in scripts/filter-plugins.mjs.
 ```
 
 (That message will say "update scripts/filter-plugins.mjs" but in practice the

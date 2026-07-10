@@ -2,7 +2,7 @@
 /**
  * `npm run apply -- <manifest-checkout-path>`
  *
- * Locates a Manifest checkout and patches four files to install the
+ * Locates a Manifest checkout and patches five files to install the
  * plugin host:
  *   - `packages/backend/src/routing/proxy/provider-client.ts`
  *   - `packages/backend/src/routing/proxy/proxy-rate-limiter.ts`
@@ -11,6 +11,10 @@
  *        when upstream commit `c9009bcd5` removed the
  *        `maxMessagesPerRequest` feature)
  *   - `packages/backend/src/main.ts` (admin Express mount)
+ *   - `packages/backend/src/routing/model.controller.ts`
+ *       (model-list-override hook — runs every `ModelListOverridePlugin`
+ *       against the discovered-models list before it lands in the
+ *       `GET /v1/models` response body)
  *
  * Each patch is byte-exact against upstream/main and idempotent. The
  * tool fails loud if upstream restructures (anchor mismatch).
@@ -20,7 +24,7 @@
  *   - --link : also `npm link` this package into the checkout's
  *              `packages/backend/node_modules` so `require('manifest-plugins')`
  *              resolves at runtime.
- *   - --apply-overlay: after the default four-host apply, run the MVP
+ *   - --apply-overlay: after the default five-host apply, run the MVP
  *              overlay path (`src/apply/mvp-overlay.ts`). Exits non-zero if
  *              any overlay reports drift.
  *   - --manifest-url / --manifest-ref / --manifest-dir / --manifest-fork:
@@ -29,7 +33,7 @@
  *   - --mvp / MVP_UI=1: requires an explicit source — refuse to publish
  *              MVP UI against the implicit official clone.
  *
- * Exits 0 if all four patches applied (or were already no-op). Exits 1
+ * Exits 0 if all five patches applied (or were already no-op). Exits 1
  * if any file reported upstream drift (which is a real build failure —
  * the user must update `src/host/snippet.ts` to match new upstream shape).
  */
@@ -37,7 +41,7 @@ import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve, join } from 'path';
 import { promises as fs } from 'fs';
-import { applyAllFour, type ApplyResult } from './apply';
+import { applyAllEight, type ApplyResult } from './apply';
 import {
   OFFICIAL_MANIFEST_URL,
   resolveManifestSource,
@@ -197,7 +201,7 @@ async function main(): Promise<number> {
 
   process.stdout.write(`[manifest-plugins/apply] SOURCE_COMMIT=${source.commit}\n`);
   process.stdout.write(
-    `[manifest-plugins/apply] patching four host hooks in ${checkoutPath}\n`,
+    `[manifest-plugins/apply] patching five host hooks in ${checkoutPath}\n`,
   );
 
   try {
@@ -217,11 +221,20 @@ async function main(): Promise<number> {
   }
 
   try {
-    const all = await applyAllFour(checkoutPath);
+    const all = await applyAllEight(checkoutPath);
     logResult('provider-client', all.providerClient);
     logResult('proxy-rate-limiter', all.proxyRateLimiter);
-    logResult('proxy-routing-override', all.proxyRoutingOverride);
     logResult('admin-mount', all.adminMount);
+    logResult('model-list-override', all.modelListOverride);
+    logResult('tier-service-routing-model-list', all.tierServiceRoutingModelList);
+    logResult(
+      'specificity-service-routing-model-list',
+      all.specificityServiceRoutingModelList,
+    );
+    logResult(
+      'header-tier-service-routing-model-list',
+      all.headerTierServiceRoutingModelList,
+    );
 
     if (all.hasDrift) {
       process.stderr.write(
@@ -232,17 +245,17 @@ async function main(): Promise<number> {
     }
 
     process.stdout.write(
-      '[manifest-plugins/apply] all four host hooks patched (or already no-op)\n',
+      '[manifest-plugins/apply] all eight host hooks patched (or already no-op)\n',
     );
 
     if (parsed.applyOverlay) {
       // The MVP overlay apply path is a typed/declarative batch over
-      // the same target files. It runs AFTER applyAllFour so the
+      // the same target files. It runs AFTER applyAllFive so the
       // host snippet patcher has already had a chance to install
       // the helpers, and it captures SOURCE_COMMIT internally via
       // the same git runner. Drift here means the overlay manifest
       // references an overlay id that did not match the live
-      // applyAllFour state.
+      // applyAllFive state.
       const { applyMvpOverlay } = await import('../apply/mvp-overlay');
       const overlay = await applyMvpOverlay(checkoutPath);
       if (overlay.hasDrift) {

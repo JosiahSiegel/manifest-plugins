@@ -160,6 +160,7 @@ function requirePluginClass(
     'policy',
     'routing-override',
     'dashboard-transform',
+    'model-list-override',
   ];
   if (!validKinds.includes(metadata.kind)) {
     throw new PluginDiscoveryError(
