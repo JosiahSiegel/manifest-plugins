@@ -177,7 +177,7 @@ export interface RoutingOverrideRoute {
 
 /**
  * The structural shape of a single discovered model row (mirrors
- * `mnfst/manifest` `packages/backend/src/routing/model-discovery/model-fetcher.ts`
+ * `mnfst/manifest` `packages/backend/src/model-discovery/model-fetcher.ts`
  * `DiscoveredModel`).
  */
 export interface RoutingOverrideDiscoveredModel {
@@ -322,7 +322,7 @@ export interface DashboardTransformPlugin {
  * The structural shape of a single discovered-model row that flows
  * into and out of the model-list-override host. Mirrors the upstream
  * `mnfst/manifest` `DiscoveredModel` shape
- * (`packages/backend/src/routing/model-discovery/model-fetcher.ts`)
+ * (`packages/backend/src/model-discovery/model-fetcher.ts`)
  * but typed loosely so this plugins package can compile without
  * importing upstream sources.
  *
@@ -577,8 +577,12 @@ export function setPluginEnabled(pluginId: string, enabled: boolean): void {
 // because their source doesn't live in this repo; consumers fetch them via
 // the external-plugins loader and `require('manifest-plugins').loadPlugin(...)`.
 
-export { DefaultPolicyPlugin } from './plugins/default-policy/plugin';
-export { HeaderTierRouterPlugin } from './plugins/header-tier-router/plugin';
+// `header-tier-router` was retired on 2026-07-10. Upstream PR #2468
+// (commit `fccb0e2`) restored header-tier precedence over explicit
+// `body.model` directly in `proxy.service.ts::resolveExplicitModel`
+// and `resolve.service.ts::resolve()`, making the plugin's purpose
+// fully subsumed. See CHANGELOG of the `chore/retire-obsolete-plugins`
+// branch for the full diff.
 export {
   ShowAllRouterViewsPlugin,
   SHOW_ALL_ROUTER_VIEWS_PLUGIN_METADATA,

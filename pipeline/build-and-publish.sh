@@ -230,16 +230,16 @@ echo "==> installing + building plugins package (in $PLUGINS_REPO_DIR)"
 # ---- step 3: apply the plugin host ----------------------------------------
 PROVIDER_CLIENT="$MANIFEST_PATH/packages/backend/src/routing/proxy/provider-client.ts"
 PROXY_RATE_LIMITER="$MANIFEST_PATH/packages/backend/src/routing/proxy/proxy-rate-limiter.ts"
-PROXY_SERVICE="$MANIFEST_PATH/packages/backend/src/routing/proxy/proxy.service.ts"
+MODEL_FETCHER="$MANIFEST_PATH/packages/backend/src/routing/model.controller.ts"
 
-for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER" "$PROXY_SERVICE"; do
+for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER" "$MODEL_FETCHER"; do
   if [[ ! -f "$f" ]]; then
     echo "error: $f not found — is $MANIFEST_PATH a valid mnfst/manifest checkout?" >&2
     exit 2
   fi
 done
 
-echo "==> applying plugin host to four files in $MANIFEST_PATH"
+echo "==> applying plugin host to three files in $MANIFEST_PATH"
 echo "[manifest-plugins/apply] SOURCE_COMMIT=${SOURCE_COMMIT}"
 (
   cd "$PLUGINS_REPO_DIR"
@@ -258,10 +258,11 @@ echo "[manifest-plugins/apply] SOURCE_COMMIT=${SOURCE_COMMIT}"
 
 # Verify the patches actually landed (fail loud if upstream drifted and the
 # apply tool's fail-loud guard didn't catch it for some reason).
-for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER"; do
+for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER" "$MODEL_FETCHER"; do
   case "$(basename "$f")" in
     provider-client.ts)     SYM='function applyRequestTransformPlugins(' ;;
     proxy-rate-limiter.ts)  SYM='function getResolvedConcurrencyMax(' ;;
+    model.controller.ts)    SYM='function applyModelListOverridePlugins(' ;;
   esac
   if ! grep -q "$SYM" "$f"; then
     echo "error: post-apply check failed — $SYM not found in $f" >&2
@@ -270,11 +271,6 @@ for f in "$PROVIDER_CLIENT" "$PROXY_RATE_LIMITER"; do
     exit 1
   fi
 done
-if ! grep -q 'function applyProxyRoutingOverridePlugins(' "$PROXY_SERVICE"; then
-  echo "error: post-apply check failed — function applyProxyRoutingOverridePlugins( not found in $PROXY_SERVICE" >&2
-  echo "       the default apply/build path did not install the routing-override hook." >&2
-  exit 1
-fi
 echo "==> post-apply check: all host functions are installed"
 
 # ---- step 4: build the Docker image --------------------------------------

@@ -20,8 +20,6 @@ const { existsSync, readdirSync } = require('node:fs');
 const { join } = require('node:path');
 
 const IN_TREE_PLUGIN_DIRS = new Set([
-  'default-policy',
-  'header-tier-router',
   'show-all-router-views',
   'anthropic-models-fix',
 ]);

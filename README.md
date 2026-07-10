@@ -12,7 +12,7 @@ this repo, without maintaining your own Manifest fork.
 ## What you get
 
 - The upstream Manifest app, packaged as `ghcr.io/josiahsiegel/manifest-with-plugins`.
-- Two built-in plugins: `DefaultPolicyPlugin`, `HeaderTierRouterPlugin`. Enable, disable, or add your own at runtime. See [Manage plugins](#manage-plugins). For private plugins (e.g. ones living in a private repo), use the external-plugins loader — see [External plugins](docs/EXTERNAL_PLUGINS.md).
+- Two built-in plugins: `AnthropicModelsFixPlugin`, `ShowAllRouterViewsPlugin`. Enable, disable, or add your own at runtime. See [Manage plugins](#manage-plugins). For private plugins (e.g. ones living in a private repo), use the external-plugins loader — see [External plugins](docs/EXTERNAL_PLUGINS.md).
 - A build pipeline that only promotes `latest` after the image passes the end-to-end dashboard test.
 
 ## Quick start
@@ -39,10 +39,10 @@ Built-in plugins are auto-discovered at build time. To turn one off without rebu
 npm run plugins:list
 
 # Disable a plugin at runtime (no rebuild)
-npm run plugins:disable -- default-policy
+npm run plugins:disable -- show-all-router-views
 
 # Re-enable it
-npm run plugins:enable -- default-policy
+npm run plugins:enable -- show-all-router-views
 
 # Reset to built-in defaults
 npm run plugins:reset

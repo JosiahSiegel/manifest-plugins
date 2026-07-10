@@ -1,22 +1,22 @@
 import {
   plugins,
-  DefaultPolicyPlugin,
-  HeaderTierRouterPlugin,
   ShowAllRouterViewsPlugin,
   AnthropicModelsFixPlugin,
 } from '../src/index';
 
 describe('plugin registry', () => {
-  it('exports the four built-in plugins', () => {
-    expect(plugins).toHaveLength(4);
-  });
-
-  it('includes the DefaultPolicyPlugin', () => {
-    expect(plugins).toContainEqual(expect.any(DefaultPolicyPlugin));
-  });
-
-  it('includes the HeaderTierRouterPlugin', () => {
-    expect(plugins).toContainEqual(expect.any(HeaderTierRouterPlugin));
+  it('exports the two remaining built-in plugins', () => {
+    // The fork previously shipped four built-in plugins:
+    //   - DefaultPolicyPlugin       (retired 2026-07-10 — duplicated
+    //                                 upstream's hardcoded CONCURRENCY_MAX)
+    //   - HeaderTierRouterPlugin    (retired 2026-07-10 — subsumed by
+    //                                 upstream PR #2468, which restored
+    //                                 header-tier precedence over explicit
+    //                                 `body.model` directly in proxy.service.ts
+    //                                 and resolve.service.ts)
+    //   - ShowAllRouterViewsPlugin  (still shipped — see plugin source)
+    //   - AnthropicModelsFixPlugin  (still shipped — see plugin source)
+    expect(plugins).toHaveLength(2);
   });
 
   it('includes the ShowAllRouterViewsPlugin', () => {

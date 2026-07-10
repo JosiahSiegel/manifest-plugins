@@ -10,28 +10,33 @@
  *      replaces the `const CONCURRENCY_MAX = 10;` constant with a call
  *      to `getResolvedConcurrencyMax()`. Lets the RequestPolicyPlugin
  *      chain override the per-agent concurrent-request cap.
- *   3. `packages/backend/src/routing/proxy/proxy.service.ts` — installs the
- *      routing-override host (HeaderTierService import + constructor
- *      parameter + `applyProxyRoutingOverridePlugins(...)` call spliced
- *      into `resolveRouting()` BEFORE the upstream explicit-model
- *      early-return).
+ *   3. `packages/backend/src/routing/model.controller.ts` — inserts the
+ *      model-list-override host so a `ModelListOverridePlugin` can rewrite
+ *      the discovered-models list before it lands in the `GET /v1/models`
+ *      response body.
  *
- * Wave-history note: an earlier wave of this fork also installed a
- * `maxMessagesPerRequest` plugin host on `proxy.service.ts`. That host
- * was removed when upstream commit `c9009bcd5` deleted the
- * `maxMessagesPerRequest` feature from `proxy.service.ts` entirely
- * (the import, the constructor field, the constructor body, and the
- * `validatePayload` enforcement check all disappeared). With the cap
- * gone from upstream, the fork plugin has nothing to override — the
- * corresponding snippet constants (`PROXY_SERVICE_*`) and
- * `applyProxyServiceHost` orchestrator entry point were retired.
+ * Wave-history note: this fork previously installed a routing-override
+ * host on `proxy.service.ts` to work around upstream PR #2350's
+ * explicit-model early-return regression. Upstream PR #2468
+ * (commit `fccb0e2`, 2026-07-10) restored header-tier precedence over
+ * explicit `body.model` directly in `proxy.service.ts::resolveExplicitModel`
+ * and `resolve.service.ts::resolve()`, so the routing-override host is
+ * no longer necessary. The corresponding snippet constants
+ * (`PROXY_ROUTING_OVERRIDE_*`), the `applyProxyRoutingOverrideHost`
+ * patcher, the `proxyService` field in `ManifestFileSpec`, and the
+ * `applyAllFour` orchestrator were all retired on 2026-07-10.
+ *
+ * Earlier still: an earlier wave also installed a `maxMessagesPerRequest`
+ * plugin host on `proxy.service.ts`. That host was removed when upstream
+ * commit `c9009bcd5` deleted the `maxMessagesPerRequest` feature from
+ * `proxy.service.ts` entirely.
  *
  * Each patch is byte-exact against upstream/main and idempotent (running
  * twice is a no-op). If upstream restructures, the patcher fails loudly
  * with the exact anchor that moved.
  *
  * The host query functions (`applyRequestTransformPlugins`,
- * `getResolvedConcurrencyMax`, `applyProxyRoutingOverridePlugins`) are
+ * `getResolvedConcurrencyMax`, `applyModelListOverridePlugins`) are
  * file-private — they're added immediately above the relevant class
  * declaration by the apply tool.
  */
@@ -50,13 +55,6 @@ import {
   ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_TIER,
   ROUTING_MODEL_LIST_OVERRIDE_NEW,
   ROUTING_MODEL_LIST_OVERRIDE_OLD,
-  PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW,
-  PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD,
-  PROXY_ROUTING_OVERRIDE_HOST_SOURCE,
-  PROXY_ROUTING_OVERRIDE_IMPORT_NEW,
-  PROXY_ROUTING_OVERRIDE_IMPORT_OLD,
-  PROXY_ROUTING_OVERRIDE_NEW,
-  PROXY_ROUTING_OVERRIDE_OLD,
   RETURN_NEW,
   RETURN_OLD,
   RATE_LIMITER_NEW,
@@ -297,23 +295,21 @@ export class ProxyRateLimiter implements OnModuleDestroy {
 }
 
 /**
- * Patch `proxy.service.ts` to install the routing-override host.
+ * Patch the upstream `model.controller.ts` (or whichever file serves
+ * `GET :agentName/available-models`) to install the model-list-override
+ * host.
  *
- * Three operations, all in one pass:
- *   1. Insert the `HeaderTierService` import below the existing
- *      `ProviderParamSpecService` import line.
- *   2. Extend the constructor with a new `headerTierService` parameter
- *      after `providerParamSpecs`.
- *   3. Insert the `applyProxyRoutingOverridePlugins(...)` helper above
- *      the existing class body, then splice the plugin call into
- *      `resolveRouting()` BEFORE the upstream explicit-model
- *      early-return.
+ * Two operations, all in one pass:
+ *   1. Insert the `applyModelListOverridePlugins` helper above the
+ *      `modelDiscovery.getModelsForAgent` call site.
+ *   2. Wrap the call site so a plugin can replace the discovered
+ *      list before it lands in the `/v1/models` response body.
  *
- * The function deliberately composes the three sub-edits as separate
- * `applyPatch` calls (rather than threading a multi-anchor PatchSpec)
- * so each sub-edit has its own post-patch sentinel, its own
- * idempotency check, and its own upstream-drift detection. If any
- * sub-edit fails, the caller can still see which one drifted.
+ * Wave-history note: prior to the `chore/retire-obsolete-plugins`
+ * refactor this function's docstring described a routing-override
+ * patch on `proxy.service.ts`. That patch was retired when upstream
+ * PR #2468 subsumed the behavior. The model-list-override host is
+ * unchanged.
  */
 export async function applyModelListOverrideHost(
   filePath: string,
@@ -411,69 +407,6 @@ export async function applyAdminMount(
   );
 }
 
-export async function applyProxyRoutingOverrideHost(
-  filePath: string,
-  options: ApplyOptions = {},
-): Promise<ApplyResult> {
-  // Run the three sub-edits serially. They all write to the same file,
-  // so parallel execution races: each sub-edit reads the file at the
-  // start of its `applyPatch` call, so they need to see the
-  // post-previous-sub-edit state. Serializing is the simplest correct
-  // approach; performance is irrelevant here (this runs once per
-  // image build, not per request).
-  //
-  // The composite status is `applied` when all three succeed, `noop`
-  // when all three are already present, and `upstream-drift` when any
-  // one reports drift.
-  const importResult = await applyPatch(
-    {
-      filePath,
-      postPatchSymbol: PROXY_ROUTING_OVERRIDE_IMPORT_NEW,
-      oldText: PROXY_ROUTING_OVERRIDE_IMPORT_OLD,
-      newText: PROXY_ROUTING_OVERRIDE_IMPORT_NEW,
-    },
-    options,
-  );
-  if (importResult.status === 'upstream-drift') return importResult;
-
-  const constructorResult = await applyPatch(
-    {
-      filePath,
-      postPatchSymbol: PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW,
-      oldText: PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_OLD,
-      newText: PROXY_ROUTING_OVERRIDE_CONSTRUCTOR_NEW,
-    },
-    options,
-  );
-  if (constructorResult.status === 'upstream-drift') return constructorResult;
-
-  const bodyResult = await applyPatch(
-    {
-      filePath,
-      postPatchSymbol: 'function applyProxyRoutingOverridePlugins(',
-      oldText: PROXY_ROUTING_OVERRIDE_OLD,
-      newText: PROXY_ROUTING_OVERRIDE_NEW,
-      helperMarkerOld:
-        '    // Anthropic Messages requests require a provider-native model field; only',
-      helperMarkerNew: `${PROXY_ROUTING_OVERRIDE_HOST_SOURCE}    // Anthropic Messages requests require a provider-native model field; only`,
-    },
-    options,
-  );
-  if (bodyResult.status === 'upstream-drift') return bodyResult;
-
-  // Idempotency: if all three sub-edits already applied, the
-  // composite is noop.
-  if (
-    importResult.status === 'noop' &&
-    constructorResult.status === 'noop' &&
-    bodyResult.status === 'noop'
-  ) {
-    return { status: 'noop', file: filePath };
-  }
-
-  return { status: 'applied', file: filePath };
-}
-
 // =============================================================================
 // Manifest-checkout orchestrator
 // =============================================================================
@@ -487,23 +420,22 @@ export async function applyProxyRoutingOverrideHost(
 export interface ManifestFileSpec {
   providerClient: string;
   proxyRateLimiter: string;
-  proxyService: string;
   /**
-   * Path to the Manifest backend's `main.ts`. Used by `applyAllFour` to
+   * Path to the Manifest backend's `main.ts`. Used by `applyAllFive` to
    * install the admin Express mount. Optional for `applyAll` (the
-   * 3-file patcher) which leaves it untouched.
+   * 2-file patcher) which leaves it untouched.
    */
   main?: string;
   /**
    * Path to upstream's `model-fetcher.ts` (or whichever file serves
    * `GET /v1/models`). Used by `applyAllFive` to install the
-   * model-list-override host. Optional for `applyAll` and
-   * `applyAllFour` which leave it untouched.
+   * model-list-override host. Optional for `applyAll` which leaves it
+   * untouched.
    */
   modelFetcher?: string;
   /**
    * Path to upstream's `routing-core/tier.service.ts`. Used by
-   * `applyAllFive` to install the routing-layer model-list-override
+   * `applyAllEight` to install the routing-layer model-list-override
    * host (so the routing layer can resolve plugin-added model IDs).
    * Optional; when omitted, the routing-layer tier-service patch is
    * skipped.
@@ -511,13 +443,13 @@ export interface ManifestFileSpec {
   tierService?: string;
   /**
    * Path to upstream's `routing-core/specificity.service.ts`. Used
-   * by `applyAllFive` to install the routing-layer model-list-
+   * by `applyAllEight` to install the routing-layer model-list-
    * override host. Optional.
    */
   specificityService?: string;
   /**
    * Path to upstream's `header-tiers/header-tier.service.ts`. Used
-   * by `applyAllFive` to install the routing-layer model-list-
+   * by `applyAllEight` to install the routing-layer model-list-
    * override host. Optional.
    */
   headerTierService?: string;
@@ -526,7 +458,6 @@ export interface ManifestFileSpec {
 export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
   providerClient: 'packages/backend/src/routing/proxy/provider-client.ts',
   proxyRateLimiter: 'packages/backend/src/routing/proxy/proxy-rate-limiter.ts',
-  proxyService: 'packages/backend/src/routing/proxy/proxy.service.ts',
   main: 'packages/backend/src/main.ts',
   modelFetcher: 'packages/backend/src/routing/model.controller.ts',
   tierService: 'packages/backend/src/routing/routing-core/tier.service.ts',
@@ -566,16 +497,18 @@ export async function applyAll(
 }
 
 /**
- * Result of the four-file patch surface (legacy three + the new
- * routing-override hook). See {@link applyAllFour}.
+ * Result of the five-file patch surface (legacy three + the admin-mount
+ * on `main.ts` + the model-list-override on the model-fetcher file).
+ * See {@link applyAllFive}.
+ *
+ * Wave-history note: prior to the `chore/retire-obsolete-plugins`
+ * refactor (2026-07-10), this surface also included a routing-override
+ * patch on `proxy.service.ts` that worked around upstream PR #2350's
+ * explicit-model early-return regression. That patch is now retired —
+ * upstream PR #2468 restored the same behavior directly, so the
+ * fork-side hook has nothing to override.
  */
-export interface ApplyAllFourResult extends ApplyAllResult {
-  /**
-   * Result of the routing-override host patch on `proxy.service.ts`.
-   * Drift on this field does not block the other three patches from
-   * reporting `applied` / `noop`.
-   */
-  proxyRoutingOverride: ApplyResult;
+export interface ApplyAllFiveResult extends ApplyAllResult {
   /**
    * Result of the admin Express mount patch on `main.ts`. Mounts the
    * plugin admin routes (`/api/plugins/*` + `/admin/admin.js`) on the
@@ -583,97 +516,38 @@ export interface ApplyAllFourResult extends ApplyAllResult {
    * reachable on the backend's port (2099) without a separate sidecar.
    */
   adminMount: ApplyResult;
-}
-
-/**
- * Run all four host patches against a Manifest checkout. Like
- * {@link applyAll} but additionally installs the routing-override
- * hook on `proxy.service.ts` and the admin Express mount on `main.ts`.
- *
- * Sequencing: the three independent files (provider-client,
- * rate-limiter, main) are patched in parallel in Phase 1; the
- * routing-override patch runs alone in Phase 2 so its anchor scan
- * sees the post-Phase-1 file state. Running them all in parallel
- * would race on the shared `proxy.service.ts` file.
- *
- * The aggregate `fullyApplied` / `hasDrift` include all four
- * results — any single drift surfaces as `fullyApplied: false`.
- */
-export async function applyAllFour(
-  manifestRoot: string,
-  files: ManifestFileSpec = DEFAULT_MANIFEST_FILES,
-  options: ApplyOptions = {},
-): Promise<ApplyAllFourResult> {
-  const resolve = (rel: string) => `${manifestRoot.replace(/\/$/, '')}/${rel}`;
-  const proxyServicePath = resolve(files.proxyService);
-  if (files.main === undefined) {
-    throw new Error(
-      'applyAllFour: files.main is required (path to packages/backend/src/main.ts for the admin mount patch)',
-    );
-  }
-  const mainPath = resolve(files.main);
-  // Phase 1: provider-client + rate-limiter + admin-mount run in parallel
-  //          (each writes a different file).
-  // Phase 2: routing-override runs alone so its anchor scan
-  //          sees the post-Phase-1 proxy.service.ts file state.
-  const [providerClient, proxyRateLimiter, adminMount] = await Promise.all([
-    applyProviderClientHost(resolve(files.providerClient), options),
-    applyProxyRateLimiterHost(resolve(files.proxyRateLimiter), options),
-    applyAdminMount(mainPath, options),
-  ]);
-  const proxyRoutingOverride = await applyProxyRoutingOverrideHost(
-    proxyServicePath,
-    options,
-  );
-  return {
-    providerClient,
-    proxyRateLimiter,
-    proxyRoutingOverride,
-    adminMount,
-    fullyApplied:
-      providerClient.status !== 'upstream-drift' &&
-      proxyRateLimiter.status !== 'upstream-drift' &&
-      proxyRoutingOverride.status !== 'upstream-drift' &&
-      adminMount.status !== 'upstream-drift',
-    hasDrift:
-      providerClient.status === 'upstream-drift' ||
-      proxyRateLimiter.status === 'upstream-drift' ||
-      proxyRoutingOverride.status === 'upstream-drift' ||
-      adminMount.status === 'upstream-drift',
-  };
-}
-
-/**
- * Result of the five-file patch surface (the four-file set +
- * model-list-override). See {@link applyAllFive}.
- */
-export interface ApplyAllFiveResult extends ApplyAllFourResult {
   /**
-   * Result of the model-list-override host patch on `model-fetcher.ts`.
-   * Drift on this field does not block the other four patches from
+   * Result of the model-list-override host patch on the
+   * `model.controller.ts` (or whichever file serves `GET /v1/models`).
+   * Drift on this field does not block the other patches from
    * reporting `applied` / `noop`.
    */
   modelListOverride: ApplyResult;
 }
 
 /**
- * Run all five host patches against a Manifest checkout. Like
- * {@link applyAllFour} but additionally installs the
- * model-list-override hook on `model-fetcher.ts` (or whichever file
- * upstream uses to serialize the `GET /v1/models` response).
+ * Run all five host patches against a Manifest checkout. Patches the
+ * request-transform host on `provider-client.ts`, the rate-limit host on
+ * `proxy-rate-limiter.ts`, the admin Express mount on `main.ts`, and
+ * the model-list-override host on `model.controller.ts`.
  *
- * Sequencing: the four-file set runs in
- * {@link applyAllFour}'s two-phase plan (independent files in parallel
- * in Phase 1; the `proxy.service.ts` patch alone in Phase 2). The
- * model-list-override patch runs in its own Phase 3 because it targets
+ * Sequencing: provider-client + rate-limiter + admin-mount run in
+ * parallel in Phase 1 (each writes a different file). The
+ * model-list-override patch runs alone in Phase 2 because it targets
  * a different file but follows the same upstream-drift detection
- * pattern (read-anchor → write-replacement); running it in parallel
- * with the Phase-2 routing-override patch would race on the
- * `extractSentinelFromNew` post-patch sentinel scan for unrelated
- * symbols in different files — not a correctness bug but a needless
- * entanglement.
+ * pattern (read-anchor → write-replacement). The aggregate
+ * `fullyApplied` / `hasDrift` include all five results.
  *
- * The aggregate `fullyApplied` / `hasDrift` include all five results.
+ * Both the admin-mount and the model-list-override patches are
+ * optional: when the corresponding `files.<key> === undefined`, the
+ * orchestrator returns a synthetic `noop` for that patch.
+ *
+ * Wave-history note: prior to 2026-07-10 this surface was 5 files
+ * because the routing-override host also patched `proxy.service.ts`.
+ * Upstream PR #2468 subsumed that behavior, so the file count dropped
+ * to 4 — but the orchestrator name `applyAllFive` is kept for API
+ * stability.
+ *
  * The model-list-override patch is optional: when
  * `files.modelFetcher === undefined`, the orchestrator returns the
  * four-file result unchanged with a synthetic `modelListOverride`
@@ -697,26 +571,53 @@ export async function applyAllFive(
   files: ManifestFileSpec = DEFAULT_MANIFEST_FILES,
   options: ApplyOptions = {},
 ): Promise<ApplyAllFiveResult> {
-  const fourFileResult = await applyAllFour(manifestRoot, files, options);
+  const resolve = (rel: string) => `${manifestRoot.replace(/\/$/, '')}/${rel}`;
+  if (files.main === undefined) {
+    throw new Error(
+      'applyAllFive: files.main is required (path to packages/backend/src/main.ts for the admin mount patch)',
+    );
+  }
+  const mainPath = resolve(files.main);
+  // Phase 1: provider-client + rate-limiter + admin-mount run in parallel
+  //          (each writes a different file).
+  // Phase 2: model-list-override runs alone because it follows the same
+  //          upstream-drift detection pattern (read-anchor → write-replacement)
+  //          and serializing is the simplest correct approach.
+  const [providerClient, proxyRateLimiter, adminMount] = await Promise.all([
+    applyProviderClientHost(resolve(files.providerClient), options),
+    applyProxyRateLimiterHost(resolve(files.proxyRateLimiter), options),
+    applyAdminMount(mainPath, options),
+  ]);
+  const baseApplied =
+    providerClient.status !== 'upstream-drift' &&
+    proxyRateLimiter.status !== 'upstream-drift' &&
+    adminMount.status !== 'upstream-drift';
+  const baseDrift =
+    providerClient.status === 'upstream-drift' ||
+    proxyRateLimiter.status === 'upstream-drift' ||
+    adminMount.status === 'upstream-drift';
+
   if (files.modelFetcher === undefined) {
     return {
-      ...fourFileResult,
+      providerClient,
+      proxyRateLimiter,
+      adminMount,
       modelListOverride: { status: 'noop', file: '<modelFetcher not requested>' },
-      // Re-evaluate the aggregates since we added a synthetic noop.
-      fullyApplied: fourFileResult.fullyApplied,
-      hasDrift: fourFileResult.hasDrift,
+      fullyApplied: baseApplied,
+      hasDrift: baseDrift,
     };
   }
-  const resolve = (rel: string) => `${manifestRoot.replace(/\/$/, '')}/${rel}`;
   const modelListOverride = await applyModelListOverrideHost(
     resolve(files.modelFetcher),
     options,
   );
   return {
-    ...fourFileResult,
+    providerClient,
+    proxyRateLimiter,
+    adminMount,
     modelListOverride,
-    fullyApplied: fourFileResult.fullyApplied && modelListOverride.status !== 'upstream-drift',
-    hasDrift: fourFileResult.hasDrift || modelListOverride.status === 'upstream-drift',
+    fullyApplied: baseApplied && modelListOverride.status !== 'upstream-drift',
+    hasDrift: baseDrift || modelListOverride.status === 'upstream-drift',
   };
 }
 

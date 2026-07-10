@@ -166,8 +166,8 @@ removing its file, copy `config.example.json` to
 {
   "plugins": {
     "AnthropicBillingHeaderPlugin": true,
-    "DefaultPolicyPlugin": true,
-    "HeaderTierRouterPlugin": false
+    "AnthropicModelsFixPlugin": true,
+    "ShowAllRouterViewsPlugin": false
   }
 }
 ```

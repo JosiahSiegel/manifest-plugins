@@ -41,8 +41,6 @@ const DIST_PLUGINS = resolve(repoRoot, 'dist/plugins');
  * instantiation.
  */
 const PLUGIN_CLASS_NAMES = [
-  'DefaultPolicyPlugin',
-  'HeaderTierRouterPlugin',
   'ShowAllRouterViewsPlugin',
   'AnthropicModelsFixPlugin',
 ];
@@ -133,8 +131,6 @@ function parseRegistryClassNames(_distSource) {
 function annotateEnabledDefaults(distSource, disabledClassNames) {
   if (disabledClassNames.length === 0) return distSource;
   const pluginIds = {
-    DefaultPolicyPlugin: 'default-policy',
-    HeaderTierRouterPlugin: 'header-tier-router',
     ShowAllRouterViewsPlugin: 'show-all-router-views',
     AnthropicModelsFixPlugin: 'anthropic-models-fix',
   };

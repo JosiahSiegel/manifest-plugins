@@ -117,7 +117,7 @@ The e2e test (`pipeline/e2e-test.sh`) is a sibling script — same logic runs lo
 1. `GET /api/v1/health` → 200, `application/json`
 2. `GET /` → 200, `text/html` containing `<title>Manifest</title>`
 3. `GET /assets/<filename>` → 200, `application/javascript` or `text/css`
-4. `docker exec <app> node -e ...` can require `/app/node_modules/manifest-plugins`, sees the `header-tier-router` plugin installed/enabled, and gets `reason: "header-match"` from `HeaderTierRouterPlugin.overrideRouting()` against an in-memory fixture
+4. `docker exec <app> node -e ...` can require `/app/node_modules/manifest-plugins`, sees the `show-all-router-views` plugin installed/enabled, and confirms `getDashboardScript()` returns a non-empty string for that plugin against an in-memory fixture
 
 The first assertion catches backend boot regressions; the second catches missing-frontend-dist regressions (the original 404 bug); the third catches Vite asset-pipeline / hash-mismatch regressions; the fourth catches plugin packaging/runtime-discovery regressions where the image serves the dashboard but boots with an empty plugin registry.
 
@@ -133,13 +133,13 @@ PORT=3001 make e2e IMAGE=myimage:mytag      # test on a non-default port
 
 The plugins repo supports build-time plugin exclusion via `manifest-plugins.config.json` (at the root of the plugins repo). The pipeline's `npm run build` step runs the post-build filter, which rewrites `dist/index.js` accordingly.
 
-For example, to ship an "Anthropic-billing-only" image (no DefaultPolicyPlugin):
+For example, to ship an "Anthropic-billing-only" image (no Anthropic models fix):
 
 ```json
 {
   "plugins": {
     "AnthropicBillingHeaderPlugin": true,
-    "DefaultPolicyPlugin": false
+    "AnthropicModelsFixPlugin": false
   }
 }
 ```

@@ -32,8 +32,6 @@ type PluginJson = {
 
 const EXPECTED_PLUGIN_IDS = [
   'anthropic-models-fix',
-  'default-policy',
-  'header-tier-router',
   'show-all-router-views',
 ];
 
@@ -107,8 +105,8 @@ describe('plugin admin HTTP API', () => {
   });
 
   it('GET /api/plugins reflects direct runtime enablement changes', async () => {
-    // Given: the default-policy plugin was disabled through the runtime API.
-    setPluginEnabled('default-policy', false);
+    // Given: the show-all-router-views plugin was disabled through the runtime API.
+    setPluginEnabled('show-all-router-views', false);
     const app = createApp();
 
     // When: the installed plugins list is requested.
@@ -116,22 +114,22 @@ describe('plugin admin HTTP API', () => {
 
     // Then: the response reflects the in-memory override.
     const plugins = readPlugins(response.body);
-    expect(findPlugin(plugins, 'default-policy')?.enabled).toBe(false);
+    expect(findPlugin(plugins, 'show-all-router-views')?.enabled).toBe(false);
   });
 
-  it('GET /api/plugins/default-policy returns one plugin', async () => {
+  it('GET /api/plugins/show-all-router-views returns one plugin', async () => {
     // Given: a fresh admin server.
     const app = createApp();
 
     // When: a known plugin is requested by id.
-    const response = await request(app).get('/api/plugins/default-policy').expect(200);
+    const response = await request(app).get('/api/plugins/show-all-router-views').expect(200);
 
     // Then: the plugin metadata is returned.
     expect(response.body).toEqual({
       plugin: expect.objectContaining({
-        id: 'default-policy',
-        name: 'Default policy',
-        kind: 'policy',
+        id: 'show-all-router-views',
+        name: 'Show all router views',
+        kind: 'dashboard-transform',
         enabledByDefault: true,
         enabled: true,
       }),
@@ -149,33 +147,33 @@ describe('plugin admin HTTP API', () => {
     expect(response.body).toEqual({ error: 'plugin not found', id: 'nonexistent' });
   });
 
-  it('PATCH /api/plugins/default-policy persists and reflects enabled false', async () => {
+  it('PATCH /api/plugins/show-all-router-views persists and reflects enabled false', async () => {
     // Given: a fresh admin server using a per-test state file.
     const app = createApp();
 
-    // When: the default-policy plugin is disabled over HTTP.
+    // When: the show-all-router-views plugin is disabled over HTTP.
     const response = await request(app)
-      .patch('/api/plugins/default-policy')
+      .patch('/api/plugins/show-all-router-views')
       .send({ enabled: false })
       .expect(200);
 
     // Then: the response, persisted file, and runtime metadata agree.
     expect(response.body.plugin.enabled).toBe(false);
     expect(JSON.parse(readFileSync(stateFilePath, 'utf-8'))).toMatchObject({
-      'default-policy': false,
+      'show-all-router-views': false,
     });
     expect(
-      getInstalledPlugins().find((plugin) => plugin.id === 'default-policy')?.enabled,
+      getInstalledPlugins().find((plugin) => plugin.id === 'show-all-router-views')?.enabled,
     ).toBe(false);
   });
 
-  it('PATCH /api/plugins/default-policy rejects a string enabled value', async () => {
+  it('PATCH /api/plugins/show-all-router-views rejects a string enabled value', async () => {
     // Given: a fresh admin server.
     const app = createApp();
 
     // When: the enabled field is not a boolean.
     const response = await request(app)
-      .patch('/api/plugins/default-policy')
+      .patch('/api/plugins/show-all-router-views')
       .send({ enabled: 'no' })
       .expect(400);
 
@@ -183,12 +181,12 @@ describe('plugin admin HTTP API', () => {
     expect(response.body).toEqual({ error: 'body must be { enabled: boolean }' });
   });
 
-  it('PATCH /api/plugins/default-policy rejects an empty body', async () => {
+  it('PATCH /api/plugins/show-all-router-views rejects an empty body', async () => {
     // Given: a fresh admin server.
     const app = createApp();
 
     // When: no enabled field is sent.
-    const response = await request(app).patch('/api/plugins/default-policy').send({}).expect(400);
+    const response = await request(app).patch('/api/plugins/show-all-router-views').send({}).expect(400);
 
     // Then: the request is rejected as a bad body.
     expect(response.body).toEqual({ error: 'body must be { enabled: boolean }' });
@@ -209,8 +207,8 @@ describe('plugin admin HTTP API', () => {
   });
 
   it('POST /api/plugins/reload re-reads the state file from disk', async () => {
-    // Given: the state file disables the default policy plugin.
-    writeFileSync(stateFilePath, JSON.stringify({ 'default-policy': false }), 'utf-8');
+    // Given: the state file disables the show-all-router-views plugin.
+    writeFileSync(stateFilePath, JSON.stringify({ 'show-all-router-views': false }), 'utf-8');
     const app = createApp();
 
     // When: the admin server reloads state from disk.
@@ -219,7 +217,7 @@ describe('plugin admin HTTP API', () => {
 
     // Then: the plugin list reflects the reloaded persisted state.
     const plugins = readPlugins(response.body);
-    expect(findPlugin(plugins, 'default-policy')?.enabled).toBe(false);
+    expect(findPlugin(plugins, 'show-all-router-views')?.enabled).toBe(false);
   });
 
   it('GET /api/anything-else falls through to Express default 404 (no catch-all)', async () => {
@@ -329,10 +327,10 @@ describe('plugin admin HTTP API', () => {
   it('GET /admin/dashboard-transform/<id>.js returns 400 when the plugin is not a dashboard-transform', async () => {
     const app = createApp();
     const response = await request(app)
-      .get('/admin/dashboard-transform/default-policy.js')
+      .get('/admin/dashboard-transform/anthropic-models-fix.js')
       .expect(400);
     expect(response.body.error).toBe('plugin is not a dashboard-transform');
-    expect(response.body.id).toBe('default-policy');
+    expect(response.body.id).toBe('anthropic-models-fix');
   });
 
   it('GET /admin/dashboard-transform/<id>.js serves the enabled plugin script', async () => {

@@ -7,7 +7,7 @@
   },
   "plugins": {
     "AnthropicBillingHeaderPlugin": true,
-    "DefaultPolicyPlugin": true,
-    "HeaderTierRouterPlugin": true
+    "AnthropicModelsFixPlugin": true,
+    "ShowAllRouterViewsPlugin": true
   }
 }

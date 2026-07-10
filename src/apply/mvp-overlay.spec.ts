@@ -906,7 +906,10 @@ describe('OVERLAY_SPEC re-exports', () => {
   it('MVP_OVERLAY_SPEC and OVERLAY_SPEC reference the same frozen array', () => {
     expect(OVERLAY_SPEC).toBe(MVP_OVERLAY_SPEC);
     expect(Object.isFrozen(OVERLAY_SPEC)).toBe(true);
-    expect(OVERLAY_SPEC).toHaveLength(5);
+    // 4 overlays: provider-client + rate-limiter + dashboard mounts.
+    // The `proxy-service-routing-override-host` overlay was retired
+    // on 2026-07-10 when upstream PR #2468 subsumed the behavior.
+    expect(OVERLAY_SPEC).toHaveLength(4);
     for (const overlay of OVERLAY_SPEC) {
       expect(typeof overlay.id).toBe('string');
       expect(typeof overlay.target).toBe('string');
@@ -914,24 +917,18 @@ describe('OVERLAY_SPEC re-exports', () => {
     }
   });
 
-  it('includes the proxy-service-routing-override-host overlay (regression fix for 2ab748a6)', () => {
-    // The 4th overlay restores the precedence where `x-manifest-tier`
-    // (or any configured header tier) wins over `body.model`. Without
-    // this overlay, upstream's explicit-model early-return ignores
-    // header tiers entirely. See PR #2350 / commit 2ab748a6.
+  it('no longer includes the proxy-service-routing-override-host overlay (retired 2026-07-10)', () => {
+    // Upstream PR #2468 subsumed the behavior the routing-override
+    // overlay was patching. The overlay is gone; this assertion is the
+    // regression-locking check that future overlay additions don't
+    // quietly re-introduce it without addressing upstream drift first.
     const routingOverride = OVERLAY_SPEC.find(
       (overlay) => overlay.id === 'proxy-service-routing-override-host',
     );
-    expect(routingOverride).toBeDefined();
-    expect(routingOverride?.target).toBe(
-      'packages/backend/src/routing/proxy/proxy.service.ts',
-    );
-    expect(routingOverride?.postPatchSymbol).toBe(
-      'function applyProxyRoutingOverridePlugins(',
-    );
+    expect(routingOverride).toBeUndefined();
   });
 
-  it('includes the dashboard-plugin-manager-mount overlay (4th overlay)', () => {
+  it('includes the dashboard-plugin-manager-mount overlay', () => {
     const mount = OVERLAY_SPEC.find(
       (overlay) => overlay.id === 'dashboard-plugin-manager-mount',
     );
@@ -940,7 +937,7 @@ describe('OVERLAY_SPEC re-exports', () => {
     expect(mount?.postPatchSymbol).toBe('id="plugin-manager-root"');
   });
 
-  it('includes the dashboard-transform-mount overlay (5th overlay)', () => {
+  it('includes the dashboard-transform-mount overlay', () => {
     const mount = OVERLAY_SPEC.find(
       (overlay) => overlay.id === 'dashboard-transform-mount',
     );

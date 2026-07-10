@@ -33,7 +33,7 @@ At runtime, the host snippets `require('manifest-plugins')` and walk
 
 - `provider-client.ts::applyRequestTransformPlugins(...)` — request-transform hook
 - `proxy-rate-limiter.ts::getResolvedConcurrencyMax()` — config-time policy (concurrency)
-- `proxy.service.ts::applyProxyRoutingOverridePlugins(...)` — pre-routing override
+- `model.controller.ts::applyModelListOverridePlugins(...)` — `/v1/models` response override
 
 Each snippet:
 
@@ -85,7 +85,7 @@ picks it up automatically after the next build.
 > required) catches this exact regression: it `require()`s
 > `/app/node_modules/manifest-plugins` inside the app container and
 > asserts that `getInstalledPlugins()` is non-empty and that
-> `HeaderTierRouterPlugin.overrideRouting()` is callable.
+> `AnthropicModelsFixPlugin.overrideModelList()` is callable.
 
 See `src/registry/discover.ts::discoverPlugins` for the implementation
 and `src/registry/discover.spec.ts` for the contract tests.
@@ -110,8 +110,8 @@ To disable a plugin at build time:
 {
   "plugins": {
     "AnthropicBillingHeaderPlugin": true,
-    "DefaultPolicyPlugin": true,
-    "HeaderTierRouterPlugin": false
+    "AnthropicModelsFixPlugin": true,
+    "ShowAllRouterViewsPlugin": false
   }
 }
 ```
@@ -129,10 +129,10 @@ to reflect the new state.
 import { setPluginEnabled } from 'manifest-plugins';
 
 // Disable a plugin at runtime.
-setPluginEnabled('header-tier-router', false);
+setPluginEnabled('show-all-router-views', false);
 
 // Re-enable it.
-setPluginEnabled('header-tier-router', true);
+setPluginEnabled('show-all-router-views', true);
 ```
 
 The toggle is in-memory only. It does NOT survive a process restart.
@@ -171,8 +171,8 @@ import { getInstalledPlugins } from 'manifest-plugins';
 
 const installed = getInstalledPlugins();
 // [
-//   { id: 'default-policy',          kind: 'policy',    enabled: true, … },
-//   { id: 'header-tier-router',       kind: 'routing-override', enabled: false, … },
+//   { id: 'anthropic-models-fix',     kind: 'model-list-override', enabled: true, … },
+//   { id: 'show-all-router-views',    kind: 'dashboard-transform',  enabled: true, … },
 // ]
 ```
 
@@ -218,10 +218,10 @@ image by setting the env var:
 
 ```bash
 # Disable a single plugin.
-MANIFEST_PLUGINS_DISABLED=header-tier-router docker run …
+MANIFEST_PLUGINS_DISABLED=show-all-router-views docker run …
 
 # Disable multiple plugins (comma-separated, no spaces required).
-MANIFEST_PLUGINS_DISABLED=header-tier-router,experimental-foo docker run …
+MANIFEST_PLUGINS_DISABLED=show-all-router-views,experimental-foo docker run …
 ```
 
 ### Contract

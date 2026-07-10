@@ -11,11 +11,6 @@
       "postPatchSymbol": "function getResolvedConcurrencyMax("
     },
     {
-      "id": "proxy-service-routing-override-host",
-      "target": "packages/backend/src/routing/proxy/proxy.service.ts",
-      "postPatchSymbol": "function applyProxyRoutingOverridePlugins("
-    },
-    {
       "id": "model-controller-list-override-host",
       "target": "packages/backend/src/routing/model.controller.ts",
       "postPatchSymbol": "function applyModelListOverridePlugins("

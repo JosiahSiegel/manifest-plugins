@@ -11,7 +11,7 @@
  *        when upstream commit `c9009bcd5` removed the
  *        `maxMessagesPerRequest` feature)
  *   - `packages/backend/src/main.ts` (admin Express mount)
- *   - `packages/backend/src/routing/model-discovery/model-fetcher.ts`
+ *   - `packages/backend/src/routing/model.controller.ts`
  *       (model-list-override hook — runs every `ModelListOverridePlugin`
  *       against the discovered-models list before it lands in the
  *       `GET /v1/models` response body)
@@ -224,7 +224,6 @@ async function main(): Promise<number> {
     const all = await applyAllEight(checkoutPath);
     logResult('provider-client', all.providerClient);
     logResult('proxy-rate-limiter', all.proxyRateLimiter);
-    logResult('proxy-routing-override', all.proxyRoutingOverride);
     logResult('admin-mount', all.adminMount);
     logResult('model-list-override', all.modelListOverride);
     logResult('tier-service-routing-model-list', all.tierServiceRoutingModelList);

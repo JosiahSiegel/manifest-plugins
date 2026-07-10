@@ -10,7 +10,7 @@
  * Test contract:
  *   1. No args                    → exit 2, stdout contains `Usage:`
  *   2. Unknown subcommand         → exit 2, stderr contains `unknown subcommand`
- *   3. `list` against real repo   → exit 0, stdout lists all 3 known plugins + `ENABLED`
+ *   3. `list` against real repo   → exit 0, stdout lists all known plugins + `ENABLED`
  *   4. `enable <id>`              → exit 0, state file contains `<id>: true`
  *   5. `disable <id>`             → exit 0, state file contains `<id>: false`
  *   6. `disable <unknown>`        → exit 3, stderr contains `unknown plugin id`
@@ -67,12 +67,12 @@ describe('plugins-cli operator CLI', () => {
         MANIFEST_PLUGINS_STATE_FILE: tempFile,
       });
       expect(result.status).toBe(0);
-      // The two in-tree plugins from this repo's `src/plugins/`.
-      // External plugins (e.g. anthropic-billing-header) are NOT listed
-      // here unless the operator fetched them via external-plugins.local.json
-      // and the auto-discovery picked them up at build time.
-      expect(result.stdout).toContain('default-policy');
-      expect(result.stdout).toContain('header-tier-router');
+      // The two remaining in-tree plugins. External plugins (e.g.
+      // anthropic-billing-header) are NOT listed here unless the
+      // operator fetched them via external-plugins.local.json and the
+      // auto-discovery picked them up at build time.
+      expect(result.stdout).toContain('show-all-router-views');
+      expect(result.stdout).toContain('anthropic-models-fix');
       // The header row must include the ENABLED column so the column
       // layout is intentional.
       expect(result.stdout).toMatch(/ENABLED/);
@@ -80,8 +80,8 @@ describe('plugins-cli operator CLI', () => {
     // reference, not a string literal). The CLI must resolve the
     // constant to its value so the KIND column shows the real
     // kind instead of "unknown". Regression lock.
-    expect(result.stdout).toMatch(/policy/);
-    expect(result.stdout).toMatch(/routing-override/);
+    expect(result.stdout).toMatch(/dashboard-transform/);
+    expect(result.stdout).toMatch(/model-list-override/);
     } finally {
       rmSync(join(tempFile, '..'), { recursive: true, force: true });
     }
@@ -91,13 +91,13 @@ describe('plugins-cli operator CLI', () => {
     const tempFile = makeTempStateFile();
     try {
       const result = runCli(
-        ['enable', 'default-policy'],
+        ['enable', 'show-all-router-views'],
         { MANIFEST_PLUGINS_STATE_FILE: tempFile },
       );
       expect(result.status).toBe(0);
       expect(existsSync(tempFile)).toBe(true);
       const parsed = JSON.parse(readFileSync(tempFile, 'utf-8'));
-      expect(parsed).toEqual({ 'default-policy': true });
+      expect(parsed).toEqual({ 'show-all-router-views': true });
     } finally {
       rmSync(join(tempFile, '..'), { recursive: true, force: true });
     }
@@ -107,13 +107,13 @@ describe('plugins-cli operator CLI', () => {
     const tempFile = makeTempStateFile();
     try {
       const result = runCli(
-        ['disable', 'default-policy'],
+        ['disable', 'show-all-router-views'],
         { MANIFEST_PLUGINS_STATE_FILE: tempFile },
       );
       expect(result.status).toBe(0);
       expect(existsSync(tempFile)).toBe(true);
       const parsed = JSON.parse(readFileSync(tempFile, 'utf-8'));
-      expect(parsed).toEqual({ 'default-policy': false });
+      expect(parsed).toEqual({ 'show-all-router-views': false });
     } finally {
       rmSync(join(tempFile, '..'), { recursive: true, force: true });
     }
@@ -136,7 +136,7 @@ describe('plugins-cli operator CLI', () => {
   it('`reset` deletes the state file', () => {
     const tempFile = makeTempStateFile();
     // Pre-create a non-empty state file so `reset` has something to delete.
-    writeFileSync(tempFile, JSON.stringify({ 'default-policy': false }), 'utf-8');
+    writeFileSync(tempFile, JSON.stringify({ 'show-all-router-views': false }), 'utf-8');
     expect(existsSync(tempFile)).toBe(true);
 
     try {
