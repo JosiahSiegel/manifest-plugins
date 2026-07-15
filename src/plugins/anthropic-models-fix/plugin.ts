@@ -54,6 +54,14 @@ export const ANTHROPIC_MODELS_FIX_PLUGIN_METADATA: PluginMetadata = Object.freez
   description:
     'Fixes the Anthropic model list per Anthropic June/July 2026 changes.',
   kind: ANTHROPIC_MODELS_FIX_PLUGIN_KIND,
+  // Disabled by default: upstream Manifest now fetches Anthropic models
+  // live from https://api.anthropic.com/v1/models via
+  // provider-model-fetcher.service.ts, so the static-catalog workaround
+  // this plugin implemented is no longer needed. Re-enable per-image via
+  // `manifest-plugins.config.json` (set `"anthropic-models-fix": true`)
+  // or at runtime via `npm run plugins:enable -- anthropic-models-fix`
+  // if upstream regresses.
+  enabledByDefault: false,
 });
 
 const PLUGIN_INSTANCE_NAME = 'AnthropicModelsFixPlugin';
