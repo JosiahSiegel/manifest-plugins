@@ -77,9 +77,12 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    expect(mod!.plugins).toHaveLength(1);
+    // Only ShowAllRouterViewsPlugin was enabled by default; persisting it
+    // to false leaves the runtime array empty (AnthropicModelsFixPlugin
+    // was already disabled via its source-declared default).
+    expect(mod!.plugins).toHaveLength(0);
     expect(mod!.plugins).not.toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
-    expect(mod!.plugins).toContainEqual(expect.any(mod!.AnthropicModelsFixPlugin));
+    expect(mod!.plugins).not.toContainEqual(expect.any(mod!.AnthropicModelsFixPlugin));
   });
 
   it('applies a persisted true entry so getInstalledPlugins reports enabled=true for that id', () => {
@@ -99,10 +102,12 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     const mlop = installed.find((p) => p.id === 'anthropic-models-fix');
     expect(mlop).toBeDefined();
     expect(mlop!.enabled).toBe(true);
-    expect(mlop!.enabledByDefault).toBe(true);
+    // `enabledByDefault` reflects the source-declared default. AnthropicModelsFixPlugin
+    // ships disabled by default (see config.example.json + plugin metadata).
+    expect(mlop!.enabledByDefault).toBe(false);
   });
 
-  it('falls back to all-defaults when the state file is missing', () => {
+  it('falls back to per-plugin defaults when the state file is missing', () => {
     // stateFile was set but never written — boot must treat it as a no-op.
     let mod: LoadedModule;
     jest.isolateModules(() => {
@@ -110,12 +115,16 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    expect(mod!.plugins).toHaveLength(2);
+    // Only ShowAllRouterViewsPlugin is enabled by default; AnthropicModelsFixPlugin
+    // ships dormant (see its source-declared enabledByDefault: false).
+    expect(mod!.plugins).toHaveLength(1);
     const installed = mod!.getInstalledPlugins();
-    for (const p of installed) {
-      expect(p.enabled).toBe(true);
-      expect(p.enabledByDefault).toBe(true);
-    }
+    const sarv = installed.find((p) => p.id === 'show-all-router-views');
+    expect(sarv!.enabled).toBe(true);
+    expect(sarv!.enabledByDefault).toBe(true);
+    const mlop = installed.find((p) => p.id === 'anthropic-models-fix');
+    expect(mlop!.enabled).toBe(false);
+    expect(mlop!.enabledByDefault).toBe(false);
   });
 
   it('exposes getPersistedStateFile() reading the env var (and a default when unset)', () => {
@@ -133,7 +142,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       stateFile,
       JSON.stringify({
         'show-all-router-views': false,
-        'anthropic-models-fix': false,
+        'anthropic-models-fix': true,
       }) + '\n',
       'utf-8',
     );
@@ -144,19 +153,24 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    // Boot has dropped both plugins from the runtime array.
-    expect(mod!.plugins).toHaveLength(0);
+    // Boot has dropped show-all-router-views (persisted false) and
+    // added anthropic-models-fix (persisted true). Net effect: still
+    // exactly one enabled plugin.
+    expect(mod!.plugins).toHaveLength(1);
 
     mod!.resetPersistedPluginState();
 
     expect(existsSync(stateFile)).toBe(false);
 
+    // After reset: per-plugin defaults are restored. ShowAllRouterViewsPlugin
+    // is back to enabled, AnthropicModelsFixPlugin back to dormant.
     const installed = mod!.getInstalledPlugins();
-    for (const p of installed) {
-      expect(p.enabled).toBe(true);
-      expect(p.enabledByDefault).toBe(true);
-    }
-    // Every plugin is back in the runtime array.
-    expect(mod!.plugins).toHaveLength(2);
+    const sarv = installed.find((p) => p.id === 'show-all-router-views');
+    expect(sarv!.enabled).toBe(true);
+    expect(sarv!.enabledByDefault).toBe(true);
+    const mlop = installed.find((p) => p.id === 'anthropic-models-fix');
+    expect(mlop!.enabled).toBe(false);
+    expect(mlop!.enabledByDefault).toBe(false);
+    expect(mod!.plugins).toHaveLength(1);
   });
 });

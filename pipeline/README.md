@@ -131,18 +131,20 @@ PORT=3001 make e2e IMAGE=myimage:mytag      # test on a non-default port
 
 ## Selecting a subset of plugins
 
-The plugins repo supports build-time plugin exclusion via `manifest-plugins.config.json` (at the root of the plugins repo). The pipeline's `npm run build` step runs the post-build filter, which rewrites `dist/index.js` accordingly.
+The plugins repo supports build-time plugin enable/disable via `config.example.json` at the repo root. The pipeline's `npm run build` step runs `scripts/sync-config.mjs` (which materializes `config.example.json` into `manifest-plugins.config.json` after stripping doc keys) and then `scripts/filter-plugins.mjs` (which flips each plugin's `enabledByDefault` field in its compiled `dist/plugins/<name>/plugin.js` to match the config). Keys in the `plugins` object are **plugin ids** (the `id` field of each plugin's metadata), not TypeScript class names. The filter validates every key against the set of shipped plugin ids and fails the build if any key is unknown.
 
 For example, to ship an "Anthropic-billing-only" image (no Anthropic models fix):
 
 ```json
 {
   "plugins": {
-    "AnthropicBillingHeaderPlugin": true,
-    "AnthropicModelsFixPlugin": false
+    "anthropic-billing-header": true,
+    "anthropic-models-fix": false
   }
 }
 ```
+
+`AnthropicModelsFixPlugin` ships disabled by default in `config.example.json` because upstream Manifest now fetches Anthropic models live from `https://api.anthropic.com/v1/models` via `provider-model-fetcher.service.ts` — the static-catalog workaround this plugin implemented is no longer needed. Re-enable the plugin only if upstream regresses and the live fetch falls behind on Anthropic catalog changes.
 
 ## Cleaning up old images
 

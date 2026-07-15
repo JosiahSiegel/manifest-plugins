@@ -99,7 +99,7 @@ For the public version, use `ghcr.io/josiahsiegel/manifest-with-plugins:latest` 
 The `AnthropicBillingHeaderPlugin` isn't running. Most common causes:
 
 1. **`provider-client.ts` was reverted** by a fresh upstream `git pull`. Re-apply: `make apply`.
-2. **The plugin is excluded** via `manifest-plugins.config.json`. Check that `"AnthropicBillingHeaderPlugin": true`.
+2. **The plugin is excluded** via `manifest-plugins.config.json`. Check that `"anthropic-billing-header": true` (keys are plugin ids, not class names).
 3. **The classifier version is stale.** Anthropic rotates the `cc_version` they classify against; bump `MANIFEST_CC_VERSION` and rebuild.
 
 Verify the plugin is actually loaded:
@@ -107,7 +107,9 @@ Verify the plugin is actually loaded:
 ```bash
 docker run --rm -p 2099:2099 <image> /nodejs/bin/node -e \
   'console.log(require("/app/node_modules/manifest-plugins/dist/index.js").plugins.map(p => p.constructor.name))'
-# Expected: [ 'AnthropicBillingHeaderPlugin', 'AnthropicModelsFixPlugin', 'ShowAllRouterViewsPlugin' ]
+# Expected: [ 'AnthropicBillingHeaderPlugin', 'ShowAllRouterViewsPlugin' ]
+# (AnthropicModelsFixPlugin ships disabled by default — re-enable via
+# config.example.json if upstream regresses and you actually need it.)
 ```
 
 ## Development environment issues
@@ -182,20 +184,20 @@ Fix the input and retry.
 A plugin directory already exists at the target path. Pick a different name or
 delete the existing directory first.
 
-### Build-time config plugin name doesn't match
+### Build-time config plugin id doesn't match
 
-`manifest-plugins.config.json` keys must match an exported plugin class name
-exactly. The class name is checked against `dist/plugins/*/plugin.js` (the
-discoverer emits `exports.<ClassName> = ...`). A typo here causes the build
-script to error out:
+`manifest-plugins.config.json` (and `config.example.json`) keys must match a
+shipped plugin **id** (the `id` field of each plugin's metadata), not the
+TypeScript class name. The filter walks `dist/plugins/*/plugin.js`, extracts
+each plugin's `id: '...'` field, and validates the config against that set.
+A typo here causes the build script to error out:
 
 ```
-manifest-plugins.config.json: unknown plugin "AnthropicBillingPlugin" — valid plugins are: AnthropicBillingHeaderPlugin, AnthropicModelsFixPlugin, ShowAllRouterViewsPlugin. If you added a new plugin, update PLUGIN_CLASS_NAMES in scripts/filter-plugins.mjs.
+manifest-plugins.config.json: unknown plugin id "anthropic-billing-plugin" — shipped plugins are: anthropic-billing-header, anthropic-models-fix, show-all-router-views. (Plugin ids are the 'id' field of each plugin's metadata, not the class name.)
 ```
 
-(That message will say "update scripts/filter-plugins.mjs" but in practice the
-allowlist is derived from `dist/plugins/` — the error is a stale leftover from
-the pre-discovery implementation and is harmless.)
+Note: keys are lowercase-with-dashes (`anthropic-models-fix`), not
+PascalCase (`AnthropicModelsFixPlugin`).
 
 ### Plugin works locally but not in the image
 

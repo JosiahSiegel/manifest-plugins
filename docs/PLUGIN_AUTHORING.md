@@ -160,21 +160,25 @@ inspected.
 
 Every plugin ships enabled by default. To disable a plugin without
 removing its file, copy `config.example.json` to
-`manifest-plugins.config.json` and set the class name to `false`:
+`config.example.json` (or the materialized `manifest-plugins.config.json`)
+and set the plugin id to `false`:
 
 ```json
 {
   "plugins": {
-    "AnthropicBillingHeaderPlugin": true,
-    "AnthropicModelsFixPlugin": true,
-    "ShowAllRouterViewsPlugin": false
+    "anthropic-billing-header": true,
+    "anthropic-models-fix": true,
+    "show-all-router-views": false
   }
 }
 ```
 
-Then rebuild (`npm run build`). The `filter-plugins.mjs` post-build
-script rewrites `dist/index.js`'s registry to mark disabled plugins
-`enabledByDefault: false`. See [`PLUGIN_REGISTRY.md`](PLUGIN_REGISTRY.md#runtime-toggle)
+Keys are **plugin ids** (the `id` field of each plugin's metadata), not
+TypeScript class names. Then rebuild (`npm run build`). The
+`filter-plugins.mjs` post-build script rewrites the plugin's compiled
+`dist/plugins/<name>/plugin.js` to flip `enabledByDefault: true` →
+`enabledByDefault: false` for every plugin id marked false. See
+[`PLUGIN_REGISTRY.md`](PLUGIN_REGISTRY.md#runtime-toggle)
 for the difference between build-time and runtime toggle.
 
 ## Runtime toggle (`setPluginEnabled`)
