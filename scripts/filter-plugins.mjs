@@ -4,22 +4,40 @@
  * ==================
  *
  * Post-build step that reads `manifest-plugins.config.json` and rewrites
- * `dist/index.js` metadata defaults for plugins the user has disabled.
- *
- * The plugin array in `dist/index.js` keeps every installed plugin class so
- * runtime overrides can re-enable it. A config value of `false` only changes
- * the plugin's `enabledByDefault` metadata from `true` to `false`.
+ * the `enabledByDefault` field in each plugin's compiled metadata to
+ * match the operator's stated defaults.
  *
  * Why post-build instead of compile-time:
  *   - The TS source (`src/index.ts`) is unfiltered, so `npm test` runs
  *     against the full plugin set with 100% coverage.
- *   - The shipped artifact (`dist/index.js`) keeps disabled plugins
- *     discoverable while changing their default enabled state.
+ *   - The shipped artifact (`dist/plugins/<name>/plugin.js`) carries the
+ *     operator's chosen defaults so `require('manifest-plugins')` at
+ *     runtime returns the right `getInstalledPlugins()` shape.
  *   - No source-file mutation = no dirty working tree, no git status
  *     noise, no circular imports.
  *
- * Run automatically via `npm run build`. Re-runnable (idempotent if the
- * file is already in the desired shape).
+ * Rewriting strategy:
+ *   - The filter walks `dist/plugins/<name>/plugin.js` (every plugin shipped,
+ *     including ones fetched as external plugins from a private repo
+ *     via `external-plugins.local.json`).
+ *   - For each compiled plugin, it reads the `id: '<plugin-id>'` field
+ *     out of the metadata literal to learn the plugin's identifier.
+ *   - If `manifest-plugins.config.json` mentions that id with an explicit
+ *     boolean, the filter rewrites the plugin's compiled `enabledByDefault`
+ *     to match. Both directions are supported: a plugin shipping with
+ *     `enabledByDefault: true` in source can be flipped to `false` via
+ *     config, and a plugin shipping with `false` can be re-enabled by
+ *     setting the config to `true` (the recovery path when an upstream
+ *     bug the plugin was working around regresses back in).
+ *   - Plugins not mentioned in the config are left untouched (their
+ *     source-declared default — true or false — wins).
+ *
+ * This is per-plugin rather than per-class-name: external plugins
+ * fetched at build time (e.g. AnthropicBillingHeaderPlugin) are
+ * supported without editing this script.
+ *
+ * Run automatically via `npm run build`. Re-runnable (idempotent if
+ * the files are already in the desired shape).
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
@@ -31,19 +49,7 @@ const __dirname = dirname(__filename);
 const repoRoot = resolve(__dirname, '..');
 
 const CONFIG_PATH = resolve(repoRoot, 'manifest-plugins.config.json');
-const DIST_INDEX = resolve(repoRoot, 'dist/index.js');
 const DIST_PLUGINS = resolve(repoRoot, 'dist/plugins');
-
-/**
- * Plugins shipped by the registry. Adding a new plugin requires adding
- * its class name here AND instantiating it in `src/index.ts` — the
- * registry is the build-time allowlist, the index is the runtime
- * instantiation.
- */
-const PLUGIN_CLASS_NAMES = [
-  'ShowAllRouterViewsPlugin',
-  'AnthropicModelsFixPlugin',
-];
 
 function loadConfig() {
   if (!existsSync(CONFIG_PATH)) {
@@ -67,7 +73,7 @@ function loadConfig() {
   if (plugins === undefined) return { plugins: {} };
   if (typeof plugins !== 'object' || plugins === null) {
     throw new Error(
-      'manifest-plugins.config.json: "plugins" must be an object mapping class name to boolean',
+      'manifest-plugins.config.json: "plugins" must be an object mapping plugin id to boolean',
     );
   }
   for (const [name, value] of Object.entries(plugins)) {
@@ -80,116 +86,167 @@ function loadConfig() {
   return { plugins };
 }
 
+/**
+ * Validate that every key in the config corresponds to an actually-shipped
+ * plugin. Without this, a typo in the config (`AnthropicBillingPlugin`
+ * instead of `AnthropicBillingHeaderPlugin`) would silently no-op — same
+ * class of failure that hid the original bug.
+ */
 function validateConfig(config) {
-  for (const name of Object.keys(config.plugins)) {
-    if (!PLUGIN_CLASS_NAMES.includes(name)) {
-      throw new Error(
-        `manifest-plugins.config.json: unknown plugin "${name}" — ` +
-          `valid plugins are: ${PLUGIN_CLASS_NAMES.join(', ')}. ` +
-          `If you added a new plugin, update PLUGIN_CLASS_NAMES in scripts/filter-plugins.mjs.`,
-      );
-    }
-  }
-}
-
-function parseRegistryClassNames(_distSource) {
-  // Walk `dist/plugins/*/plugin.js` and extract the class name from
-  // each. tsc emits `exports.<ClassName> = ...` for every named
-  // class export in a TS plugin file. This is deterministic and
-  // survives any future refactor of `src/index.ts`'s registry shape.
-  if (!existsSync(DIST_PLUGINS)) {
-    throw new Error(
-      `${DIST_PLUGINS} does not exist. Run \`npm run build\` first.`,
-    );
-  }
-  const out = [];
+  const shippedIds = new Set();
   for (const child of readdirSync(DIST_PLUGINS)) {
     if (child.startsWith('.')) continue;
     const pluginFile = join(DIST_PLUGINS, child, 'plugin.js');
     if (!existsSync(pluginFile)) continue;
-    const text = readFileSync(pluginFile, 'utf-8');
-    // Match `exports.<ClassName> = ...` declarations (tsc emits
-    // exactly one for the named class export).
-    const match = text.match(/exports\.([A-Z][A-Za-z0-9_]*)\s*=/);
-    if (match === null) {
+    const id = readPluginId(pluginFile);
+    if (id !== null) shippedIds.add(id);
+  }
+  for (const name of Object.keys(config.plugins)) {
+    if (!shippedIds.has(name)) {
       throw new Error(
-        `${pluginFile} does not declare an exported class via 'exports.<ClassName> = ...'. ` +
-          'The build output shape may have changed; update scripts/filter-plugins.mjs.',
+        `manifest-plugins.config.json: unknown plugin id "${name}" — ` +
+          `shipped plugins are: ${Array.from(shippedIds).sort().join(', ')}. ` +
+          `(Plugin ids are the 'id' field of each plugin's metadata, not the class name.)`,
       );
     }
-    out.push(match[1]);
   }
-  if (out.length === 0) {
+}
+
+/**
+ * Extract the `id: '<value>'` literal from a compiled plugin.js metadata
+ * block. Returns null if no `id` field is found at the top of the file
+ * (which would indicate a malformed build).
+ */
+function readPluginId(pluginFile) {
+  const text = readFileSync(pluginFile, 'utf-8');
+  const match = text.match(/id:\s*['"]([^'"]+)['"]/);
+  return match === null ? null : match[1];
+}
+
+/**
+ * Rewrite the first `enabledByDefault: <bool>` literal that follows the
+ * plugin's `id: '<id>'` literal in pluginFile so that it matches the
+ * operator's requested default. Returns true if the file was rewritten,
+ * false if the file already matches.
+ */
+function setPluginDefaultInFile(pluginFile, pluginId, desiredDefault) {
+  const text = readFileSync(pluginFile, 'utf-8');
+  const idNeedle = `id: '${pluginId}'`;
+  const idIndex = text.indexOf(idNeedle);
+  if (idIndex === -1) {
+    // Defensive: should never happen because validateConfig confirmed
+    // the id exists. Throw to surface a real build-output regression
+    // rather than silently skipping.
     throw new Error(
-      `${DIST_PLUGINS} contains no plugin.js files. ` +
-        'The build output shape may have changed; update scripts/filter-plugins.mjs.',
+      `${pluginFile}: config references '${pluginId}' but its metadata does not contain 'id: '${pluginId}''`,
     );
   }
-  return out;
-}
-
-function annotateEnabledDefaults(distSource, disabledClassNames) {
-  if (disabledClassNames.length === 0) return distSource;
-  const pluginIds = {
-    ShowAllRouterViewsPlugin: 'show-all-router-views',
-    AnthropicModelsFixPlugin: 'anthropic-models-fix',
-  };
-  let next = distSource;
-  for (const className of disabledClassNames) {
-    const pluginId = pluginIds[className];
-    const idIndex = next.indexOf(`id: "${pluginId}"`);
-    if (idIndex === -1) continue;
-    const defaultIndex = next.indexOf('enabledByDefault: true', idIndex);
-    if (defaultIndex === -1) continue;
-    next = `${next.slice(0, defaultIndex)}enabledByDefault: false${next.slice(
-      defaultIndex + 'enabledByDefault: true'.length,
-    )}`;
+  const desiredLiteral = `enabledByDefault: ${desiredDefault}`;
+  // Look for the desired literal first — if it's already there we no-op.
+  const alreadyCorrect = text.indexOf(desiredLiteral, idIndex);
+  if (alreadyCorrect !== -1) {
+    return false;
   }
-  return next;
+  // Otherwise find the OPPOSITE literal and flip it. The plugin metadata
+  // always declares the field as `true` or `false` (tsc preserves the
+  // literal), so one of the two patterns is guaranteed to be present.
+  const oppositeLiteral = `enabledByDefault: ${!desiredDefault}`;
+  const flipIndex = text.indexOf(oppositeLiteral, idIndex);
+  if (flipIndex === -1) {
+    // Source omits the field entirely (treated as true by loadPluginRegistry).
+    // For `desiredDefault: false` we want to add it; for `desiredDefault: true`
+    // the absent-default behavior already matches.
+    if (desiredDefault === false) {
+      // Insert `enabledByDefault: false,` after the metadata's `kind:` line.
+      const kindNeedle = 'kind:';
+      const kindIndex = text.indexOf(kindNeedle, idIndex);
+      if (kindIndex === -1) {
+        throw new Error(
+          `${pluginFile}: '${pluginId}' has no 'kind:' field in its metadata; cannot insert 'enabledByDefault: false'`,
+        );
+      }
+      // Find the next comma+newline after `kind: ...`
+      const kindLineEnd = text.indexOf('\n', kindIndex);
+      const insertionPoint = kindLineEnd + 1;
+      const rewritten =
+        text.slice(0, insertionPoint) +
+        `    enabledByDefault: false,\n` +
+        text.slice(insertionPoint);
+      writeFileSync(pluginFile, rewritten, 'utf-8');
+      return true;
+    }
+    // desiredDefault === true but field absent → matches default behavior.
+    return false;
+  }
+  const rewritten =
+    text.slice(0, flipIndex) +
+    desiredLiteral +
+    text.slice(flipIndex + oppositeLiteral.length);
+  writeFileSync(pluginFile, rewritten, 'utf-8');
+  return true;
 }
 
-function filterIndexJs(distSource, enabledMap) {
-  const registryClassNames = parseRegistryClassNames(distSource);
-  const disabledClassNames = registryClassNames.filter(
-    (className) => enabledMap[className] === false,
-  );
-  return annotateEnabledDefaults(distSource, disabledClassNames);
+/**
+ * Walk every plugin directory under dist/plugins and, for any whose
+ * declared id appears in the config with an explicit boolean, rewrite
+ * its compiled metadata so its `enabledByDefault` matches the config.
+ *
+ * Returns { rewritten, skipped } arrays of plugin ids for logging.
+ * - `rewritten`: ids whose compiled `enabledByDefault` was changed.
+ * - `skipped`: ids whose compiled `enabledByDefault` already matched
+ *   the config (no rewrite needed).
+ */
+function applyEnabledDefaults(config) {
+  const rewritten = [];
+  const skipped = [];
+
+  for (const child of readdirSync(DIST_PLUGINS)) {
+    if (child.startsWith('.')) continue;
+    const pluginFile = join(DIST_PLUGINS, child, 'plugin.js');
+    if (!existsSync(pluginFile)) continue;
+    const id = readPluginId(pluginFile);
+    if (id === null) continue;
+    if (!(id in config.plugins)) continue;
+    const desired = config.plugins[id];
+    if (setPluginDefaultInFile(pluginFile, id, desired)) {
+      rewritten.push(id);
+    } else {
+      skipped.push(id);
+    }
+  }
+
+  return { rewritten, skipped };
 }
 
 function main() {
-  if (!existsSync(DIST_INDEX)) {
+  if (!existsSync(DIST_PLUGINS)) {
     console.error(
-      `filter-plugins: ${DIST_INDEX} not found. Run \`npm run build\` first.`,
+      `filter-plugins: ${DIST_PLUGINS} does not exist. Run \`npm run build\` first.`,
     );
     process.exit(1);
   }
   const config = loadConfig();
   validateConfig(config);
-  const distSource = readFileSync(DIST_INDEX, 'utf-8');
-  const filtered = filterIndexJs(distSource, config.plugins);
-  if (filtered === distSource) {
-    const excluded = PLUGIN_CLASS_NAMES.filter(
-      (n) => config.plugins[n] === false,
-    );
+  const { rewritten, skipped } = applyEnabledDefaults(config);
+
+  const totalConfigEntries = Object.keys(config.plugins).length;
+  if (totalConfigEntries === 0) {
     console.log(
-      `filter-plugins: dist/index.js already filtered${
-        excluded.length > 0 ? ` (excluded: ${excluded.join(', ')})` : ''
-      }`,
+      'filter-plugins: no plugins requested via manifest-plugins.config.json (all shipped plugins kept their source-declared defaults)',
     );
     return;
   }
-  writeFileSync(DIST_INDEX, filtered, 'utf-8');
-  const excluded = PLUGIN_CLASS_NAMES.filter(
-    (n) => config.plugins[n] === false,
-  );
-  const included = PLUGIN_CLASS_NAMES.filter(
-    (n) => config.plugins[n] !== false,
-  );
-  console.log(
-    `filter-plugins: rewrote dist/index.js — included: [${included.join(
-      ', ',
-    )}], excluded: [${excluded.join(', ')}]`,
-  );
+
+  const parts = [];
+  if (rewritten.length > 0) {
+    parts.push(`rewrote ${rewritten.length} plugin(s): [${rewritten.join(', ')}]`);
+  }
+  if (skipped.length > 0) {
+    parts.push(
+      `already matched source: [${skipped.join(', ')}] (config matches compiled metadata)`,
+    );
+  }
+  console.log(`filter-plugins: ${parts.join('; ')}`);
 }
 
 main();
