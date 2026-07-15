@@ -19,8 +19,8 @@ describe('plugin registry', () => {
     //
     // Tests assert against `installedPlugins` (always-shipped, regardless
     // of runtime toggle) rather than `plugins` (the enabled-only subset
-    // consumed by the host), so a plugin shipping dormant
-    // (`enabledByDefault: false`) still appears here.
+    // consumed by the host), so a plugin disabled by `manifest-plugins.config.json`
+    // (`enabled: false`) still appears here.
     expect(installedPlugins).toHaveLength(2);
   });
 

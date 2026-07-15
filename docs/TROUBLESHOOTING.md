@@ -107,9 +107,10 @@ Verify the plugin is actually loaded:
 ```bash
 docker run --rm -p 2099:2099 <image> /nodejs/bin/node -e \
   'console.log(require("/app/node_modules/manifest-plugins/dist/index.js").plugins.map(p => p.constructor.name))'
-# Expected: [ 'AnthropicBillingHeaderPlugin', 'ShowAllRouterViewsPlugin' ]
-# (AnthropicModelsFixPlugin ships disabled by default — re-enable via
-# config.example.json if upstream regresses and you actually need it.)
+# Expected: [ 'AnthropicBillingHeaderPlugin', 'AnthropicModelsFixPlugin', 'ShowAllRouterViewsPlugin' ]
+# (To disable a plugin locally, materialize `manifest-plugins.config.json`
+# from `config.example.json` and set its id to `false` — see
+# `docs/PLUGIN_REGISTRY.md` for the copy-on-missing workflow.)
 ```
 
 ## Development environment issues

@@ -3,36 +3,41 @@
  * sync-config.mjs
  * ===============
  *
- * Build-time helper that materializes the canonical plugin config from
- * `config.example.json` into `manifest-plugins.config.json` at the repo
- * root.
+ * Build-time helper that materializes `config.example.json` into
+ * `manifest-plugins.config.json` at the repo root on **first** build only.
  *
- * Why this exists:
- *   `scripts/filter-plugins.mjs` reads `manifest-plugins.config.json`
- *   at the repo root (not `config.example.json`). Without this script,
- *   the example file's defaults never take effect — the only way to
- *   disable a plugin would be to hand-write a separate
- *   `manifest-plugins.config.json`, which is easy to forget and easy
- *   to drift from the example.
+ * Why copy-on-missing (not unconditional overwrite):
+ *   The previous version wrote `manifest-plugins.config.json` on every
+ *   build, which silently overwrote any operator-edited file with the
+ *   example defaults. That made per-build disable config impossible to
+ *   keep around and — more importantly — it caused the CI e2e gate to
+ *   disable the `anthropic-models-fix` plugin automatically (because the
+ *   example file shipped with that plugin disabled), which then failed
+ *   the smoke test that asserts the plugin's `overrideModelList()` is
+ *   present in the built image.
  *
- *   To keep `config.example.json` as the single source of truth for
- *   plugin enablement defaults AND ensure the build actually consumes
- *   those defaults, every build runs this script which:
+ *   Copy-on-missing fixes both problems:
  *
- *     1. Reads `config.example.json` (parsed as JSON).
- *     2. Strips keys whose name starts with `_` (the doc/schema keys).
- *     3. Writes the result to `manifest-plugins.config.json`.
+ *     - On a fresh checkout (no `manifest-plugins.config.json` present)
+ *       the example's defaults are copied once. The operator can then
+ *       edit the materialized file to flip plugin enablement for their
+ *       local builds without losing those edits to the next build.
  *
- * Behavior:
- *   - Unconditional overwrite on every build. Operators wanting a
- *     one-off override for a single local build should edit
- *     `config.example.json` (committed) or set the `MANIFEST_PLUGINS_DISABLED`
- *     env var at runtime instead — both survive the next build.
+ *     - On subsequent builds (or in CI, which never sees the file on a
+ *       clean checkout) the file is left untouched. CI therefore builds
+ *       with **no** plugin-config overrides — meaning every plugin that
+ *       shipped with `enabledByDefault: true` in its source metadata
+ *       stays enabled and the e2e gate stays green.
  *
- * Run automatically via `npm run build`. Idempotent.
+ * Stripping:
+ *   Keys whose name starts with `_` (the doc/schema keys, e.g.
+ *   `_comment`, `_schema`) are removed from the copied output so they
+ *   don't reach `scripts/filter-plugins.mjs` (which validates every key
+ *   against shipped plugin ids and would reject them).
+ *
+ * Idempotent. Run automatically via `npm run build`.
  */
-
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -43,6 +48,20 @@ const repoRoot = resolve(__dirname, '..');
 const SOURCE = resolve(repoRoot, 'config.example.json');
 const TARGET = resolve(repoRoot, 'manifest-plugins.config.json');
 
+if (!existsSync(SOURCE)) {
+  throw new Error(
+    `sync-config: source not found at ${SOURCE} — cannot materialize plugin config`,
+  );
+}
+
+if (existsSync(TARGET)) {
+  console.log(
+    `[sync-config] target already exists at ${TARGET} — leaving it untouched (copy-on-missing semantics). ` +
+      `Delete the file to re-materialize from ${SOURCE}.`,
+  );
+  process.exit(0);
+}
+
 const text = readFileSync(SOURCE, 'utf-8');
 const parsed = JSON.parse(text);
 
@@ -51,14 +70,16 @@ if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
 }
 
 const stripped = {};
+let dropped = 0;
 for (const [key, value] of Object.entries(parsed)) {
-  if (key.startsWith('_')) continue;
+  if (key.startsWith('_')) {
+    dropped += 1;
+    continue;
+  }
   stripped[key] = value;
 }
 
 writeFileSync(TARGET, JSON.stringify(stripped, null, 2) + '\n', 'utf-8');
 console.log(
-  `[sync-config] wrote ${TARGET} (stripped ${
-    Object.keys(parsed).length - Object.keys(stripped).length
-  } underscore-prefixed keys)`,
+  `[sync-config] wrote ${TARGET} (stripped ${dropped} underscore-prefixed keys)`,
 );

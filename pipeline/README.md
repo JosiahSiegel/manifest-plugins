@@ -131,20 +131,34 @@ PORT=3001 make e2e IMAGE=myimage:mytag      # test on a non-default port
 
 ## Selecting a subset of plugins
 
-The plugins repo supports build-time plugin enable/disable via `config.example.json` at the repo root. The pipeline's `npm run build` step runs `scripts/sync-config.mjs` (which materializes `config.example.json` into `manifest-plugins.config.json` after stripping doc keys) and then `scripts/filter-plugins.mjs` (which flips each plugin's `enabledByDefault` field in its compiled `dist/plugins/<name>/plugin.js` to match the config). Keys in the `plugins` object are **plugin ids** (the `id` field of each plugin's metadata), not TypeScript class names. The filter validates every key against the set of shipped plugin ids and fails the build if any key is unknown.
+The plugins repo supports build-time plugin enable/disable via `manifest-plugins.config.json` at the repo root. The pipeline's `npm run build` step runs `scripts/sync-config.mjs` and then `scripts/filter-plugins.mjs`:
 
-For example, to ship an "Anthropic-billing-only" image (no Anthropic models fix):
+- `sync-config.mjs` **copies** `config.example.json` into `manifest-plugins.config.json` only when the target is missing (copy-on-missing semantics). Once materialized, your edits to `manifest-plugins.config.json` survive every subsequent build. The CI build runs against a clean checkout that has no `manifest-plugins.config.json`, so the example defaults are copied once and the build sees every shipped plugin enabled — which is required for the CI e2e gate to pass.
+- `filter-plugins.mjs` flips each plugin's `enabledByDefault` field in its compiled `dist/plugins/<name>/plugin.js` to match the config. Keys in the `plugins` object are **plugin ids** (the `id` field of each plugin's metadata), not TypeScript class names. The filter validates every key against the set of shipped plugin ids and fails the build if any key is unknown.
 
-```json
+To disable a plugin for your **local** build:
+
+```bash
+# Materialize the config from the example (only needed once — sync-config
+# will leave your file alone after this).
+rm -f manifest-plugins.config.json
+npm run build   # creates manifest-plugins.config.json from config.example.json
+
+# Flip the plugin(s) you want to disable.
+cat > manifest-plugins.config.json <<'EOF'
 {
   "plugins": {
-    "anthropic-billing-header": true,
-    "anthropic-models-fix": false
+    "anthropic-models-fix": false,
+    "show-all-router-views": true
   }
 }
+EOF
+
+# Subsequent builds will leave your edits intact and disable the plugin.
+npm run build
 ```
 
-`AnthropicModelsFixPlugin` ships disabled by default in `config.example.json` because upstream Manifest now fetches Anthropic models live from `https://api.anthropic.com/v1/models` via `provider-model-fetcher.service.ts` — the static-catalog workaround this plugin implemented is no longer needed. Re-enable the plugin only if upstream regresses and the live fetch falls behind on Anthropic catalog changes.
+The published (CI-built) image keeps `anthropic-models-fix` enabled because both the source-level default and `config.example.json` set it to `true` — disabling it locally has no effect on what CI publishes. Upstream Manifest now fetches Anthropic models live from `https://api.anthropic.com/v1/models` via `provider-model-fetcher.service.ts`, so the static-catalog workaround this plugin implemented is no longer needed for the standard image build; the plugin remains in source as a fallback for upstream regressions.
 
 ## Cleaning up old images
 
