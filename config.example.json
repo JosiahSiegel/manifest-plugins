@@ -1,13 +1,12 @@
 {
-  "_comment": "Build-time plugin exclusion config. Copy this file to `manifest-plugins.config.json` (without the `_comment` field) and edit the boolean values. Default: all plugins enabled. If `manifest-plugins.config.json` is absent, the build emits all plugins.",
+  "_comment": "Build-time plugin exclusion config. Copy this file to `manifest-plugins.config.json` (without the `_comment` field) and edit the boolean values. Default: all plugins enabled. If `manifest-plugins.config.json` is absent, the build emits all plugins. Plugin keys are the `id` field of each plugin's metadata (e.g. 'anthropic-models-fix'), NOT the TypeScript class name. The 'anthropic-models-fix' plugin is disabled by default because upstream Manifest now fetches Anthropic models live from https://api.anthropic.com/v1/models via provider-model-fetcher.service.ts, so the static-catalog workaround this plugin implemented is no longer needed. Re-enable it only if upstream regresses and the live fetch falls behind on Anthropic catalog changes.",
   "_schema": {
     "plugins": {
-      "<ClassName>": "boolean (true to include, false to exclude)"
+      "<plugin-id>": "boolean (true to include, false to exclude)"
     }
   },
   "plugins": {
-    "AnthropicBillingHeaderPlugin": true,
-    "AnthropicModelsFixPlugin": true,
-    "ShowAllRouterViewsPlugin": true
+    "anthropic-models-fix": false,
+    "show-all-router-views": true
   }
 }
