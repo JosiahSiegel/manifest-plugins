@@ -1,11 +1,10 @@
 import {
   installedPlugins,
   ShowAllRouterViewsPlugin,
-  AnthropicModelsFixPlugin,
 } from '../src/index';
 
 describe('plugin registry', () => {
-  it('exports the two remaining built-in plugins', () => {
+  it('exports the one remaining built-in plugin', () => {
     // The fork previously shipped four built-in plugins:
     //   - DefaultPolicyPlugin       (retired 2026-07-10 — duplicated
     //                                 upstream's hardcoded CONCURRENCY_MAX)
@@ -14,22 +13,23 @@ describe('plugin registry', () => {
     //                                 header-tier precedence over explicit
     //                                 `body.model` directly in proxy.service.ts
     //                                 and resolve.service.ts)
+    //   - AnthropicModelsFixPlugin  (retired — upstream Manifest now
+    //                                 fetches Anthropic models live from
+    //                                 https://api.anthropic.com/v1/models,
+    //                                 so the static-catalog workaround this
+    //                                 plugin implemented is no longer needed
+    //                                 for the standard image build)
     //   - ShowAllRouterViewsPlugin  (still shipped — see plugin source)
-    //   - AnthropicModelsFixPlugin  (still shipped — see plugin source)
     //
     // Tests assert against `installedPlugins` (always-shipped, regardless
     // of runtime toggle) rather than `plugins` (the enabled-only subset
     // consumed by the host), so a plugin disabled by `manifest-plugins.config.json`
     // (`enabled: false`) still appears here.
-    expect(installedPlugins).toHaveLength(2);
+    expect(installedPlugins).toHaveLength(1);
   });
 
   it('includes the ShowAllRouterViewsPlugin', () => {
     expect(installedPlugins).toContainEqual(expect.any(ShowAllRouterViewsPlugin));
-  });
-
-  it('includes the AnthropicModelsFixPlugin', () => {
-    expect(installedPlugins).toContainEqual(expect.any(AnthropicModelsFixPlugin));
   });
 
   it('freezes the registry to prevent runtime mutation', () => {

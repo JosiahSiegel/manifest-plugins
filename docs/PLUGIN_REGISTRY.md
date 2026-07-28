@@ -84,8 +84,8 @@ picks it up automatically after the next build.
 > `pipeline/e2e-test.sh` plugin-registry smoke (always-on, no flag
 > required) catches this exact regression: it `require()`s
 > `/app/node_modules/manifest-plugins` inside the app container and
-> asserts that `getInstalledPlugins()` is non-empty and that
-> `AnthropicModelsFixPlugin.overrideModelList()` is callable.
+> asserts that `getInstalledPlugins()` is non-empty and that the
+> `show-all-router-views` plugin is enabled.
 
 See `src/registry/discover.ts::discoverPlugins` for the implementation
 and `src/registry/discover.spec.ts` for the contract tests.
@@ -192,7 +192,6 @@ import { getInstalledPlugins } from 'manifest-plugins';
 
 const installed = getInstalledPlugins();
 // [
-//   { id: 'anthropic-models-fix',     kind: 'model-list-override', enabled: true, … },
 //   { id: 'show-all-router-views',    kind: 'dashboard-transform',  enabled: true, … },
 // ]
 ```

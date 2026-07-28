@@ -61,7 +61,6 @@ function usage() {
       '  npm run new-plugin -- tier-router --kind=routing-override',
       '  npm run new-plugin -- rate-cap --kind=policy',
       '  npm run new-plugin -- my-dashboard --kind=dashboard-transform',
-      '  npm run new-plugin -- anthropic-models-fix --kind=model-list-override',
       '',
     ].join('\n'),
   );

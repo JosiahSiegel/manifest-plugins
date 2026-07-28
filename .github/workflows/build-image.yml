@@ -150,8 +150,8 @@ jobs:
         # When BOTH secrets are set, this step writes the local config and
         # exports GIT_TOKEN so the fetch script can clone private repos.
         # When either is missing, this step is a no-op and the build uses
-        # only the in-tree plugins (anthropic-models-fix, show-all-router-views,
-        # and any committed entries in external-plugins.json).
+        # only the in-tree plugin (show-all-router-views, plus any committed
+        # entries in external-plugins.json).
         #
         # Public forks without these secrets: this step skips silently,
         # the build proceeds with whatever's in the public repo. No access

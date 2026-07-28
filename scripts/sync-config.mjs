@@ -10,11 +10,7 @@
  *   The previous version wrote `manifest-plugins.config.json` on every
  *   build, which silently overwrote any operator-edited file with the
  *   example defaults. That made per-build disable config impossible to
- *   keep around and — more importantly — it caused the CI e2e gate to
- *   disable the `anthropic-models-fix` plugin automatically (because the
- *   example file shipped with that plugin disabled), which then failed
- *   the smoke test that asserts the plugin's `overrideModelList()` is
- *   present in the built image.
+ *   keep around.
  *
  *   Copy-on-missing fixes both problems:
  *

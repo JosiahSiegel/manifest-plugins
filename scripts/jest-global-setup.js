@@ -21,7 +21,6 @@ const { join } = require('node:path');
 
 const IN_TREE_PLUGIN_DIRS = new Set([
   'show-all-router-views',
-  'anthropic-models-fix',
 ]);
 
 module.exports = async function jestGlobalSetup() {
@@ -30,7 +29,7 @@ module.exports = async function jestGlobalSetup() {
 
   // Always start from a clean in-tree baseline. If a previous build or
   // opt-in run left external plugin sources under src/plugins/, wipe
-  // them so unit tests see a deterministic two-plugin registry.
+  // them so unit tests see a deterministic single-plugin registry.
   if (existsSync(pluginsDir)) {
     for (const child of readdirSync(pluginsDir)) {
       if (IN_TREE_PLUGIN_DIRS.has(child)) continue;

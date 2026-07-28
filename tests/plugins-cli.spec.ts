@@ -67,12 +67,11 @@ describe('plugins-cli operator CLI', () => {
         MANIFEST_PLUGINS_STATE_FILE: tempFile,
       });
       expect(result.status).toBe(0);
-      // The two remaining in-tree plugins. External plugins (e.g.
+      // The single in-tree plugin. External plugins (e.g.
       // anthropic-billing-header) are NOT listed here unless the
       // operator fetched them via external-plugins.local.json and the
       // auto-discovery picked them up at build time.
       expect(result.stdout).toContain('show-all-router-views');
-      expect(result.stdout).toContain('anthropic-models-fix');
       // The header row must include the ENABLED column so the column
       // layout is intentional.
       expect(result.stdout).toMatch(/ENABLED/);
@@ -81,7 +80,6 @@ describe('plugins-cli operator CLI', () => {
     // constant to its value so the KIND column shows the real
     // kind instead of "unknown". Regression lock.
     expect(result.stdout).toMatch(/dashboard-transform/);
-    expect(result.stdout).toMatch(/model-list-override/);
     } finally {
       rmSync(join(tempFile, '..'), { recursive: true, force: true });
     }

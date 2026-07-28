@@ -148,8 +148,7 @@ npm run build   # creates manifest-plugins.config.json from config.example.json
 cat > manifest-plugins.config.json <<'EOF'
 {
   "plugins": {
-    "anthropic-models-fix": false,
-    "show-all-router-views": true
+    "show-all-router-views": false
   }
 }
 EOF
@@ -158,7 +157,7 @@ EOF
 npm run build
 ```
 
-The published (CI-built) image keeps `anthropic-models-fix` enabled because both the source-level default and `config.example.json` set it to `true` — disabling it locally has no effect on what CI publishes. Upstream Manifest now fetches Anthropic models live from `https://api.anthropic.com/v1/models` via `provider-model-fetcher.service.ts`, so the static-catalog workaround this plugin implemented is no longer needed for the standard image build; the plugin remains in source as a fallback for upstream regressions.
+The published (CI-built) image keeps `show-all-router-views` enabled because both the source-level default and `config.example.json` set it to `true` — disabling it locally has no effect on what CI publishes.
 
 ## Cleaning up old images
 

@@ -12,7 +12,7 @@ this repo, without maintaining your own Manifest fork.
 ## What you get
 
 - The upstream Manifest app, packaged as `ghcr.io/josiahsiegel/manifest-with-plugins`.
-- Two built-in plugins: `AnthropicModelsFixPlugin`, `ShowAllRouterViewsPlugin`. Enable, disable, or add your own at runtime. See [Manage plugins](#manage-plugins). For private plugins (e.g. ones living in a private repo), use the external-plugins loader — see [External plugins](docs/EXTERNAL_PLUGINS.md).
+- One built-in plugin: `ShowAllRouterViewsPlugin`. Enable, disable, or add your own at runtime. See [Manage plugins](#manage-plugins). For private plugins (e.g. ones living in a private repo), use the external-plugins loader — see [External plugins](docs/EXTERNAL_PLUGINS.md).
 - A build pipeline that only promotes `latest` after the image passes the end-to-end dashboard test.
 
 ## Quick start

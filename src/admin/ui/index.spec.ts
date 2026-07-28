@@ -18,10 +18,10 @@
  * the spec file does the same so both compile under the existing config.
  *
  * NOTE: The UI is generic — it renders whatever plugins the API returns.
- * The fixture below uses only the in-tree plugins (anthropic-models-fix,
- * show-all-router-views). External plugins like anthropic-billing-header
- * can be added by the operator via external-plugins.local.json — the UI
- * shows them transparently.
+ * The fixture below uses only the in-tree plugin (show-all-router-views).
+ * External plugins like anthropic-billing-header can be added by the
+ * operator via external-plugins.local.json — the UI shows them
+ * transparently.
  */
 import '@testing-library/jest-dom';
 import { act, cleanup, screen, waitFor } from '@testing-library/react';
@@ -48,15 +48,6 @@ function jsonResponse(body: unknown, status = 200): FetchResponseLike {
 }
 
 const SAMPLE_PLUGINS: readonly PluginMetadata[] = [
-  {
-    id: 'anthropic-models-fix',
-    name: 'Anthropic models fix',
-    version: '0.3.0',
-    description: 'Anthropic model list override.',
-    kind: 'model-list-override',
-    enabledByDefault: true,
-    enabled: true,
-  },
   {
     id: 'show-all-router-views',
     name: 'Show all router views',
@@ -138,17 +129,12 @@ describe('PluginManager UI', () => {
 
     // Then: each plugin name and a checkbox is rendered, with the right
     // initial checked state.
-    expect(screen.getByText('Anthropic models fix')).toBeTruthy();
     expect(screen.getByText('Show all router views')).toBeTruthy();
-    const anthropicCheckbox = screen.getByTestId(
-      'plugin-toggle-anthropic-models-fix',
-    ) as HTMLInputElement;
     const routerCheckbox = screen.getByTestId(
       'plugin-toggle-show-all-router-views',
     ) as HTMLInputElement;
-    expect(anthropicCheckbox.tagName).toBe('INPUT');
-    expect(anthropicCheckbox.type).toBe('checkbox');
-    expect(anthropicCheckbox.checked).toBe(true);
+    expect(routerCheckbox.tagName).toBe('INPUT');
+    expect(routerCheckbox.type).toBe('checkbox');
     expect(routerCheckbox.checked).toBe(true);
   });
 
@@ -225,10 +211,10 @@ describe('PluginManager UI', () => {
 
     // When: the checkbox is clicked (initial value: checked=true), the
     // optimistic update flips it to false, and the PATCH fails.
-    const policyCheckbox = screen.getByTestId(
-      'plugin-toggle-anthropic-models-fix',
+    const routerCheckbox = screen.getByTestId(
+      'plugin-toggle-show-all-router-views',
     ) as HTMLInputElement;
-    expect(policyCheckbox.checked).toBe(true);
+    expect(routerCheckbox.checked).toBe(true);
 
     // Suppress the expected unhandled rejection from the PATCH promise
     // (the component catches it internally with .catch; we still drain
@@ -237,7 +223,7 @@ describe('PluginManager UI', () => {
     process.on('unhandledRejection', rejectionHandler);
     try {
       await act(async () => {
-        policyCheckbox.click();
+        routerCheckbox.click();
         // Allow the optimistic update to flush, then the .catch handler.
         await Promise.resolve();
         await Promise.resolve();
@@ -252,7 +238,7 @@ describe('PluginManager UI', () => {
     }
 
     // Then: the checkbox is reverted to checked=true.
-    expect(policyCheckbox.checked).toBe(true);
+    expect(routerCheckbox.checked).toBe(true);
   });
 
   it('polls /api/plugins again after 5 seconds', async () => {
@@ -301,10 +287,7 @@ describe('PluginManager UI', () => {
     mountPluginManager(target);
     await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
 
-    // Both plugin kinds must render a kind pill with the right text.
-    expect(screen.getByTestId('plugin-kind-anthropic-models-fix')).toHaveTextContent(
-      'model-list-override',
-    );
+    // The plugin's kind must render a kind pill with the right text.
     expect(screen.getByTestId('plugin-kind-show-all-router-views')).toHaveTextContent(
       'dashboard-transform',
     );
