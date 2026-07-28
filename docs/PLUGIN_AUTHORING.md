@@ -158,23 +158,30 @@ inspected.
 
 ## Build-time toggle (`manifest-plugins.config.json`)
 
-Every plugin ships enabled by default. To disable a plugin without
-removing its file, copy `config.example.json` to
-`manifest-plugins.config.json` and set the class name to `false`:
+Every shipped plugin's `enabledByDefault` flag is `true` unless the
+plugin's source metadata overrides it. To disable a plugin for your
+**local** build without removing its file, materialize
+`manifest-plugins.config.json` from the example (delete the file
+first; `scripts/sync-config.mjs` re-creates it from `config.example.json`
+on the next build) and set the plugin id to `false`:
 
 ```json
 {
   "plugins": {
-    "AnthropicBillingHeaderPlugin": true,
-    "AnthropicModelsFixPlugin": true,
-    "ShowAllRouterViewsPlugin": false
+    "anthropic-billing-header": true,
+    "anthropic-models-fix": true,
+    "show-all-router-views": false
   }
 }
 ```
 
-Then rebuild (`npm run build`). The `filter-plugins.mjs` post-build
-script rewrites `dist/index.js`'s registry to mark disabled plugins
-`enabledByDefault: false`. See [`PLUGIN_REGISTRY.md`](PLUGIN_REGISTRY.md#runtime-toggle)
+Keys are **plugin ids** (the `id` field of each plugin's metadata), not
+TypeScript class names. Then rebuild (`npm run build`). The
+`filter-plugins.mjs` post-build script rewrites each affected plugin's
+compiled `dist/plugins/<id>/plugin.js` to flip its `enabledByDefault`
+field to match the config. `sync-config.mjs` is copy-on-missing, so
+your edits to `manifest-plugins.config.json` survive every subsequent
+build. See [`PLUGIN_REGISTRY.md`](PLUGIN_REGISTRY.md#build-time-toggle-manifest-pluginsconfigjson)
 for the difference between build-time and runtime toggle.
 
 ## Runtime toggle (`setPluginEnabled`)

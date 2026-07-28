@@ -481,6 +481,18 @@ export interface PluginMetadata {
   readonly version: string;
   readonly description: string;
   readonly kind: PluginKind;
+  /**
+   * Whether the plugin is enabled by default at startup. Operators can
+   * flip this for the published image via `manifest-plugins.config.json`
+   * (build-time) or via the `MANIFEST_PLUGINS_DISABLED` env var / the
+   * persisted plugin state (runtime). Defaults to `true` if absent.
+   *
+   * Plugins that should ship dormant — e.g. workarounds for upstream
+   * bugs that may have been fixed in a later Manifest release — should
+   * declare `enabledByDefault: false` in their static metadata. Build-time
+   * exclusion via `manifest-plugins.config.json` overrides this field.
+   */
+  readonly enabledByDefault?: boolean;
 }
 
 export interface InstalledPluginMetadata extends PluginMetadata {
@@ -517,7 +529,12 @@ function loadPluginRegistry(): readonly PluginRegistryEntry[] {
         pluginClassName: entry.pluginClassName,
         metadata: entry.metadata,
         instance: entry.instance,
-        enabledByDefault: true,
+        // Per-plugin default. The optional `enabledByDefault` field on
+        // `PluginMetadata` lets a plugin ship dormant (e.g. workarounds
+        // for upstream bugs that may already be fixed). If the plugin
+        // omits the field, treat it as enabled — backward-compatible
+        // with plugins that pre-date this field.
+        enabledByDefault: entry.metadata.enabledByDefault ?? true,
       }),
     ),
   );

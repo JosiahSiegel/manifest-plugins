@@ -1,5 +1,5 @@
 import {
-  plugins,
+  installedPlugins,
   ShowAllRouterViewsPlugin,
   AnthropicModelsFixPlugin,
 } from '../src/index';
@@ -16,26 +16,31 @@ describe('plugin registry', () => {
     //                                 and resolve.service.ts)
     //   - ShowAllRouterViewsPlugin  (still shipped — see plugin source)
     //   - AnthropicModelsFixPlugin  (still shipped — see plugin source)
-    expect(plugins).toHaveLength(2);
+    //
+    // Tests assert against `installedPlugins` (always-shipped, regardless
+    // of runtime toggle) rather than `plugins` (the enabled-only subset
+    // consumed by the host), so a plugin disabled by `manifest-plugins.config.json`
+    // (`enabled: false`) still appears here.
+    expect(installedPlugins).toHaveLength(2);
   });
 
   it('includes the ShowAllRouterViewsPlugin', () => {
-    expect(plugins).toContainEqual(expect.any(ShowAllRouterViewsPlugin));
+    expect(installedPlugins).toContainEqual(expect.any(ShowAllRouterViewsPlugin));
   });
 
   it('includes the AnthropicModelsFixPlugin', () => {
-    expect(plugins).toContainEqual(expect.any(AnthropicModelsFixPlugin));
+    expect(installedPlugins).toContainEqual(expect.any(AnthropicModelsFixPlugin));
   });
 
   it('freezes the registry to prevent runtime mutation', () => {
-    expect(Object.isFrozen(plugins)).toBe(true);
+    expect(Object.isFrozen(installedPlugins)).toBe(true);
   });
 
   it('does not allow mutating the frozen plugins array', () => {
     expect(() => {
       // Cast to any because TypeScript prevents this at compile time;
       // the runtime freeze is what we actually exercise.
-      (plugins as unknown as { push: (p: unknown) => void }).push({} as never);
+      (installedPlugins as unknown as { push: (p: unknown) => void }).push({} as never);
     }).toThrow();
   });
 });

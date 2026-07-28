@@ -1,13 +1,12 @@
 {
-  "_comment": "Build-time plugin exclusion config. Copy this file to `manifest-plugins.config.json` (without the `_comment` field) and edit the boolean values. Default: all plugins enabled. If `manifest-plugins.config.json` is absent, the build emits all plugins.",
+  "_comment": "Build-time plugin enablement config. Build scripts COPY this file to `manifest-plugins.config.json` only when the target is missing (copy-on-missing); once materialized, operator edits to `manifest-plugins.config.json` are preserved across builds. If `manifest-plugins.config.json` is absent at build time, the build emits every plugin whose source metadata ships with `enabledByDefault: true` (the default). Plugin keys are the `id` field of each plugin's metadata (e.g. 'anthropic-models-fix'), NOT the TypeScript class name. To disable a plugin in your local build, materialize this file (delete any existing `manifest-plugins.config.json` and rebuild) and flip that plugin's value to `false` — subsequent builds will leave your edits intact. The e2e smoke test in `pipeline/e2e-test.sh` hard-asserts that `anthropic-models-fix` is enabled in the built image, so disabling it locally will make `make e2e` fail unless you also adjust the e2e script (see `docs/TROUBLESHOOTING.md`).",
   "_schema": {
     "plugins": {
-      "<ClassName>": "boolean (true to include, false to exclude)"
+      "<plugin-id>": "boolean (true to include, false to exclude)"
     }
   },
   "plugins": {
-    "AnthropicBillingHeaderPlugin": true,
-    "AnthropicModelsFixPlugin": true,
-    "ShowAllRouterViewsPlugin": true
+    "anthropic-models-fix": true,
+    "show-all-router-views": true
   }
 }

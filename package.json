@@ -16,7 +16,7 @@
     "src/host/apply.ts"
   ],
   "scripts": {
-    "build": "node scripts/fetch-external-plugins.mjs && tsc -p tsconfig.json && find dist -type f \\( -name '*.spec.js' -o -name '*.spec.d.ts' -o -name '*.spec.js.map' -o -name '*.spec.d.ts.map' \\) -delete && node scripts/filter-plugins.mjs && node scripts/vendor-hash-wasm.mjs && node scripts/build-overlay.mjs && node scripts/build-admin-ui.mjs",
+    "build": "node scripts/fetch-external-plugins.mjs && tsc -p tsconfig.json && find dist -type f \\( -name '*.spec.js' -o -name '*.spec.d.ts' -o -name '*.spec.js.map' -o -name '*.spec.d.ts.map' \\) -delete && node scripts/sync-config.mjs && node scripts/filter-plugins.mjs && node scripts/vendor-hash-wasm.mjs && node scripts/build-overlay.mjs && node scripts/build-admin-ui.mjs",
     "build:overlay": "node scripts/build-overlay.mjs",
     "fetch:external-plugins": "node scripts/fetch-external-plugins.mjs",
     "clean": "rimraf dist coverage .tsbuildinfo",

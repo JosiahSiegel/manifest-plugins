@@ -93,29 +93,50 @@ and `src/registry/discover.spec.ts` for the contract tests.
 ## Build-time toggle (`manifest-plugins.config.json`)
 
 Each plugin's `enabledByDefault` flag is set at build time by
-`scripts/filter-plugins.mjs::annotateEnabledDefaults`. The script:
+`scripts/filter-plugins.mjs`. The script:
 
 1. Reads `manifest-plugins.config.json` (if present) from the repo root.
-2. Walks `dist/plugins/*/plugin.js` for `exports.<ClassName> = ...` declarations.
-3. For each plugin the user disabled in the config, flips its
-   `enabledByDefault: true` → `enabledByDefault: false` in `dist/index.js`.
+2. Walks `dist/plugins/*/plugin.js` for each plugin's compiled metadata.
+3. For each plugin the operator disabled in the config, flips its
+   `enabledByDefault: true` → `enabledByDefault: false` in
+   `dist/plugins/<id>/plugin.js` (or `true` → `true` / `false` →
+   `false` to assert the existing value).
 
 The plugin CLASS still ships in `dist/`; only the default-enabled
 state changes. Operators can re-enable a disabled plugin at runtime
 via `setPluginEnabled` (see below).
 
-To disable a plugin at build time:
+`scripts/sync-config.mjs` materializes `config.example.json` into
+`manifest-plugins.config.json` **only when the target file is missing**
+(copy-on-missing). On a fresh checkout, the example's defaults are
+copied once. On subsequent builds — and in CI, where the file is
+never present at the start of the run — the file is left untouched,
+so operator edits survive every build.
 
-```json
+To disable a plugin for a **local** build:
+
+```bash
+# Materialize the config from the example (only needed the first time —
+# sync-config leaves your file alone after this).
+rm -f manifest-plugins.config.json
+npm run build
+
+# Edit the materialized file to disable a plugin.
+cat > manifest-plugins.config.json <<'EOF'
 {
   "plugins": {
-    "AnthropicBillingHeaderPlugin": true,
-    "AnthropicModelsFixPlugin": true,
-    "ShowAllRouterViewsPlugin": false
+    "show-all-router-views": false
   }
 }
+EOF
+
+# Subsequent builds will leave your edits intact.
+npm run build
 ```
 
+Keys are **plugin ids** (the `id` field of each plugin's metadata), not
+TypeScript class names. The filter validates every key against the
+set of shipped plugin ids and fails the build if any key is unknown.
 Then rebuild: `npm run build`.
 
 ## Runtime toggle (`setPluginEnabled`)
@@ -207,9 +228,14 @@ interface PluginMetadata {
 }
 ```
 
-The runtime toggle is keyed by `metadata.id`. The build-time filter is
-keyed by class name (because that is what `manifest-plugins.config.json`
-uses). Both must be unique across the registry.
+The runtime toggle is keyed by `metadata.id`. The build-time filter
+(`scripts/filter-plugins.mjs`) is also keyed by `metadata.id` — it
+walks `dist/plugins/<name>/plugin.js`, extracts the `id: '...'` field
+from each compiled metadata literal, and rewrites the nearest
+following `enabledByDefault: true,` to `enabledByDefault: false,`
+when the id appears with `false` in `manifest-plugins.config.json`
+(materialized from `config.example.json` by `scripts/sync-config.mjs`).
+Both must be unique across the registry.
 
 ## `MANIFEST_PLUGINS_DISABLED` env var
 

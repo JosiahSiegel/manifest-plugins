@@ -33,6 +33,14 @@ junit.xml
 # and edit.
 external-plugins.local.json
 
+# Materialized from config.example.json at build time by
+# scripts/sync-config.mjs. The example file is the source of truth;
+# this file is gitignored so the build always regenerates it from the
+# canonical example. To override defaults permanently, edit
+# config.example.json. sync-config.mjs unconditionally overwrites this
+# file on every build, so manual edits here do not survive.
+manifest-plugins.config.json
+
 # Local config
 .env
 .env.local

@@ -77,6 +77,9 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
+    // Both shipped plugins are enabled by default; persisting
+    // show-all-router-views=false leaves only AnthropicModelsFixPlugin
+    // enabled at runtime.
     expect(mod!.plugins).toHaveLength(1);
     expect(mod!.plugins).not.toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
     expect(mod!.plugins).toContainEqual(expect.any(mod!.AnthropicModelsFixPlugin));
@@ -99,10 +102,13 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     const mlop = installed.find((p) => p.id === 'anthropic-models-fix');
     expect(mlop).toBeDefined();
     expect(mlop!.enabled).toBe(true);
+    // `enabledByDefault` reflects the source-declared default. Both shipped
+    // plugins are enabled by default; AnthropicModelsFixPlugin can be
+    // disabled per-build via `manifest-plugins.config.json` (copy-on-missing).
     expect(mlop!.enabledByDefault).toBe(true);
   });
 
-  it('falls back to all-defaults when the state file is missing', () => {
+  it('falls back to per-plugin defaults when the state file is missing', () => {
     // stateFile was set but never written — boot must treat it as a no-op.
     let mod: LoadedModule;
     jest.isolateModules(() => {
@@ -110,12 +116,18 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
+    // Both shipped plugins are enabled by default (the standard image
+    // build ships with anthropic-models-fix enabled to satisfy the CI
+    // e2e gate; local builds can disable it via
+    // `manifest-plugins.config.json`).
     expect(mod!.plugins).toHaveLength(2);
     const installed = mod!.getInstalledPlugins();
-    for (const p of installed) {
-      expect(p.enabled).toBe(true);
-      expect(p.enabledByDefault).toBe(true);
-    }
+    const sarv = installed.find((p) => p.id === 'show-all-router-views');
+    expect(sarv!.enabled).toBe(true);
+    expect(sarv!.enabledByDefault).toBe(true);
+    const mlop = installed.find((p) => p.id === 'anthropic-models-fix');
+    expect(mlop!.enabled).toBe(true);
+    expect(mlop!.enabledByDefault).toBe(true);
   });
 
   it('exposes getPersistedStateFile() reading the env var (and a default when unset)', () => {
@@ -133,7 +145,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       stateFile,
       JSON.stringify({
         'show-all-router-views': false,
-        'anthropic-models-fix': false,
+        'anthropic-models-fix': true,
       }) + '\n',
       'utf-8',
     );
@@ -144,19 +156,24 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    // Boot has dropped both plugins from the runtime array.
-    expect(mod!.plugins).toHaveLength(0);
+    // Boot has dropped show-all-router-views (persisted false) and
+    // added anthropic-models-fix (persisted true). Net effect: still
+    // exactly one enabled plugin.
+    expect(mod!.plugins).toHaveLength(1);
 
     mod!.resetPersistedPluginState();
 
     expect(existsSync(stateFile)).toBe(false);
 
+    // After reset: per-plugin defaults are restored. Both shipped plugins
+    // are back to enabled by default.
     const installed = mod!.getInstalledPlugins();
-    for (const p of installed) {
-      expect(p.enabled).toBe(true);
-      expect(p.enabledByDefault).toBe(true);
-    }
-    // Every plugin is back in the runtime array.
+    const sarv = installed.find((p) => p.id === 'show-all-router-views');
+    expect(sarv!.enabled).toBe(true);
+    expect(sarv!.enabledByDefault).toBe(true);
+    const mlop = installed.find((p) => p.id === 'anthropic-models-fix');
+    expect(mlop!.enabled).toBe(true);
+    expect(mlop!.enabledByDefault).toBe(true);
     expect(mod!.plugins).toHaveLength(2);
   });
 });
