@@ -107,7 +107,7 @@ Verify the plugin is actually loaded:
 ```bash
 docker run --rm -p 2099:2099 <image> /nodejs/bin/node -e \
   'console.log(require("/app/node_modules/manifest-plugins/dist/index.js").plugins.map(p => p.constructor.name))'
-# Expected: [ 'AnthropicBillingHeaderPlugin', 'AnthropicModelsFixPlugin', 'ShowAllRouterViewsPlugin' ]
+# Expected: [ 'AnthropicBillingHeaderPlugin', 'ShowAllRouterViewsPlugin' ]
 # (To disable a plugin locally, materialize `manifest-plugins.config.json`
 # from `config.example.json` and set its id to `false` — see
 # `docs/PLUGIN_REGISTRY.md` for the copy-on-missing workflow.)
@@ -167,7 +167,7 @@ Verify with:
 
 ```bash
 node -e "console.log(require('./dist/index.js').getInstalledPlugins().map(p => p.id))"
-# Expected: [ 'anthropic-models-fix', 'show-all-router-views', '<your-id>' ]
+# Expected: [ 'show-all-router-views', '<your-id>' ]
 ```
 
 ### `npm run new-plugin` exits with code 2
@@ -194,11 +194,11 @@ each plugin's `id: '...'` field, and validates the config against that set.
 A typo here causes the build script to error out:
 
 ```
-manifest-plugins.config.json: unknown plugin id "anthropic-billing-plugin" — shipped plugins are: anthropic-billing-header, anthropic-models-fix, show-all-router-views. (Plugin ids are the 'id' field of each plugin's metadata, not the class name.)
+manifest-plugins.config.json: unknown plugin id "anthropic-billing-plugin" — shipped plugins are: anthropic-billing-header, show-all-router-views. (Plugin ids are the 'id' field of each plugin's metadata, not the class name.)
 ```
 
-Note: keys are lowercase-with-dashes (`anthropic-models-fix`), not
-PascalCase (`AnthropicModelsFixPlugin`).
+Note: keys are lowercase-with-dashes (`show-all-router-views`), not
+PascalCase (`ShowAllRouterViewsPlugin`).
 
 ### Plugin works locally but not in the image
 

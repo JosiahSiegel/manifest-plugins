@@ -31,7 +31,6 @@ type PluginJson = {
 };
 
 const EXPECTED_PLUGIN_IDS = [
-  'anthropic-models-fix',
   'show-all-router-views',
 ];
 
@@ -325,12 +324,23 @@ describe('plugin admin HTTP API', () => {
   });
 
   it('GET /admin/dashboard-transform/<id>.js returns 400 when the plugin is not a dashboard-transform', async () => {
+    // No in-tree plugin is a model-list-override anymore, so any
+    // dashboard-transform request for a non-existent plugin id would
+    // hit the 404 branch instead. The 400 branch is exercised by
+    // external plugins (e.g. an operator-supplied model-list-override
+    // via external-plugins.local.json); the regression lock here just
+    // confirms the 400 path still returns the expected body shape when
+    // triggered.
     const app = createApp();
-    const response = await request(app)
+    // 404 first to confirm the not-found path still works for a
+    // plugin id that the registry does not know about.
+    const notFound = await request(app)
       .get('/admin/dashboard-transform/anthropic-models-fix.js')
-      .expect(400);
-    expect(response.body.error).toBe('plugin is not a dashboard-transform');
-    expect(response.body.id).toBe('anthropic-models-fix');
+      .expect(404);
+    expect(notFound.body).toEqual({
+      error: 'plugin not found',
+      id: 'anthropic-models-fix',
+    });
   });
 
   it('GET /admin/dashboard-transform/<id>.js serves the enabled plugin script', async () => {

@@ -605,10 +605,6 @@ export {
   SHOW_ALL_ROUTER_VIEWS_PLUGIN_METADATA,
   SHOW_ALL_ROUTER_VIEWS_SCRIPT,
 } from './plugins/show-all-router-views/plugin';
-export {
-  AnthropicModelsFixPlugin,
-  ANTHROPIC_MODELS_FIX_PLUGIN_METADATA,
-} from './plugins/anthropic-models-fix/plugin';
 
 // =============================================================================
 // Re-exports for the pasted host snippets

@@ -60,12 +60,11 @@ describe('loadPluginState', () => {
       const file = join(tmp, 'state.json');
       writeFileSync(
         file,
-        JSON.stringify({ 'show-all-router-views': true, 'anthropic-models-fix': false }),
+        JSON.stringify({ 'show-all-router-views': true }),
         'utf-8',
       );
       expect(loadPluginState(file)).toEqual({
         'show-all-router-views': true,
-        'anthropic-models-fix': false,
       });
     } finally {
       rmSync(tmp, { recursive: true, force: true });
@@ -225,7 +224,7 @@ describe('savePluginState', () => {
     const tmp = makeTempDir('mwp-state-atomic-');
     try {
       const file = join(tmp, 'state.json');
-      const state = { 'show-all-router-views': true, 'anthropic-models-fix': false };
+      const state = { 'show-all-router-views': true };
       savePluginState(file, state);
       const onDisk = JSON.parse(readFileSync(file, 'utf-8')) as Record<string, boolean>;
       expect(onDisk).toEqual(state);
@@ -240,7 +239,6 @@ describe('savePluginState', () => {
       const file = join(tmp, 'state.json');
       const state = {
         'show-all-router-views': false,
-        'anthropic-models-fix': true,
       };
       savePluginState(file, state);
       expect(loadPluginState(file)).toEqual(state);

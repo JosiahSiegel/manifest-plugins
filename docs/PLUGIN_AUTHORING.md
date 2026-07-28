@@ -169,7 +169,6 @@ on the next build) and set the plugin id to `false`:
 {
   "plugins": {
     "anthropic-billing-header": true,
-    "anthropic-models-fix": true,
     "show-all-router-views": false
   }
 }

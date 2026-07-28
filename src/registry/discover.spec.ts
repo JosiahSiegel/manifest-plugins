@@ -68,17 +68,16 @@ function writeBrokenPlugin(
 }
 
 describe('discoverPlugins (filesystem enumeration)', () => {
-  it('discovers the four built-in plugins from src/plugins/', () => {
+  it('discovers the single built-in plugin from src/plugins/', () => {
     const discovered = discoverPlugins(PLUGINS_SRC_DIR);
 
     const classNames = discovered.map((entry) => entry.pluginClassName);
     expect(classNames).toEqual(
       expect.arrayContaining([
-        'AnthropicModelsFixPlugin',
         'ShowAllRouterViewsPlugin',
       ]),
     );
-    expect(discovered).toHaveLength(2);
+    expect(discovered).toHaveLength(1);
   });
 
   it('returns plugin entries with a non-empty id, kind, and instance', () => {
@@ -296,13 +295,12 @@ describe('discoverPlugins (compiled JS shape — post-tsc runtime)', () => {
     // asserted here.
     expect(classNames).toEqual(
       expect.arrayContaining([
-        'AnthropicModelsFixPlugin',
         'ShowAllRouterViewsPlugin',
       ]),
     );
     // Must discover all in-tree plugins. External plugins may add to
     // this count when present.
-    expect(discovered.length).toBeGreaterThanOrEqual(2);
+    expect(discovered.length).toBeGreaterThanOrEqual(1);
   });
 });
 
