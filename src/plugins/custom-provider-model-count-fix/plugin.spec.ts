@@ -99,4 +99,33 @@ describe('CustomProviderModelCountFixPlugin', () => {
     // (e.g. someone changing the class field but forgetting the export).
     expect(CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA.id).toBe('custom-provider-model-count-fix');
   });
+
+  it('script body contains the ConnectionDetail patcher and its URL pattern', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The ConnectionDetail patcher function must be present so the
+    // /providers/connections/<id> page gets the same fix as the
+    // per-agent list page.
+    expect(script).toContain('patchConnectionDetail');
+
+    // The URL pattern for the ConnectionDetail page. The script matches
+    // `/providers/connections/<id>` literally; we assert the regex
+    // source is present so a future rename of the route is caught.
+    expect(script).toContain('/providers\\/connections\\/');
+  });
+
+  it('script body contains the span-pair detection logic for the Models label', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The ConnectionDetail page renders fields as inline <span> pairs
+    // (label + value). The patcher walks every <span> looking for the
+    // literal "Models:" label, then patches the next-sibling <span>.
+    // Assert both the literal label and the nextElementSibling walk
+    // are present so a future refactor that switches to a different
+    // DOM strategy is caught.
+    expect(script).toContain('\'Models:\'');
+    expect(script).toContain('nextElementSibling');
+  });
 });

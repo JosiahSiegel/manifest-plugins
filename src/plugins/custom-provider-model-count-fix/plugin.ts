@@ -26,10 +26,19 @@
  *
  * ## What this plugin touches
  *
- * Strictly the Models-column `<td>` of each row in the
- * `table.data-table` on the Connections page. It also appends a
- * single `<small class="mwp-model-count-patch-note">` subtitle to
- * that same `<td>`. Nothing else in the DOM is mutated.
+ * Two surfaces:
+ *
+ * 1. The per-agent Connections page (`/harnesses/<agentName>/providers`):
+ *    the Models-column `<td>` of each row in the `table.data-table`.
+ * 2. The ConnectionDetail page (`/providers/connections/<id>`): the
+ *    `<span>` value node immediately following the
+ *    `<span>Models:</span>` label. The detail page renders fields as
+ *    inline `<span>` pairs (label + value), not as a table.
+ *
+ * Both patch sites append a single
+ * `<small class="mwp-model-count-patch-note">` subtitle so the operator
+ * can tell the value was patched client-side. Nothing else in the DOM
+ * is mutated.
  *
  * ## Idempotency strategy
  *
@@ -73,7 +82,8 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA: PluginMetadata = O
   name: 'Custom provider model count fix',
   version: '0.1.0',
   description:
-    'Patches the Connections page "0 models" badge for custom ' +
+    'Patches the Connections page "0 models" badge AND the ' +
+    'ConnectionDetail page "Models: 0" field for custom ' +
     'Anthropic-compatible providers (e.g. claude-proxy) by ' +
     're-querying /api/v1/routing/<agentName>/available-models and ' +
     'rewriting the rendered DOM count. Disabling this plugin restores ' +
@@ -91,26 +101,37 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA: PluginMetadata = O
  *   1. Bails if the dashboard-transform registry already has a
  *      `custom-provider-model-count-fix` entry (defensive: the bundle
  *      is re-evaluated on every page navigation).
- *   2. Detects whether the current page is the Connections page
- *      (`/harnesses/<agentName>/providers`) or the legacy alias
- *      (`/agents/<agentName>/providers`). On other pages the script
- *      is a no-op until the user navigates.
+ *   2. Detects whether the current page is one of:
+ *        - the per-agent Connections page
+ *          (`/harnesses/<agentName>/providers`, or the legacy alias
+ *          `/agents/<agentName>/providers`), or
+ *        - the ConnectionDetail page
+ *          (`/providers/connections/<id>`).
+ *      On other pages the script is a no-op until the user navigates.
  *   3. Fetches the real model list once from
  *      `/api/v1/routing/<agentName>/available-models`, filters rows
  *      where `provider.startsWith('custom:')`, and groups them by
  *      `provider_display_name` (the human-readable name like
- *      'claude-proxy').
- *   4. Walks every row of `table.data-table` on the page. If the
- *      provider-name `<td>` matches a custom provider's display name
- *      AND the Models `<td>` (the 4th cell) reads `0` or `-`, it
+ *      'claude-proxy'). For the ConnectionDetail page (no agent in
+ *      the URL) it uses the built-in `Playground` agent — the picker
+ *      returns ALL custom provider models regardless of agent.
+ *   4a. On the Connections page: walks every row of `table.data-table`.
+ *      If the provider-name `<td>` matches a custom provider's display
+ *      name AND the Models `<td>` (the 4th cell) reads `0` or `-`, it
  *      rewrites the cell's text content to the real count (using
  *      `textContent`, never `innerHTML`) and appends a single
  *      `<small class="mwp-model-count-patch-note">` subtitle.
- *   5. Each patched `<td>` gets `data-mwp-model-count-patched="true"`
+ *   4b. On the ConnectionDetail page: walks every `<span>` looking for
+ *      the literal `Models:` label, then patches the next-sibling
+ *      `<span>` (the value node) with the TOTAL custom-provider model
+ *      count. The detail page shows one connection at a time and the
+ *      picker returns every custom model, so the total is the right
+ *      number for the single-custom-provider case.
+ *   5. Each patched node gets `data-mwp-model-count-patched="true"`
  *      so MutationObserver-triggered re-runs skip it.
  *   6. Installs a MutationObserver on `document.body` with
  *      `{childList: true, subtree: true}` so SPA navigation back to
- *      the Connections page re-runs the patch on the fresh table.
+ *      either patched page re-runs the patch on the fresh DOM.
  */
 export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '(function () {',
@@ -136,22 +157,42 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '  // ─────────────────────────────────────────────────────────────────',
   '  // URL detection',
   '  // ─────────────────────────────────────────────────────────────────',
-  '  // The agent-scoped Connections page lives at:',
-  '  //   /harnesses/<agentName>/providers',
-  '  // (Manifest renamed /agents → /harnesses in the 6.x range. The bundle',
-  '  //  we inspected redirects /agents/<name>/* → /harnesses/<name>/*, but',
-  '  //  we match the literal path too in case the redirect is bypassed in',
-  '  //  the iframe context.)',
-  '  // We do NOT match the global /providers/* pages because they show the',
+  '  // Two page shapes are in scope:',
+  '  //',
+  '  // 1. Agent-scoped Connections page (list view):',
+  '  //      /harnesses/<agentName>/providers',
+  '  //    (Manifest renamed /agents → /harnesses in the 6.x range. The',
+  '  //     bundle we inspected redirects /agents/<name>/* → /harnesses/<name>/*,',
+  '  //     but we match the literal path too in case the redirect is bypassed',
+  '  //     in the iframe context.)',
+  '  //',
+  '  // 2. ConnectionDetail page (single-connection view):',
+  '  //      /providers/connections/<id>',
+  '  //    Renders fields as inline <span> pairs (label + value) instead',
+  '  //    of a table row, so it needs a different DOM walker.',
+  '  //',
+  '  // We do NOT match the global /providers list page — it shows the',
   '  // connections list across all auth types, and the routing-picker',
-  '  // endpoint requires a specific agent name — those pages are not in',
-  '  // scope for this plugin.',
+  '  // endpoint requires a specific agent name; that page is not in scope.',
   '  var CONNECTIONS_PATH_RE = /^\\/(?:agents|harnesses)\\/([^/]+)\\/providers\\/?$/;',
+  '  var CONNECTION_DETAIL_PATH_RE = /^\\/providers\\/connections\\/[^/]+\\/?$/;',
   '',
   '  function getConnectionsAgentName() {',
   '    var m = window.location.pathname.match(CONNECTIONS_PATH_RE);',
   '    if (!m) return null;',
   '    try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }',
+  '  }',
+  '',
+  '  // Returns the kind of page we are on so the patch router can pick',
+  '  // the right DOM walker. The ConnectionDetail URL has no agent name',
+  '  // in it; for that page we query the routing-picker endpoint with a',
+  '  // built-in agent (Playground) because the picker returns ALL custom',
+  '  // provider models regardless of which agent is named — verified',
+  '  // against the live Manifest 6.x bundle.',
+  '  function getCurrentPageKind() {',
+  '    if (getConnectionsAgentName() !== null) return \'agent-list\';',
+  '    if (CONNECTION_DETAIL_PATH_RE.test(window.location.pathname)) return \'connection-detail\';',
+  '    return \'other\';',
   '  }',
   '',
   '  // ─────────────────────────────────────────────────────────────────',
@@ -267,29 +308,100 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '    return document.querySelector(\'table.data-table\');',
   '  }',
   '',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // ConnectionDetail DOM patch',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // The ConnectionDetail page (`/providers/connections/<id>`) renders',
+  '  // each field as an inline <span> pair:',
+  '  //   <span>',
+  '  //     <span style="font-weight:600;...">Models:</span>',
+  '  //     \' \',',
+  '  //     <span style="color:hsl(var(--muted-foreground))">{count}</span>',
+  '  //   </span>',
+  '  // (Verified against ConnectionDetail-nZtX-q3D.js in the Manifest 6.x',
+  '  //  frontend bundle.) There is no table, no data-testid, and no',
+  '  //  provider name on the same line — so we cannot use the countsByName',
+  '  //  join. Instead we use the TOTAL custom-provider model count: the',
+  '  //  detail page only ever shows one custom connection at a time, and',
+  '  //  the routing-picker endpoint returns every custom provider model',
+  '  //  regardless of agent, so the total is the right number for the',
+  '  //  common single-custom-provider case. If multiple custom providers',
+  '  //  exist, the detail page would show the same total on each — that',
+  '  //  is a known limitation documented in the operator docs.',
+  '  function patchConnectionDetail(totalCustom) {',
+  '    if (typeof totalCustom !== \'number\' || totalCustom <= 0) return;',
+  '    // Walk every <span> in the document. The label span\'s text is',
+  '    // exactly \'Models:\' (SolidJS renders it as a literal).',
+  '    var spans = document.querySelectorAll(\'span\');',
+  '    for (var i = 0; i < spans.length; i += 1) {',
+  '      var label = spans[i];',
+  '      if (!label) continue;',
+  '      if (trim(getText(label)) !== \'Models:\') continue;',
+  '      // The value span is the NEXT element sibling of the label span',
+  '      // inside the same wrapper <span>. SolidJS inserts a text node',
+  '      // (a single space) between them, so we use nextElementSibling',
+  '      // to skip text nodes.',
+  '      var valueSpan = label.nextElementSibling;',
+  '      if (!valueSpan || valueSpan.tagName !== \'SPAN\') continue;',
+  '      // Idempotency: skip if we already patched this value span.',
+  '      if (valueSpan.dataset && valueSpan.dataset.mwpModelCountPatched === \'true\') continue;',
+  '      var currentText = trim(getText(valueSpan));',
+  '      // Only patch the broken state (0, -, or empty). If the upstream',
+  '      // already shows the real count, leave it alone.',
+  '      if (currentText !== \'0\' && currentText !== \'-\' && currentText !== \'\' && currentText !== String(totalCustom)) {',
+  '        continue;',
+  '      }',
+  '      // Rewrite the value via textContent (never innerHTML).',
+  '      while (valueSpan.firstChild) {',
+  '        valueSpan.removeChild(valueSpan.firstChild);',
+  '      }',
+  '      valueSpan.appendChild(document.createTextNode(String(totalCustom)));',
+  '      // Append the patch-note subtitle INSIDE the value span so it',
+  '      // inherits the muted-foreground styling. The detail page layout',
+  '      // is inline, so the note sits right after the count.',
+  '      var note = document.createElement(\'small\');',
+  '      note.className = \'mwp-model-count-patch-note\';',
+  '      note.setAttribute(\'data-mwp-model-count-patched-note\', \'true\');',
+  '      note.appendChild(document.createTextNode(\' (patched by manifest-plugin)\'));',
+  '      valueSpan.appendChild(note);',
+  '      valueSpan.dataset.mwpModelCountPatched = \'true\';',
+  '    }',
+  '  }',
+  '',
   '  function runPatch() {',
-  '    var agentName = getConnectionsAgentName();',
+  '    var pageKind = getCurrentPageKind();',
+  '    if (pageKind === \'other\') return;',
+  '    // For the agent-list page we use the agent from the URL. For the',
+  '    // connection-detail page there is no agent in the URL, so we use',
+  '    // the built-in Playground agent — the routing-picker endpoint',
+  '    // returns ALL custom provider models regardless of which agent is',
+  '    // named, so the choice of agent only has to be one that exists.',
+  '    var agentName = pageKind === \'agent-list\' ? getConnectionsAgentName() : \'Playground\';',
   '    if (!agentName) return;',
-  '    var table = findTable();',
-  '    if (!table) return;',
   '    fetchAvailableModels(agentName).then(function (data) {',
   '      // If upstream fixed the bug in the meantime, the broken state',
   '      // never renders and countsByName is empty — the patch is a',
   '      // no-op, which is the intended behavior.',
   '      if (!data || !data.countsByName) return;',
-  '      patchTable(table, data.countsByName);',
+  '      if (pageKind === \'agent-list\') {',
+  '        var table = findTable();',
+  '        if (!table) return;',
+  '        patchTable(table, data.countsByName);',
+  '      } else if (pageKind === \'connection-detail\') {',
+  '        patchConnectionDetail(data.totalCustom);',
+  '      }',
   '    }).catch(function (err) {',
   '      // eslint-disable-next-line no-console',
   '      console.warn(\'[\' + PLUGIN_ID + \'] available-models fetch failed:\', err && err.message || err);',
   '    });',
   '  }',
   '',
-  '  function onConnectionsPage() {',
-  '    return getConnectionsAgentName() !== null;',
+  '  function onPatchedPage() {',
+  '    return getCurrentPageKind() !== \'other\';',
   '  }',
   '',
   '  function installOnCurrentRoute() {',
-  '    if (!onConnectionsPage()) return;',
+  '    if (!onPatchedPage()) return;',
   '    runPatch();',
   '  }',
   '',
@@ -314,7 +426,7 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '    var currentPath = window.location.pathname;',
   '    if (currentPath === lastPath) return;',
   '    lastPath = currentPath;',
-  '    if (onConnectionsPage()) {',
+  '    if (onPatchedPage()) {',
   '      installOnCurrentRoute();',
   '    }',
   '  });',

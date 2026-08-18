@@ -3,22 +3,31 @@
 ## What this plugin does
 
 `custom-provider-model-count-fix` patches the "0 models" badge shown on
-the Manifest dashboard's Connections page (`/harnesses/<agentName>/providers`)
-for custom Anthropic-compatible providers (e.g. `claude-proxy`).
+two Manifest dashboard pages for custom Anthropic-compatible providers
+(e.g. `claude-proxy`):
 
-The Connections page reads model counts from the `/api/v1/providers`
-endpoint, which queries `tenant_providers.cached_models.length`. For
-rows where `provider = 'custom:<uuid>'` (the schema used by all custom
-providers), `cached_models` is `NULL` — so the badge always reads `0`,
-even though the custom provider is fully reachable and routes traffic
-correctly.
+1. The per-agent Connections page (`/harnesses/<agentName>/providers`)
+   — the Models column of the providers table.
+2. The ConnectionDetail page (`/providers/connections/<id>`) — the
+   `Models:` field in the connection's detail card.
+
+Both pages read model counts from the `/api/v1/providers` endpoint,
+which queries `tenant_providers.cached_models.length`. For rows where
+`provider = 'custom:<uuid>'` (the schema used by all custom providers),
+`cached_models` is `NULL` — so the badge always reads `0`, even though
+the custom provider is fully reachable and routes traffic correctly.
 
 This plugin does NOT change the API response. It re-queries the router
-picker endpoint (`/api/v1/routing/<agentName>/available-models`) from the
-dashboard browser context, finds the custom provider's models there, and
-rewrites the rendered `<td>` text from `0` to the real count. It also
-adds a small `(patched by manifest-plugin)` subtitle below the count
-so the operator can tell the value was patched client-side.
+picker endpoint (`/api/v1/routing/<agentName>/available-models`) from
+the dashboard browser context, finds the custom provider's models
+there, and rewrites the rendered DOM text from `0` to the real count.
+It also adds a small `(patched by manifest-plugin)` subtitle next to
+the count so the operator can tell the value was patched client-side.
+
+For the ConnectionDetail page (no agent name in the URL), the plugin
+queries the picker with the built-in `Playground` agent — the picker
+returns ALL custom provider models regardless of which agent is named,
+so the choice of agent only has to be one that exists.
 
 ## When to use
 
@@ -41,10 +50,22 @@ enabled.
 
 ## What this plugin touches
 
-Strictly the `Models` column `<td>` of each row in the
-`<table class="data-table">` on the Connections page. It also appends
-a single `<small class="mwp-model-count-patch-note">` subtitle to that
-same `<td>`. Nothing else in the dashboard DOM is mutated.
+Two DOM surfaces:
+
+1. **Connections page** (`/harnesses/<agentName>/providers`): the
+   `Models` column `<td>` of each row in the
+   `<table class="data-table">`. A single
+   `<small class="mwp-model-count-patch-note">` subtitle is appended
+   to that same `<td>`.
+2. **ConnectionDetail page** (`/providers/connections/<id>`): the
+   `<span>` value node immediately following the
+   `<span>Models:</span>` label. The detail page renders fields as
+   inline `<span>` pairs (label + value), not as a table, so a
+   separate walker handles it. The same
+   `<small class="mwp-model-count-patch-note">` subtitle is appended
+   inside the value `<span>`.
+
+Nothing else in the dashboard DOM is mutated.
 
 It does NOT:
 - Remove or replace any upstream DOM nodes
@@ -92,11 +113,20 @@ silently becomes a no-op and you can remove it at your leisure.
 
 ## Limitations
 
-- The plugin only patches the **Connections page badge**. The underlying
-  `/api/v1/providers` endpoint still returns `total_models: 0` and
-  `cached_model_count: 0` for custom providers. If you have tooling
-  that consumes `/api/v1/providers` programmatically, it'll see the
-  broken values until upstream fixes the controller.
+- The plugin only patches the **two dashboard pages** described above.
+  The underlying `/api/v1/providers` endpoint still returns
+  `total_models: 0` and `cached_model_count: 0` for custom providers.
+  If you have tooling that consumes `/api/v1/providers` programmatically,
+  it'll see the broken values until upstream fixes the controller.
+- On the ConnectionDetail page the patched value is the **total**
+  custom-provider model count across all custom providers, not the
+  count for the single connection being viewed. The detail page shows
+  one connection at a time and has no per-connection join key, so the
+  total is the closest approximation available. The single-custom-
+  provider case (the common one for `claude-proxy`) renders correctly.
+  If you have multiple custom providers and navigate to a detail page
+  for one of them, the displayed count will be the sum — disabling
+  the plugin restores the upstream `0` display.
 - The plugin does NOT patch `model_counts` in the `/api/v1/providers`
   response (the pricing-cache-driven count map). That's a different
   field with different semantics and is correctly empty for custom
@@ -115,7 +145,11 @@ After deploying the updated `manifest-with-plugins` image:
 2. Navigate to `/harnesses/<agentName>/providers`.
 3. Verify the custom provider's row shows the real model count (e.g.
    `3`) and the `(patched by manifest-plugin)` subtitle is visible.
-4. Refresh the page. The patch should re-apply (idempotently — the
-   subtitle and count stay the same).
-5. Disable the plugin via the admin UI and refresh. The badge should
-   revert to `0 models`.
+4. Click into the custom provider's connection card to open
+   `/providers/connections/<id>`.
+5. Verify the `Models:` field shows the real count and the same
+   `(patched by manifest-plugin)` subtitle is visible.
+6. Refresh the page on either view. The patch should re-apply
+   (idempotently — the subtitle and count stay the same).
+7. Disable the plugin via the admin UI and refresh. Both badges
+   should revert to `0`.
