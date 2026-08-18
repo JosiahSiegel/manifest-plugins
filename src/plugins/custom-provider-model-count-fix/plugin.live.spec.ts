@@ -622,4 +622,46 @@ describe('CustomProviderModelCountFixPlugin (live)', () => {
     const parent = textNodeA.parentElement;
     expect(parent?.dataset.mpCountFix).toBeUndefined();
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Defensive: fetchAvailableModels counts rows missing provider_display_name
+  // ─────────────────────────────────────────────────────────────────────────
+  it('counts custom-provider rows even when provider_display_name is missing', async () => {
+    const rowsMissingDisplayName = [
+      {
+        provider: `custom:${UUID_A}`,
+        display_name: 'claude-opus-5',
+        id: `custom:${UUID_A}/claude-opus-5`,
+        model_name: 'claude-opus-5',
+      },
+      {
+        provider: `custom:${UUID_A}`,
+        display_name: 'claude-sonnet-4',
+        id: `custom:${UUID_A}/claude-sonnet-4`,
+        model_name: 'claude-sonnet-4',
+      },
+      {
+        provider: `custom:${UUID_B}`,
+        display_name: 'claude-haiku-3',
+        id: `custom:${UUID_B}/claude-haiku-3`,
+        model_name: 'claude-haiku-3',
+      },
+    ];
+    const { valueSpan } = buildS3DOM();
+    const fetchMock = mockFetchResponse(rowsMissingDisplayName);
+
+    runScriptAndInstall({
+      pathname: '/providers/connections/abc-123',
+      fetchMock,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // All 3 custom rows must be counted despite missing provider_display_name.
+    // The S3 patcher falls back to totalCustom when no per-connection scope
+    // is found, so the value span should show '3'.
+    expect(valueSpan.textContent).toContain('3');
+    expect(valueSpan.dataset.mwpModelCountPatched).toBe('true');
+    expect(valueSpan.querySelector('.mwp-model-count-patch-note')).not.toBeNull();
+  });
 });

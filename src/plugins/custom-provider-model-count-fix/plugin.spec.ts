@@ -207,4 +207,18 @@ describe('CustomProviderModelCountFixPlugin', () => {
     expect(script).toContain('connectionId');
     expect(script).toContain('(patched: this connection)');
   });
+
+  it('script body contains the UUID-slug fallback for missing provider_display_name', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The fetchAvailableModels function must NOT skip rows that lack
+    // provider_display_name. Instead it falls back to a truncated-UUID
+    // slug so totalCustom still increments for every custom: row.
+    // Assert the ellipsis escape and the custom:-prefix reconstruction
+    // so a future refactor that drops the fallback is caught.
+    expect(script).toContain('\\u2026');
+    expect(script).toMatch(/providerKey\.indexOf\('custom:'\)\s*===\s*0/);
+    expect(script).toMatch(/uuid\.slice\(0,\s*8\)/);
+  });
 });
