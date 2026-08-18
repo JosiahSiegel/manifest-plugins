@@ -36,10 +36,12 @@
  *    only the numeric capture.
  * 3. **S3** — The ConnectionDetail page
  *    (`/providers/connections/<id>`): the `<span>` value node
- *    immediately following the `<span>Models:</span>` label. Now
- *    scoped per-connection when a stable provider-name selector is
- *    found in the page header; falls back to the total with an
- *    "all custom providers" subtitle otherwise.
+ *    immediately following the `<span>Models:</span>` label. Uses the
+ *    operator-configured model count for THIS connection (resolved via
+ *    the connection-detail + custom-providers endpoints, i.e. the
+ *    `custom_providers.models` column the Edit form writes); falls back
+ *    to the routing-picker total with an "all custom providers"
+ *    subtitle only when the per-connection lookup is unavailable.
  * 4. **S5** — The `/providers` connections-list page: per-row badge
  *    patch. Strict-fallback: if no stable selector for a row is
  *    found, that row is skipped silently (no marker, no wrong value).
@@ -149,11 +151,14 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA: PluginMetadata = O
  *      numeric capture to the resolved count.
  *   4c. S3: walks every `<span>` looking for the literal `Models:`
  *      label, then patches the next-sibling `<span>` (the value node).
- *      Now scoped per-connection: parses the connection ID from the
- *      URL, inspects the page header for a stable provider-name
- *      selector, and if found uses that provider's count with
- *      subtitle `'(patched: this connection)'`; otherwise falls back
- *      to the total with subtitle
+ *      Scoped per-connection: parses the connection ID from the URL and
+ *      resolves the operator-configured model count for THAT connection
+ *      via `fetchConfiguredModelCount` (connection-detail endpoint →
+ *      `custom:<uuid>` → custom-providers list → `models.length`, the
+ *      same data the Edit form writes). On success the subtitle is
+ *      `'(patched: this connection)'`; otherwise the patcher falls back
+ *      to the header-selector scope, then to the routing-picker total
+ *      with subtitle
  *      `'(patched: all custom providers — scoping unavailable)'`.
  *   4d. S5: walks the `/providers` connections-list page, finds
  *      per-row provider cards, and patches the badge node with the
@@ -303,6 +308,75 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '        totalCustom += 1;',
   '      }',
   '      return { countsByName: countsByName, totalCustom: totalCustom };',
+  '    });',
+  '  }',
+  '',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // API: fetch the CONFIGURED model count for a single connection',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // The ConnectionDetail page URL carries the tenant_providers row id',
+  '  // (`/providers/connections/<id>`). Two cheap config reads resolve the',
+  '  // operator-configured model count for exactly that connection:',
+  '  //',
+  '  //   1. GET /api/v1/provider-analytics/connection-detail?connection_id=<id>',
+  '  //      returns `connection.provider` — for custom providers this is',
+  '  //      `custom:<uuid>` where the uuid is the custom_providers row id.',
+  '  //   2. GET /api/v1/routing/Playground/custom-providers',
+  '  //      returns one entry per custom provider with `id` and the',
+  '  //      `models` array — the SAME array the Edit form writes to the',
+  '  //      `custom_providers.models` JSON column. Its length is the',
+  '  //      configured count the operator sees in the Edit form.',
+  '  //',
+  '  // This deliberately does NOT use the routing-picker',
+  '  // `/available-models` count for the ConnectionDetail page: that',
+  '  // endpoint aggregates models across ALL custom providers (plus any',
+  '  // auto-discovered catalog rows), so it over-counts for a single',
+  '  // connection. The picker count remains correct for the list views',
+  '  // (S1/S2/S5) which need the routing view.',
+  '  //',
+  '  // Returns a Promise<number|null>: the configured count, or null when',
+  '  // the connection is not a custom provider, the lookup fails, or the',
+  '  // provider has no configured models — the caller then falls back to',
+  '  // the legacy totalCustom behavior.',
+  '  function fetchConfiguredModelCount(connectionId) {',
+  '    if (!connectionId) return Promise.resolve(null);',
+  '    var detailUrl = \'/api/v1/provider-analytics/connection-detail?connection_id=\' + encodeURIComponent(connectionId);',
+  '    return fetch(detailUrl, { credentials: \'same-origin\' }).then(function (res) {',
+  '      if (!res.ok) {',
+  '        return res.text().then(function (body) {',
+  '          throw new Error(\'GET \' + detailUrl + \' -> \' + res.status + \' \' + (body || \'\').slice(0, 200));',
+  '        });',
+  '      }',
+  '      return res.json();',
+  '    }).then(function (detail) {',
+  '      var providerKey = detail && detail.connection && typeof detail.connection.provider === \'string\'',
+  '        ? detail.connection.provider',
+  '        : \'\';',
+  '      if (providerKey.indexOf(\'custom:\') !== 0) return null;',
+  '      var customId = providerKey.slice(7);',
+  '      if (!customId) return null;',
+  '      var listUrl = \'/api/v1/routing/Playground/custom-providers\';',
+  '      return fetch(listUrl, { credentials: \'same-origin\' }).then(function (res) {',
+  '        if (!res.ok) {',
+  '          return res.text().then(function (body) {',
+  '            throw new Error(\'GET \' + listUrl + \' -> \' + res.status + \' \' + (body || \'\').slice(0, 200));',
+  '          });',
+  '        }',
+  '        return res.json();',
+  '      }).then(function (providers) {',
+  '        if (!Array.isArray(providers)) return null;',
+  '        for (var i = 0; i < providers.length; i += 1) {',
+  '          var cp = providers[i];',
+  '          if (!cp || cp.id !== customId) continue;',
+  '          if (!Array.isArray(cp.models)) return null;',
+  '          return cp.models.length;',
+  '        }',
+  '        return null;',
+  '      });',
+  '    }).catch(function (err) {',
+  '      // eslint-disable-next-line no-console',
+  '      console.warn(\'[\' + PLUGIN_ID + \'] configured-models lookup failed:\', err && err.message || err);',
+  '      return null;',
   '    });',
   '  }',
   '',
@@ -532,16 +606,21 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '  // (Verified against ConnectionDetail-nZtX-q3D.js in the Manifest 6.x',
   '  //  frontend bundle.) There is no table, no data-testid, and no',
   '  //  provider name on the same line — so we cannot use the countsByName',
-  '  //  join directly. Instead we try to scope the count to THIS connection:',
-  '  //  we parse the connection ID from the URL, then inspect the page',
-  '  //  header for a stable selector exposing this connection\'s provider',
-  '  //  display name. If found, we use that provider\'s count with subtitle',
-  '  //  "(patched: this connection)". If not found, we fall back to the',
-  '  //  TOTAL custom-provider model count with subtitle',
+  '  //  join directly. Instead we scope the count to THIS connection via',
+  '  //  `fetchConfiguredModelCount(connectionId)`: the connection-detail',
+  '  //  endpoint maps the URL id to `custom:<uuid>`, and the',
+  '  //  custom-providers list endpoint exposes that provider\'s configured',
+  '  //  `models` array (the same data the Edit form writes). When that',
+  '  //  lookup succeeds we paint the configured count with subtitle',
+  '  //  "(patched: this connection)". As a secondary scope we inspect the',
+  '  //  page header for a stable provider-name selector matching a key in',
+  '  //  countsByName. If neither resolves, we fall back to the TOTAL',
+  '  //  custom-provider model count with subtitle',
   '  //  "(patched: all custom providers — scoping unavailable)".',
   '  //  Under no circumstances do we paint a wrong count.',
-  '  function patchConnectionDetail(totalCustom, countsByName) {',
-  '    if (typeof totalCustom !== \'number\' || totalCustom <= 0) return;',
+  '  function patchConnectionDetail(totalCustom, countsByName, configuredCount) {',
+  '    var hasConfigured = typeof configuredCount === \'number\' && configuredCount > 0;',
+  '    if (!hasConfigured && (typeof totalCustom !== \'number\' || totalCustom <= 0)) return;',
   '    // Parse the connection ID from the URL for scoping.',
   '    var connMatch = window.location.pathname.match(CONNECTION_DETAIL_PATH_RE);',
   '    var connectionId = connMatch ? connMatch[1] : null;',
@@ -566,10 +645,19 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '      }',
   '      if (scopedProviderName) break;',
   '    }',
-  '    // Determine the count to display and the subtitle text.',
+  '    // Determine the count to display and the subtitle text. The',
+  '    // configured-models count (from the custom_providers.models column',
+  '    // via the custom-providers endpoint) is the authoritative source',
+  '    // for this page — it matches what the operator sees in the Edit',
+  '    // form. The routing-picker count over-counts because it aggregates',
+  '    // every custom provider (and any auto-discovered rows), so it is',
+  '    // only a fallback here.',
   '    var displayCount = totalCustom;',
   '    var subtitleText = \' (patched: all custom providers — scoping unavailable)\';',
-  '    if (scopedProviderName !== null) {',
+  '    if (hasConfigured) {',
+  '      displayCount = configuredCount;',
+  '      subtitleText = \' (patched: this connection)\';',
+  '    } else if (scopedProviderName !== null) {',
   '      displayCount = countsByName[scopedProviderName];',
   '      subtitleText = \' (patched: this connection)\';',
   '    }',
@@ -676,7 +764,16 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '        patchTable(table, data.countsByName);',
   '        patchAgentListSubscriptionNote(table, data.countsByName);',
   '      } else if (pageKind === \'connection-detail\') {',
-  '        patchConnectionDetail(data.totalCustom, data.countsByName);',
+  '        // ConnectionDetail: prefer the operator-configured model count',
+  '        // for THIS connection (custom_providers.models via the',
+  '        // connection-detail + custom-providers endpoints). The picker',
+  '        // count (data.totalCustom) is only a fallback when the',
+  '        // per-connection lookup fails.',
+  '        var connMatch = window.location.pathname.match(CONNECTION_DETAIL_PATH_RE);',
+  '        var connectionId = connMatch ? connMatch[1] : null;',
+  '        fetchConfiguredModelCount(connectionId).then(function (configuredCount) {',
+  '          patchConnectionDetail(data.totalCustom, data.countsByName, configuredCount);',
+  '        });',
   '      } else if (pageKind === \'providers-list\') {',
   '        patchProviderConnectionsBadge(data.countsByName);',
   '      } else if (pageKind === \'routing\') {',

@@ -221,4 +221,25 @@ describe('CustomProviderModelCountFixPlugin', () => {
     expect(script).toMatch(/providerKey\.indexOf\('custom:'\)\s*===\s*0/);
     expect(script).toMatch(/uuid\.slice\(0,\s*8\)/);
   });
+
+  it('script body contains the per-connection configured-models endpoints for ConnectionDetail', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The ConnectionDetail page must read the OPERATOR-CONFIGURED model
+    // count (the custom_providers.models JSON column the Edit form
+    // writes), not the routing-picker count. The lookup is two cheap
+    // config reads:
+    //   1. GET /api/v1/provider-analytics/connection-detail?connection_id=<id>
+    //      → connection.provider = 'custom:<uuid>'
+    //   2. GET /api/v1/routing/Playground/custom-providers
+    //      → entry with id === uuid exposes the configured models array.
+    // Assert both endpoint URLs and the models.length count site so a
+    // future refactor that reverts to the picker count is caught.
+    expect(script).toContain('fetchConfiguredModelCount');
+    expect(script).toContain('/api/v1/provider-analytics/connection-detail');
+    expect(script).toContain('connection_id=');
+    expect(script).toContain('/api/v1/routing/Playground/custom-providers');
+    expect(script).toMatch(/cp\.models\.length/);
+  });
 });

@@ -664,4 +664,129 @@ describe('CustomProviderModelCountFixPlugin (live)', () => {
     expect(valueSpan.dataset.mwpModelCountPatched).toBe('true');
     expect(valueSpan.querySelector('.mwp-model-count-patch-note')).not.toBeNull();
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // S3 configured-count: ConnectionDetail uses the Edit-form models column,
+  // not the routing-picker count
+  // ─────────────────────────────────────────────────────────────────────────
+  it('S3: ConnectionDetail shows the configured model count from the custom-providers endpoint, not the picker count', async () => {
+    const { valueSpan } = buildS3DOM();
+
+    // The routing picker returns 13 custom rows (the over-counted value
+    // the user saw), while the operator configured exactly 3 models on
+    // this connection's custom provider. The patch must show 3.
+    const pickerRows = Array.from({ length: 13 }, (_, i) => ({
+      provider: `custom:${UUID_A}`,
+      provider_display_name: 'claude-proxy',
+      display_name: `model-${i}`,
+      id: `custom:${UUID_A}/model-${i}`,
+      model_name: `model-${i}`,
+    }));
+    const connectionDetail = {
+      connection: {
+        id: 'conn-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        label: 'claude-proxy',
+        cached_model_count: 0,
+        key_prefix: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        is_active: true,
+        last_used_at: null,
+      },
+      agents: [],
+      model_usage: [],
+      recent_messages: [],
+    };
+    const customProviders = [
+      {
+        id: UUID_A,
+        name: 'claude-proxy',
+        base_url: 'http://localhost:9997/agy/v1',
+        api_kind: 'anthropic',
+        has_api_key: true,
+        models: [
+          { id: 'claude-opus-5' },
+          { id: 'claude-sonnet-4' },
+          { id: 'claude-haiku-3' },
+        ],
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ];
+
+    const fetchMock = jest.fn().mockImplementation((url: string) => {
+      let body: unknown = [];
+      if (url.indexOf('/api/v1/provider-analytics/connection-detail') === 0) {
+        body = connectionDetail;
+      } else if (url.indexOf('/api/v1/routing/Playground/custom-providers') === 0) {
+        body = customProviders;
+      } else if (url.indexOf('/available-models') !== -1) {
+        body = pickerRows;
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+        status: 200,
+        statusText: 'OK',
+      } as Response);
+    });
+
+    runScriptAndInstall({
+      pathname: '/providers/connections/conn-1',
+      fetchMock,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The configured count (3) wins over the picker count (13).
+    expect(valueSpan.textContent).toContain('3');
+    expect(valueSpan.textContent).not.toContain('13');
+    expect(valueSpan.dataset.mwpModelCountPatched).toBe('true');
+    expect(valueSpan.querySelector('.mwp-model-count-patch-note')).not.toBeNull();
+    expect(valueSpan.textContent).toContain('(patched: this connection)');
+
+    // Both per-connection endpoints were queried.
+    const calledUrls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(calledUrls.some((u) => u.indexOf('/api/v1/provider-analytics/connection-detail?connection_id=conn-1') === 0)).toBe(true);
+    expect(calledUrls.some((u) => u.indexOf('/api/v1/routing/Playground/custom-providers') === 0)).toBe(true);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // S3 fallback: per-connection lookup fails → picker total with fallback subtitle
+  // ─────────────────────────────────────────────────────────────────────────
+  it('S3: falls back to the picker total when the configured-models lookup fails', async () => {
+    const { valueSpan } = buildS3DOM();
+
+    const fetchMock = jest.fn().mockImplementation((url: string) => {
+      if (url.indexOf('/api/v1/provider-analytics/connection-detail') === 0) {
+        return Promise.resolve({
+          ok: false,
+          json: () => Promise.resolve({}),
+          text: () => Promise.resolve('boom'),
+          status: 500,
+          statusText: 'Server Error',
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(ALL_ROWS),
+        text: () => Promise.resolve(JSON.stringify(ALL_ROWS)),
+        status: 200,
+        statusText: 'OK',
+      } as Response);
+    });
+
+    runScriptAndInstall({
+      pathname: '/providers/connections/conn-1',
+      fetchMock,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // ALL_ROWS has 3 custom rows → totalCustom = 3, with the fallback subtitle.
+    expect(valueSpan.textContent).toContain('3');
+    expect(valueSpan.dataset.mwpModelCountPatched).toBe('true');
+    expect(valueSpan.textContent).toContain('scoping unavailable');
+  });
 });
