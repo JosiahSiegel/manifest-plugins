@@ -36,7 +36,7 @@ describe('CustomProviderModelCountFixPlugin', () => {
     expect(CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA).toEqual({
       id: 'custom-provider-model-count-fix',
       name: 'Custom provider model count fix',
-      version: '0.1.0',
+      version: '0.2.0',
       description: expect.any(String),
       kind: 'dashboard-transform',
     } satisfies PluginMetadata);

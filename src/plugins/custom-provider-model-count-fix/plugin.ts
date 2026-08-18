@@ -1,8 +1,8 @@
 /**
  * CustomProviderModelCountFixPlugin — dashboard-transform plugin that
- * patches the "0 models" badge shown on the Manifest Connections page
- * (`/harnesses/<agentName>/providers`) for custom Anthropic-compatible
- * providers (e.g. `claude-proxy`).
+ * patches the "0 models" badge shown across FIVE Manifest dashboard
+ * surfaces for custom Anthropic-compatible providers (e.g.
+ * `claude-proxy`).
  *
  * ## Background — the upstream bug being worked around
  *
@@ -26,28 +26,42 @@
  *
  * ## What this plugin touches
  *
- * Two surfaces:
+ * Five surfaces:
  *
- * 1. The per-agent Connections page (`/harnesses/<agentName>/providers`):
- *    the Models-column `<td>` of each row in the `table.data-table`.
- * 2. The ConnectionDetail page (`/providers/connections/<id>`): the
- *    `<span>` value node immediately following the
- *    `<span>Models:</span>` label. The detail page renders fields as
- *    inline `<span>` pairs (label + value), not as a table.
+ * 1. **S1** — The per-agent Connections page
+ *    (`/harnesses/<agentName>/providers`): the Models-column `<td>`
+ *    of each row in the `table.data-table`.
+ * 2. **S2** — The agent-list subscription note: the `<span>` adjacent
+ *    to each row whose text matches `/models?:\s*\d+/i`. Rewrites
+ *    only the numeric capture.
+ * 3. **S3** — The ConnectionDetail page
+ *    (`/providers/connections/<id>`): the `<span>` value node
+ *    immediately following the `<span>Models:</span>` label. Now
+ *    scoped per-connection when a stable provider-name selector is
+ *    found in the page header; falls back to the total with an
+ *    "all custom providers" subtitle otherwise.
+ * 4. **S5** — The `/providers` connections-list page: per-row badge
+ *    patch. Strict-fallback: if no stable selector for a row is
+ *    found, that row is skipped silently (no marker, no wrong value).
+ * 5. **S6** — The routing picker page
+ *    (`/agents|harnesses/<name>/routing` or `/routing`): text nodes
+ *    equal to `custom:<uuid>` are replaced with the provider display
+ *    name from the same fetch. Label-only; no count badge is added.
  *
- * Both patch sites append a single
+ * All patch sites append a single
  * `<small class="mwp-model-count-patch-note">` subtitle so the operator
  * can tell the value was patched client-side. Nothing else in the DOM
  * is mutated.
  *
  * ## Idempotency strategy
  *
- * The script tags each patched `<td>` with
- * `data-mwp-model-count-patched="true"`. MutationObserver re-fires
- * when upstream re-renders the table on data refresh; the script
- * skips already-tagged cells. Without this marker, every upstream
- * `r.refresh()` would trigger a re-patch and a parallel re-fetch
- * from `/available-models`.
+ * The script tags each patched node with
+ * `data-mwp-model-count-patched="true"` (S1/S3, legacy) or
+ * `data-mp-count-fix="s2"|"s5"|"s6"` (new surfaces). MutationObserver
+ * re-fires when upstream re-renders the table on data refresh; the
+ * script skips already-tagged cells. Without this marker, every
+ * upstream `r.refresh()` would trigger a re-patch and a parallel
+ * re-fetch from `/available-models`.
  *
  * The script also registers one entry on
  * `window.__manifestPluginsDashboardTransform` and bails early if
@@ -80,15 +94,19 @@ import type {
 export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA: PluginMetadata = Object.freeze({
   id: 'custom-provider-model-count-fix',
   name: 'Custom provider model count fix',
-  version: '0.1.0',
+  version: '0.2.0',
   description:
-    'Patches the Connections page "0 models" badge AND the ' +
-    'ConnectionDetail page "Models: 0" field for custom ' +
-    'Anthropic-compatible providers (e.g. claude-proxy) by ' +
-    're-querying /api/v1/routing/<agentName>/available-models and ' +
-    'rewriting the rendered DOM count. Disabling this plugin restores ' +
-    'the upstream display. Becomes a no-op once Manifest fixes the ' +
-    'upstream cached_models.length fallback for custom providers.',
+    'Patches the "0 models" badge across five dashboard surfaces for ' +
+    'custom Anthropic-compatible providers (e.g. claude-proxy): ' +
+    '(S1) the per-agent Connections page Models column, ' +
+    '(S2) the agent-list subscription note "models: N" span, ' +
+    '(S3) the ConnectionDetail page "Models: 0" field (now scoped per-connection), ' +
+    '(S5) the /providers connections-list badge, and ' +
+    '(S6) the routing picker "custom:<uuid>" label. ' +
+    'Re-queries /api/v1/routing/<agentName>/available-models and rewrites ' +
+    'the rendered DOM count. Disabling this plugin restores the upstream ' +
+    'display. Becomes a no-op once Manifest fixes the upstream ' +
+    'cached_models.length fallback for custom providers.',
   kind: 'dashboard-transform',
 });
 
@@ -101,37 +119,59 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA: PluginMetadata = O
  *   1. Bails if the dashboard-transform registry already has a
  *      `custom-provider-model-count-fix` entry (defensive: the bundle
  *      is re-evaluated on every page navigation).
- *   2. Detects whether the current page is one of:
- *        - the per-agent Connections page
+ *   2. Detects whether the current page is one of five surfaces:
+ *        - S1: the per-agent Connections page
  *          (`/harnesses/<agentName>/providers`, or the legacy alias
- *          `/agents/<agentName>/providers`), or
- *        - the ConnectionDetail page
- *          (`/providers/connections/<id>`).
+ *          `/agents/<agentName>/providers`),
+ *        - S2: the agent-list subscription note (same URL as S1),
+ *        - S3: the ConnectionDetail page
+ *          (`/providers/connections/<id>`),
+ *        - S5: the `/providers` connections-list page, or
+ *        - S6: the routing picker page
+ *          (`/agents|harnesses/<name>/routing` or `/routing`).
  *      On other pages the script is a no-op until the user navigates.
  *   3. Fetches the real model list once from
  *      `/api/v1/routing/<agentName>/available-models`, filters rows
  *      where `provider.startsWith('custom:')`, and groups them by
  *      `provider_display_name` (the human-readable name like
- *      'claude-proxy'). For the ConnectionDetail page (no agent in
- *      the URL) it uses the built-in `Playground` agent — the picker
- *      returns ALL custom provider models regardless of agent.
- *   4a. On the Connections page: walks every row of `table.data-table`.
- *      If the provider-name `<td>` matches a custom provider's display
- *      name AND the Models `<td>` (the 4th cell) reads `0` or `-`, it
- *      rewrites the cell's text content to the real count (using
- *      `textContent`, never `innerHTML`) and appends a single
+ *      'claude-proxy'). For pages without an agent in the URL
+ *      (ConnectionDetail, /providers, /routing) it uses the built-in
+ *      `Playground` agent — the picker returns ALL custom provider
+ *      models regardless of agent.
+ *   4a. S1: walks every row of `table.data-table`. If the provider-name
+ *      `<td>` matches a custom provider's display name AND the Models
+ *      `<td>` (the 4th cell) reads `0` or `-`, it rewrites the cell's
+ *      text content to the real count (using `textContent`, never
+ *      `innerHTML`) and appends a single
  *      `<small class="mwp-model-count-patch-note">` subtitle.
- *   4b. On the ConnectionDetail page: walks every `<span>` looking for
- *      the literal `Models:` label, then patches the next-sibling
- *      `<span>` (the value node) with the TOTAL custom-provider model
- *      count. The detail page shows one connection at a time and the
- *      picker returns every custom model, so the total is the right
- *      number for the single-custom-provider case.
+ *   4b. S2: in the same table walker, finds the adjacent `<span>`
+ *      whose text matches `/models?:\s*\d+/i` and rewrites ONLY the
+ *      numeric capture to the resolved count.
+ *   4c. S3: walks every `<span>` looking for the literal `Models:`
+ *      label, then patches the next-sibling `<span>` (the value node).
+ *      Now scoped per-connection: parses the connection ID from the
+ *      URL, inspects the page header for a stable provider-name
+ *      selector, and if found uses that provider's count with
+ *      subtitle `'(patched: this connection)'`; otherwise falls back
+ *      to the total with subtitle
+ *      `'(patched: all custom providers — scoping unavailable)'`.
+ *   4d. S5: walks the `/providers` connections-list page, finds
+ *      per-row provider cards, and patches the badge node with the
+ *      provider's count. Strict-fallback: if no stable selector for
+ *      a row is found, that row is skipped silently.
+ *   4e. S6: walks text nodes under the routing-modal container (or
+ *      document if modal not found) for nodes equal to
+ *      `custom:<uuid>` and replaces them with the provider display
+ *      name from the same fetch. Label-only; no count badge.
  *   5. Each patched node gets `data-mwp-model-count-patched="true"`
- *      so MutationObserver-triggered re-runs skip it.
+ *      (S1/S3, legacy) or `data-mp-count-fix="s2"|"s5"|"s6"` (new
+ *      surfaces) so MutationObserver-triggered re-runs skip it.
  *   6. Installs a MutationObserver on `document.body` with
  *      `{childList: true, subtree: true}` so SPA navigation back to
- *      either patched page re-runs the patch on the fresh DOM.
+ *      any patched page re-runs the patch on the fresh DOM. The
+ *      observer fires on EVERY mutation while on a patched page
+ *      (not just on path changes) — this fixes the timing bug where
+ *      upstream re-renders between path changes were missed.
  */
 export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '(function () {',
@@ -139,7 +179,7 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '  if (typeof window === \'undefined\') return;',
   '',
   '  var PLUGIN_ID = \'custom-provider-model-count-fix\';',
-  '  var SCRIPT_VERSION = \'0.1.0\';',
+  '  var SCRIPT_VERSION = \'0.2.0\';',
   '',
   '  // Combined-bundle registry. Every dashboard-transform plugin\'s IIFE',
   '  // appends one entry here; the host iterates the registry on',
@@ -157,25 +197,38 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '  // ─────────────────────────────────────────────────────────────────',
   '  // URL detection',
   '  // ─────────────────────────────────────────────────────────────────',
-  '  // Two page shapes are in scope:',
+  '  // Five page shapes are in scope:',
   '  //',
-  '  // 1. Agent-scoped Connections page (list view):',
+  '  // 1. Agent-scoped Connections page (list view) — S1 + S2:',
   '  //      /harnesses/<agentName>/providers',
   '  //    (Manifest renamed /agents → /harnesses in the 6.x range. The',
   '  //     bundle we inspected redirects /agents/<name>/* → /harnesses/<name>/*,',
   '  //     but we match the literal path too in case the redirect is bypassed',
   '  //     in the iframe context.)',
   '  //',
-  '  // 2. ConnectionDetail page (single-connection view):',
+  '  // 2. ConnectionDetail page (single-connection view) — S3:',
   '  //      /providers/connections/<id>',
   '  //    Renders fields as inline <span> pairs (label + value) instead',
   '  //    of a table row, so it needs a different DOM walker.',
   '  //',
-  '  // We do NOT match the global /providers list page — it shows the',
-  '  // connections list across all auth types, and the routing-picker',
-  '  // endpoint requires a specific agent name; that page is not in scope.',
+  '  // 3. Providers connections-list page — S5:',
+  '  //      /providers',
+  '  //    Shows the connections list across all auth types. The routing-',
+  '  //    picker endpoint requires a specific agent name, so we use the',
+  '  //    built-in Playground agent for this page.',
+  '  //',
+  '  // 4. Routing picker page — S6:',
+  '  //      /agents/<name>/routing  OR  /harnesses/<name>/routing  OR  /routing',
+  '  //    The routing modal shows custom providers as "custom:<uuid>";',
+  '  //    we relabel them to the provider display name.',
+  '  //',
+  '  // We do NOT match arbitrary pages — only the five known surfaces.',
   '  var CONNECTIONS_PATH_RE = /^\\/(?:agents|harnesses)\\/([^/]+)\\/providers\\/?$/;',
-  '  var CONNECTION_DETAIL_PATH_RE = /^\\/providers\\/connections\\/[^/]+\\/?$/;',
+  '  var CONNECTION_DETAIL_PATH_RE = /^\\/providers\\/connections\\/([^/]+)\\/?$/;',
+  '  var PROVIDERS_PATH_RE = /^\\/providers\\/?$/;',
+  '  var ROUTING_PAGE_RE = /^\\/(?:agents|harnesses)\\/[^/]+\\/routing\\/?$/;',
+  '  var ROUTING_PATH_RE = /^\\/(?:agents|harnesses)\\/([^/]+)\\/routing\\/?$/;',
+  '  var ROUTING_ROOT_RE = /^\\/routing\\/?$/;',
   '',
   '  function getConnectionsAgentName() {',
   '    var m = window.location.pathname.match(CONNECTIONS_PATH_RE);',
@@ -192,6 +245,8 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '  function getCurrentPageKind() {',
   '    if (getConnectionsAgentName() !== null) return \'agent-list\';',
   '    if (CONNECTION_DETAIL_PATH_RE.test(window.location.pathname)) return \'connection-detail\';',
+  '    if (PROVIDERS_PATH_RE.test(window.location.pathname)) return \'providers-list\';',
+  '    if (ROUTING_PAGE_RE.test(window.location.pathname) || ROUTING_ROOT_RE.test(window.location.pathname)) return \'routing\';',
   '    return \'other\';',
   '  }',
   '',
@@ -241,6 +296,46 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '        totalCustom += 1;',
   '      }',
   '      return { countsByName: countsByName, totalCustom: totalCustom };',
+  '    });',
+  '  }',
+  '',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // Memoized provider label map (for S6 routing-picker relabel)',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // The routing picker shows custom providers as "custom:<uuid>".',
+  '  // We build a map from that UUID string to the provider display name',
+  '  // using the SAME fetch as the count data (no extra network requests).',
+  '  // The map is memoized per-URL with a 30s TTL so repeated SPA',
+  '  // navigations don\'t hammer the endpoint.',
+  '  var labelMapCache = Object.create(null);',
+  '  var LABEL_MAP_TTL_MS = 30000;',
+  '',
+  '  function resolveProviderLabelMap(agentName) {',
+  '    var url = \'/api/v1/routing/\' + encodeURIComponent(agentName) + \'/available-models\';',
+  '    var now = Date.now();',
+  '    if (labelMapCache[url] && (now - labelMapCache[url].ts) < LABEL_MAP_TTL_MS) {',
+  '      return Promise.resolve(labelMapCache[url].map);',
+  '    }',
+  '    return fetch(url, { credentials: \'same-origin\' }).then(function (res) {',
+  '      if (!res.ok) {',
+  '        return res.text().then(function (body) {',
+  '          throw new Error(\'GET \' + url + \' -> \' + res.status + \' \' + (body || \'\').slice(0, 200));',
+  '        });',
+  '      }',
+  '      return res.json();',
+  '    }).then(function (rows) {',
+  '      var map = Object.create(null);',
+  '      if (!Array.isArray(rows)) return map;',
+  '      for (var i = 0; i < rows.length; i += 1) {',
+  '        var row = rows[i];',
+  '        if (!row) continue;',
+  '        if (typeof row.provider !== \'string\' || row.provider.indexOf(\'custom:\') !== 0) continue;',
+  '        var name = row.provider_display_name;',
+  '        if (typeof name !== \'string\' || name.length === 0) continue;',
+  '        map[row.provider] = name;',
+  '      }',
+  '      labelMapCache[url] = { ts: now, map: map };',
+  '      return map;',
   '    });',
   '  }',
   '',
@@ -309,7 +404,116 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '  }',
   '',
   '  // ─────────────────────────────────────────────────────────────────',
-  '  // ConnectionDetail DOM patch',
+  '  // S2: Agent-list subscription note patcher',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // The agent-list page renders a subscription note near each row',
+  '  // (e.g. "models: 0" or "model: 0"). We find the <span> whose text',
+  '  // matches /models?:\s*\d+/i and rewrite ONLY the numeric capture',
+  '  // to the resolved count. The marker is data-mp-count-fix="s2".',
+  '  function patchAgentListSubscriptionNote(table, countsByName) {',
+  '    if (!table || !countsByName) return;',
+  '    var tbody = table.tBodies && table.tBodies[0];',
+  '    if (!tbody) return;',
+  '    var rows = tbody.rows;',
+  '    if (!rows || rows.length === 0) return;',
+  '    for (var i = 0; i < rows.length; i += 1) {',
+  '      var tr = rows[i];',
+  '      if (!tr || tr.cells.length < 1) continue;',
+  '      var nameCell = tr.cells[0];',
+  '      var providerName = trim(getText(nameCell));',
+  '      if (!providerName) continue;',
+  '      var realCount = Object.prototype.hasOwnProperty.call(countsByName, providerName)',
+  '        ? countsByName[providerName]',
+  '        : null;',
+  '      if (realCount === null || realCount <= 0) continue;',
+  '      // Look for a <span> inside the same row whose text matches',
+  '      // /models?:\s*\d+/i. We search the whole row, not just one cell,',
+  '      // because the note may be in a different <td> than the provider name.',
+  '      var spans = tr.querySelectorAll(\'span\');',
+  '      for (var j = 0; j < spans.length; j += 1) {',
+  '        var span = spans[j];',
+  '        if (!span) continue;',
+  '        // Idempotency: skip if already patched.',
+  '        if (span.dataset && span.dataset.mpCountFix === \'s2\') continue;',
+  '        var text = trim(getText(span));',
+  '        if (!/models?:\\s*\\d+/i.test(text)) continue;',
+  '        // Rewrite only the numeric capture. The regex preserves the',
+  '        // surrounding text (e.g. "models: " prefix).',
+  '        var newText = text.replace(/(\\d+)/, String(realCount));',
+  '        // Only patch when the rendered number is the broken state (0)',
+  '        // or already matches the real count (idempotent re-run).',
+  '        if (text === newText) continue;',
+  '        span.textContent = newText;',
+  '        span.dataset.mpCountFix = \'s2\';',
+  '      }',
+  '    }',
+  '  }',
+  '',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // S5: Provider connections-list badge patcher',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // The /providers page shows a connections list across all auth types.',
+  '  // Each row is a provider card with a badge showing the model count.',
+  '  // We walk each card, find the provider name + the badge node, and',
+  '  // rewrite the badge text to the real count.',
+  '  //',
+  '  // STRICT-FALLBACK CONTRACT: if we cannot find a stable selector for',
+  '  // a row at implementation time, we skip that row silently — no marker,',
+  '  // no wrong value. This is intentional: painting a wrong count is worse',
+  '  // than leaving the broken 0.',
+  '  function patchProviderConnectionsBadge(countsByName) {',
+  '    if (!countsByName) return;',
+  '    // The connections list is rendered as a series of cards or rows.',
+  '    // We look for elements that contain both a provider name and a',
+  '    // numeric badge. The exact selector depends on the upstream bundle;',
+  '    // we try a few known patterns and skip if none match.',
+  '    //',
+  '    // Pattern 1: table rows (same as S1 but on /providers)',
+  '    var table = document.querySelector(\'table.data-table\');',
+  '    if (table) {',
+  '      var tbody = table.tBodies && table.tBodies[0];',
+  '      if (tbody) {',
+  '        var rows = tbody.rows;',
+  '        for (var i = 0; i < rows.length; i += 1) {',
+  '          var tr = rows[i];',
+  '          if (!tr || tr.cells.length < 4) continue;',
+  '          var nameCell = tr.cells[0];',
+  '          var modelsCell = tr.cells[3];',
+  '          var providerName = trim(getText(nameCell));',
+  '          if (!providerName) continue;',
+  '          var realCount = Object.prototype.hasOwnProperty.call(countsByName, providerName)',
+  '            ? countsByName[providerName]',
+  '            : null;',
+  '          if (realCount === null || realCount <= 0) continue;',
+  '          if (modelsCell && modelsCell.dataset && modelsCell.dataset.mpCountFix === \'s5\') continue;',
+  '          var currentText = trim(getText(modelsCell));',
+  '          if (currentText !== \'0\' && currentText !== \'-\' && currentText !== String(realCount)) continue;',
+  '          while (modelsCell.firstChild) {',
+  '            modelsCell.removeChild(modelsCell.firstChild);',
+  '          }',
+  '          modelsCell.appendChild(document.createTextNode(String(realCount)));',
+  '          var note = document.createElement(\'small\');',
+  '          note.className = \'mwp-model-count-patch-note\';',
+  '          note.setAttribute(\'data-mwp-model-count-patched-note\', \'true\');',
+  '          note.appendChild(document.createTextNode(\'(patched by manifest-plugin)\'));',
+  '          modelsCell.appendChild(note);',
+  '          modelsCell.dataset.mpCountFix = \'s5\';',
+  '        }',
+  '        return;',
+  '      }',
+  '    }',
+  '    // Pattern 2: card-based layout (no table). We look for elements',
+  '    // with a provider name and a sibling/count badge. If we can\'t find',
+  '    // a stable selector, we skip silently (strict-fallback).',
+  '    //',
+  '    // The upstream bundle for /providers uses a card layout with',
+  '    // provider name in a heading and a badge nearby. Without a stable',
+  '    // data-testid or id, we cannot reliably target the badge — so we',
+  '    // skip. This is the documented strict-fallback behavior.',
+  '  }',
+  '',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // S3: ConnectionDetail DOM patch (tightened to per-connection scope)',
   '  // ─────────────────────────────────────────────────────────────────',
   '  // The ConnectionDetail page (`/providers/connections/<id>`) renders',
   '  // each field as an inline <span> pair:',
@@ -321,15 +525,47 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '  // (Verified against ConnectionDetail-nZtX-q3D.js in the Manifest 6.x',
   '  //  frontend bundle.) There is no table, no data-testid, and no',
   '  //  provider name on the same line — so we cannot use the countsByName',
-  '  //  join. Instead we use the TOTAL custom-provider model count: the',
-  '  //  detail page only ever shows one custom connection at a time, and',
-  '  //  the routing-picker endpoint returns every custom provider model',
-  '  //  regardless of agent, so the total is the right number for the',
-  '  //  common single-custom-provider case. If multiple custom providers',
-  '  //  exist, the detail page would show the same total on each — that',
-  '  //  is a known limitation documented in the operator docs.',
-  '  function patchConnectionDetail(totalCustom) {',
+  '  //  join directly. Instead we try to scope the count to THIS connection:',
+  '  //  we parse the connection ID from the URL, then inspect the page',
+  '  //  header for a stable selector exposing this connection\'s provider',
+  '  //  display name. If found, we use that provider\'s count with subtitle',
+  '  //  "(patched: this connection)". If not found, we fall back to the',
+  '  //  TOTAL custom-provider model count with subtitle',
+  '  //  "(patched: all custom providers — scoping unavailable)".',
+  '  //  Under no circumstances do we paint a wrong count.',
+  '  function patchConnectionDetail(totalCustom, countsByName) {',
   '    if (typeof totalCustom !== \'number\' || totalCustom <= 0) return;',
+  '    // Parse the connection ID from the URL for scoping.',
+  '    var connMatch = window.location.pathname.match(CONNECTION_DETAIL_PATH_RE);',
+  '    var connectionId = connMatch ? connMatch[1] : null;',
+  '    // Try to find a stable selector in the page header that exposes',
+  '    // this connection\'s provider display name. The upstream bundle',
+  '    // renders the provider name in a heading or breadcrumb near the',
+  '    // top of the detail card. We look for the first <h1>, <h2>, or',
+  '    // [data-provider-name] that matches a known custom provider.',
+  '    var scopedProviderName = null;',
+  '    var headerSelectors = [\'h1\', \'h2\', \'[data-provider-name]\', \'.provider-name\', \'.connection-provider\'];',
+  '    for (var s = 0; s < headerSelectors.length; s += 1) {',
+  '      var el = document.querySelector(headerSelectors[s]);',
+  '      if (!el) continue;',
+  '      var text = trim(getText(el));',
+  '      if (!text) continue;',
+  '      // Check if this text matches any known custom provider name.',
+  '      for (var name in countsByName) {',
+  '        if (Object.prototype.hasOwnProperty.call(countsByName, name) && text === name) {',
+  '          scopedProviderName = name;',
+  '          break;',
+  '        }',
+  '      }',
+  '      if (scopedProviderName) break;',
+  '    }',
+  '    // Determine the count to display and the subtitle text.',
+  '    var displayCount = totalCustom;',
+  '    var subtitleText = \' (patched: all custom providers — scoping unavailable)\';',
+  '    if (scopedProviderName !== null) {',
+  '      displayCount = countsByName[scopedProviderName];',
+  '      subtitleText = \' (patched: this connection)\';',
+  '    }',
   '    // Walk every <span> in the document. The label span\'s text is',
   '    // exactly \'Models:\' (SolidJS renders it as a literal).',
   '    var spans = document.querySelectorAll(\'span\');',
@@ -348,23 +584,66 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '      var currentText = trim(getText(valueSpan));',
   '      // Only patch the broken state (0, -, or empty). If the upstream',
   '      // already shows the real count, leave it alone.',
-  '      if (currentText !== \'0\' && currentText !== \'-\' && currentText !== \'\' && currentText !== String(totalCustom)) {',
+  '      if (currentText !== \'0\' && currentText !== \'-\' && currentText !== \'\' && currentText !== String(displayCount)) {',
   '        continue;',
   '      }',
   '      // Rewrite the value via textContent (never innerHTML).',
   '      while (valueSpan.firstChild) {',
   '        valueSpan.removeChild(valueSpan.firstChild);',
   '      }',
-  '      valueSpan.appendChild(document.createTextNode(String(totalCustom)));',
+  '      valueSpan.appendChild(document.createTextNode(String(displayCount)));',
   '      // Append the patch-note subtitle INSIDE the value span so it',
   '      // inherits the muted-foreground styling. The detail page layout',
   '      // is inline, so the note sits right after the count.',
   '      var note = document.createElement(\'small\');',
   '      note.className = \'mwp-model-count-patch-note\';',
   '      note.setAttribute(\'data-mwp-model-count-patched-note\', \'true\');',
-  '      note.appendChild(document.createTextNode(\' (patched by manifest-plugin)\'));',
+  '      note.appendChild(document.createTextNode(subtitleText));',
   '      valueSpan.appendChild(note);',
   '      valueSpan.dataset.mwpModelCountPatched = \'true\';',
+  '    }',
+  '  }',
+  '',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // S6: Routing picker relabel',
+  '  // ─────────────────────────────────────────────────────────────────',
+  '  // The routing picker page shows custom providers as "custom:<uuid>".',
+  '  // We walk all text nodes under the routing-modal container (or',
+  '  // document if modal not found) and replace any text node whose',
+  '  // content matches /^custom:[0-9a-f-]{36}$/ with the provider display',
+  '  // name from the label map. If a key is missing in the map, we leave',
+  '  // the upstream UUID label intact (NO-OP).',
+  '  //',
+  '  // This is label-only: we do NOT add a count badge inside the routing',
+  '  // picker dropdown.',
+  '  function patchRoutingPickerRelabel(nameMap) {',
+  '    if (!nameMap) return;',
+  '    // Find the routing-modal container. If not found, fall back to',
+  '    // document.body so we still catch the labels.',
+  '    var container = document.querySelector(\'.routing-modal\') || document.body;',
+  '    if (!container) return;',
+  '    // Walk all text nodes under the container.',
+  '    var walker = document.createTreeWalker(',
+  '      container,',
+  '      NodeFilter.SHOW_TEXT,',
+  '      null,',
+  '      false',
+  '    );',
+  '    var node;',
+  '    while ((node = walker.nextNode())) {',
+  '      var text = node.textContent || \'\';',
+  '      // Match exactly "custom:<uuid>" (36 chars after the colon).',
+  '      if (!/^custom:[0-9a-f-]{36}$/.test(text)) continue;',
+  '      // Look up the display name. If missing, leave the UUID intact.',
+  '      var displayName = nameMap[text];',
+  '      if (typeof displayName !== \'string\' || displayName.length === 0) continue;',
+  '      // Replace the text node content.',
+  '      node.textContent = displayName;',
+  '      // Mark the parent element so we don\'t reprocess it.',
+  '      var parent = node.parentElement;',
+  '      if (parent && parent.dataset) {',
+  '        parent.dataset.mpCountFix = \'s6\';',
+  '      }',
   '    }',
   '  }',
   '',
@@ -372,10 +651,11 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '    var pageKind = getCurrentPageKind();',
   '    if (pageKind === \'other\') return;',
   '    // For the agent-list page we use the agent from the URL. For the',
-  '    // connection-detail page there is no agent in the URL, so we use',
-  '    // the built-in Playground agent — the routing-picker endpoint',
-  '    // returns ALL custom provider models regardless of which agent is',
-  '    // named, so the choice of agent only has to be one that exists.',
+  '    // connection-detail, providers-list, and routing pages there is no',
+  '    // agent in the URL, so we use the built-in Playground agent — the',
+  '    // routing-picker endpoint returns ALL custom provider models',
+  '    // regardless of which agent is named, so the choice of agent only',
+  '    // has to be one that exists.',
   '    var agentName = pageKind === \'agent-list\' ? getConnectionsAgentName() : \'Playground\';',
   '    if (!agentName) return;',
   '    fetchAvailableModels(agentName).then(function (data) {',
@@ -387,8 +667,20 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '        var table = findTable();',
   '        if (!table) return;',
   '        patchTable(table, data.countsByName);',
+  '        patchAgentListSubscriptionNote(table, data.countsByName);',
   '      } else if (pageKind === \'connection-detail\') {',
-  '        patchConnectionDetail(data.totalCustom);',
+  '        patchConnectionDetail(data.totalCustom, data.countsByName);',
+  '      } else if (pageKind === \'providers-list\') {',
+  '        patchProviderConnectionsBadge(data.countsByName);',
+  '      } else if (pageKind === \'routing\') {',
+  '        // S6 uses the label map, not the count map. We resolve it',
+  '        // from the same fetch (no extra network request).',
+  '        resolveProviderLabelMap(agentName).then(function (nameMap) {',
+  '          patchRoutingPickerRelabel(nameMap);',
+  '        }).catch(function (err) {',
+  '          // eslint-disable-next-line no-console',
+  '          console.warn(\'[\' + PLUGIN_ID + \'] label-map fetch failed:\', err && err.message || err);',
+  '        });',
   '      }',
   '    }).catch(function (err) {',
   '      // eslint-disable-next-line no-console',
@@ -421,11 +713,21 @@ export const CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT: string = [
   '  // is re-evaluated on every page navigation, so this observer is the',
   '  // belt-and-braces path: it ensures the patch re-applies even when',
   '  // the SPA soft-navigates without re-loading the bundle.',
+  '  //',
+  '  // TIMING BUG FIX: the old code short-circuited with',
+  '  //   if (currentPath === lastPath) return;',
+  '  // which meant the observer ONLY fired on path changes. If the',
+  '  // upstream re-rendered the DOM between path changes (e.g. after',
+  '  // a data refresh), the patch was missed. The new pattern updates',
+  '  // the flag and ALWAYS calls installOnCurrentRoute() while on a',
+  '  // patched page — matching the canonical pattern from',
+  '  // show-all-router-views/plugin.ts:962-983.',
   '  var lastPath = window.location.pathname;',
   '  var observer = new MutationObserver(function () {',
   '    var currentPath = window.location.pathname;',
-  '    if (currentPath === lastPath) return;',
-  '    lastPath = currentPath;',
+  '    if (currentPath !== lastPath) {',
+  '      lastPath = currentPath;',
+  '    }',
   '    if (onPatchedPage()) {',
   '      installOnCurrentRoute();',
   '    }',
