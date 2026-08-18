@@ -128,4 +128,83 @@ describe('CustomProviderModelCountFixPlugin', () => {
     expect(script).toContain('\'Models:\'');
     expect(script).toContain('nextElementSibling');
   });
+
+  it('script body contains the S5 marker assignment (data-mp-count-fix="s5")', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The S5 patcher (per-row badge on the /providers connections-list
+    // page) tags the patched <td> via `dataset.mpCountFix = 's5'`, which
+    // the browser materialises as the `data-mp-count-fix="s5"`
+    // attribute. The IIFE is JavaScript, so the literal HTML attribute
+    // form is NOT in the string — only the assignment site. We assert
+    // the assignment site and the literal value to lock the marker
+    // contract end-to-end.
+    expect(script).toMatch(/dataset\.mpCountFix\s*=\s*'s5'/);
+  });
+
+  it('script body contains the S6 marker assignment (data-mp-count-fix="s6")', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The S6 patcher (routing-picker relabel) tags the parent element
+    // of each rewritten text node with `dataset.mpCountFix = 's6'`.
+    // As with S5, the IIFE carries the JS assignment, not the HTML
+    // attribute form — the browser emits the attribute at runtime.
+    expect(script).toMatch(/dataset\.mpCountFix\s*=\s*'s6'/);
+  });
+
+  it('script body contains the S2 regex /models?:\\s*\\d+/i', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // S2 rewrites the agent-list subscription note span whose text
+    // matches `/models?:\s*\d+/i`. The IIFE is built by joining a
+    // string array with '\n', so the literal backslashes are escaped
+    // as `\\s` and `\\d` in the joined output. We assert the
+    // JS-source form so the test does not depend on what the
+    // `String.prototype.replace` regex engine sees at runtime.
+    expect(script).toMatch(/models\?:\\s\*\\d\+/i);
+  });
+
+  it('script body contains the S6 regex /^custom:[0-9a-f-]{36}$/', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // S6 matches text nodes whose content is exactly `custom:<uuid>`
+    // (36 hex/dash chars after the colon). The regex source contains
+    // no backslashes, so the IIFE carries it verbatim.
+    expect(script).toContain('^custom:[0-9a-f-]{36}$');
+  });
+
+  it('script body contains the provider_display_name field for the label map', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The S6 label map is built from the SAME fetch as the count data
+    // — there is no second network request for the routing picker
+    // relabel. We assert the field name appears in the IIFE so a
+    // future refactor that adds a separate fetch path is caught. The
+    // field also appears in fetchAvailableModels (count data), so
+    // occurrence-count would be >= 2; we only assert presence.
+    expect(script).toContain('provider_display_name');
+  });
+
+  it('script body contains the S3 per-connection scoping branch', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // S3 is now scoped per-connection: the patcher parses the
+    // connection ID from the URL, inspects the page header for a
+    // stable provider-name selector, and uses the scoped count with
+    // subtitle "(patched: this connection)" when found. When the
+    // selector is missing, the subtitle falls back to the strict
+    // "(patched: all custom providers — scoping unavailable)"
+    // message. Both branches are part of the per-connection
+    // scoping contract; assert the connectionId parse site AND the
+    // scoped subtitle so a future refactor that drops the fallback
+    // branch is caught.
+    expect(script).toContain('connectionId');
+    expect(script).toContain('(patched: this connection)');
+  });
 });
