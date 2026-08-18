@@ -21,6 +21,7 @@ const { join } = require('node:path');
 
 const IN_TREE_PLUGIN_DIRS = new Set([
   'show-all-router-views',
+  'custom-provider-model-count-fix',
 ]);
 
 module.exports = async function jestGlobalSetup() {
