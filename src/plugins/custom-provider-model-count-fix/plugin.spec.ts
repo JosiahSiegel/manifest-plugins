@@ -281,4 +281,59 @@ describe('CustomProviderModelCountFixPlugin', () => {
     expect(script).toContain('(patched: this connection)');
     expect(script).toContain('(patched by manifest-plugin)');
   });
+
+  it('script body contains the S7 missing-enabled-providers helper, banner patcher, and the enabled-providers endpoints', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The S7 surface paints a consent-gated banner on the harness
+    // Providers page when one or more custom providers are connected
+    // (tenant_providers row exists) but NOT enabled (missing from
+    // agent_enabled_providers). The helper joins three endpoints:
+    //   1. GET /api/v1/routing/<agent>/providers
+    //   2. GET /api/v1/agents/<agent>/enabled-providers
+    //   3. GET /api/v1/routing/<agent>/custom-providers
+    // and the banner's Enable button fires
+    //   PUT /api/v1/agents/<agent>/enabled-providers/<tenant_provider_id>
+    // for each missing id. Assert the helper name, the banner patcher,
+    // and both endpoint path fragments so a future refactor that drops
+    // the join or the PUT is caught.
+    expect(script).toContain('findMissingCustomProviderIds');
+    expect(script).toContain('patchEnabledProvidersBanner');
+    expect(script).toMatch(/\/api\/v1\/agents\/' \+ encodeURIComponent\(agentName\) \+ '\/enabled-providers'/);
+    expect(script).toMatch(/\/api\/v1\/agents\/' \+ encodeURIComponent\(agentName\) \+ '\/enabled-providers\/' \+ encodeURIComponent\(tpId\)/);
+    // The PUT method must be present on the enable call.
+    expect(script).toMatch(/method:\s*'PUT'/);
+  });
+
+  it('script body builds the S7 banner via createElement/appendChild/textContent (never innerHTML) and tags it with the s7 marker', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The banner DOM construction must use createElement, appendChild,
+    // and textContent exclusively. innerHTML is forbidden by the plan
+    // (XSS risk from provider display names). The marker is set via
+    // setAttribute('data-mp-count-fix', 's7') — the IIFE carries the
+    // JS assignment site, not the HTML attribute form (the browser
+    // materialises the attribute at runtime).
+    expect(script).toMatch(/setAttribute\('data-mp-count-fix',\s*'s7'\)/);
+    expect(script).toMatch(/document\.createElement\('div'\)/);
+    expect(script).toMatch(/document\.createElement\('button'\)/);
+    // Both buttons carry data-mp-action markers for test selection.
+    expect(script).toMatch(/setAttribute\('data-mp-action',\s*'enable'\)/);
+    expect(script).toMatch(/setAttribute\('data-mp-action',\s*'dismiss'\)/);
+    // The IIFE must NOT use innerHTML as a DOM-write API. The string
+    // "innerHTML" appears in code comments (e.g. "never innerHTML") so
+    // a naive not.toContain('innerHTML') would false-positive. Assert
+    // the actual usage patterns instead: no `.innerHTML =` assignment
+    // and no `innerHTML(` call.
+    expect(script).not.toMatch(/\.innerHTML\s*=/);
+    expect(script).not.toMatch(/innerHTML\s*\(/);
+    // The banner must NOT persist the Dismiss state. The string
+    // "localStorage" appears in an IIFE comment ("no localStorage, no
+    // persistence") so a naive not.toContain would false-positive.
+    // Assert the actual usage pattern instead: no `localStorage.` API
+    // access.
+    expect(script).not.toMatch(/localStorage\./);
+  });
 });

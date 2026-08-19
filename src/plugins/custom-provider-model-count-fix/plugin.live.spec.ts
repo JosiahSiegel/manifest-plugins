@@ -1020,4 +1020,390 @@ describe('CustomProviderModelCountFixPlugin (live)', () => {
     expect(note).not.toBeNull();
     expect(note?.textContent).toContain('(patched by manifest-plugin)');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // S7 Test A: banner paints + Enable button fires PUT for each missing id
+  // ─────────────────────────────────────────────────────────────────────────
+  it('S7: harness Providers page paints the consent banner and Enable fires PUT /enabled-providers/<id>', async () => {
+    // Wrap the table in a parent div — the banner is inserted BEFORE
+    // table.parentElement, so the table needs a parent in the DOM.
+    const wrapper = document.createElement('div');
+    wrapper.className = 'panel';
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    const tbody = document.createElement('tbody');
+    const tr = document.createElement('tr');
+    const nameCell = document.createElement('td');
+    nameCell.textContent = 'claude-proxy';
+    const typeCell = document.createElement('td');
+    typeCell.textContent = 'API Key';
+    const connCell = document.createElement('td');
+    connCell.textContent = 'Default';
+    const modelsCell = document.createElement('td');
+    modelsCell.textContent = '-';
+    tr.appendChild(nameCell);
+    tr.appendChild(typeCell);
+    tr.appendChild(connCell);
+    tr.appendChild(modelsCell);
+    tbody.appendChild(tr);
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+    document.body.appendChild(wrapper);
+
+    const tenantProviders = [
+      {
+        id: 'tp-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        is_active: true,
+        has_api_key: true,
+        key_prefix: null,
+        label: 'Default',
+        priority: 0,
+        region: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        models_fetched_at: null,
+        cached_model_count: 0,
+      },
+    ];
+    const customProviders = [
+      {
+        id: UUID_A,
+        name: 'claude-proxy',
+        base_url: 'http://localhost:9997/agy/v1',
+        api_kind: 'anthropic',
+        has_api_key: true,
+        models: [{ id: 'claude-opus-5' }],
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ];
+    const connectionDetail = {
+      connection: {
+        id: 'tp-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        label: 'Default',
+        cached_model_count: 0,
+        key_prefix: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        is_active: true,
+        last_used_at: null,
+      },
+      agents: [],
+      model_usage: [],
+      recent_messages: [],
+    };
+
+    const fetchMock = jest.fn().mockImplementation((url: string, init?: RequestInit) => {
+      // PUT endpoint — record the call and return ok.
+      if (init && init.method === 'PUT') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ok: true }),
+          text: () => Promise.resolve('{"ok":true}'),
+          status: 200,
+          statusText: 'OK',
+        } as Response);
+      }
+      let body: unknown = [];
+      if (url.indexOf('/api/v1/provider-analytics/connection-detail') === 0) {
+        body = connectionDetail;
+      } else if (url.indexOf('/api/v1/agents/AgentRouter/enabled-providers') === 0) {
+        // The harness has NO enabled providers — tp-1 is missing.
+        body = { enabled: [] };
+      } else if (url.indexOf('/custom-providers') !== -1) {
+        body = customProviders;
+      } else if (url.indexOf('/api/v1/routing/AgentRouter/providers') === 0) {
+        body = tenantProviders;
+      } else if (url.indexOf('/available-models') !== -1) {
+        body = [];
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+        status: 200,
+        statusText: 'OK',
+      } as Response);
+    });
+
+    runScriptAndInstall({
+      pathname: '/harnesses/AgentRouter/providers',
+      fetchMock,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Banner is painted with the expected copy and controls.
+    const banner = document.querySelector('[data-mp-count-fix="s7"]');
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain("1 custom provider isn't enabled for this harness");
+    expect(banner?.textContent).toContain('claude-proxy');
+    const enableBtn = banner?.querySelector('[data-mp-action="enable"]') as HTMLButtonElement | null;
+    const dismissBtn = banner?.querySelector('[data-mp-action="dismiss"]') as HTMLButtonElement | null;
+    expect(enableBtn).not.toBeNull();
+    expect(dismissBtn).not.toBeNull();
+
+    // Click Enable — the plugin fires PUT /enabled-providers/<id> for
+    // each missing id, then calls window.location.reload(). Our sandbox
+    // stubs location as a plain object without reload, so the reload
+    // call throws a TypeError inside the promise chain. We only care
+    // about the PUT fetch assertions below; the reload error is
+    // swallowed by the plugin's .catch handler.
+    enableBtn?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Exactly one PUT was issued, to the expected URL.
+    const putCalls = fetchMock.mock.calls.filter((c) => {
+      const init = c[1] as RequestInit | undefined;
+      return init && init.method === 'PUT';
+    });
+    expect(putCalls.length).toBe(1);
+    expect(String(putCalls[0][0])).toBe('/api/v1/agents/AgentRouter/enabled-providers/tp-1');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // S7 Test B: Dismiss removes the banner from the DOM without firing any PUT
+  // ─────────────────────────────────────────────────────────────────────────
+  it('S7: Dismiss button removes the banner from the DOM and fires no PUT', async () => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'panel';
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    const tbody = document.createElement('tbody');
+    const tr = document.createElement('tr');
+    const nameCell = document.createElement('td');
+    nameCell.textContent = 'claude-proxy';
+    const typeCell = document.createElement('td');
+    const connCell = document.createElement('td');
+    const modelsCell = document.createElement('td');
+    modelsCell.textContent = '-';
+    tr.appendChild(nameCell);
+    tr.appendChild(typeCell);
+    tr.appendChild(connCell);
+    tr.appendChild(modelsCell);
+    tbody.appendChild(tr);
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+    document.body.appendChild(wrapper);
+
+    const tenantProviders = [
+      {
+        id: 'tp-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        is_active: true,
+        has_api_key: true,
+        key_prefix: null,
+        label: 'Default',
+        priority: 0,
+        region: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        models_fetched_at: null,
+        cached_model_count: 0,
+      },
+    ];
+    const customProviders = [
+      {
+        id: UUID_A,
+        name: 'claude-proxy',
+        base_url: 'http://localhost:9997/agy/v1',
+        api_kind: 'anthropic',
+        has_api_key: true,
+        models: [{ id: 'claude-opus-5' }],
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ];
+    const connectionDetail = {
+      connection: {
+        id: 'tp-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        label: 'Default',
+        cached_model_count: 0,
+        key_prefix: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        is_active: true,
+        last_used_at: null,
+      },
+      agents: [],
+      model_usage: [],
+      recent_messages: [],
+    };
+
+    const fetchMock = jest.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (init && init.method === 'PUT') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ok: true }),
+          text: () => Promise.resolve('{"ok":true}'),
+          status: 200,
+          statusText: 'OK',
+        } as Response);
+      }
+      let body: unknown = [];
+      if (url.indexOf('/api/v1/provider-analytics/connection-detail') === 0) {
+        body = connectionDetail;
+      } else if (url.indexOf('/api/v1/agents/AgentRouter/enabled-providers') === 0) {
+        body = { enabled: [] };
+      } else if (url.indexOf('/custom-providers') !== -1) {
+        body = customProviders;
+      } else if (url.indexOf('/api/v1/routing/AgentRouter/providers') === 0) {
+        body = tenantProviders;
+      } else if (url.indexOf('/available-models') !== -1) {
+        body = [];
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+        status: 200,
+        statusText: 'OK',
+      } as Response);
+    });
+
+    runScriptAndInstall({
+      pathname: '/harnesses/AgentRouter/providers',
+      fetchMock,
+    });
+
+    // Wait for the full promise chain: fetchAvailableModels →
+    // fetchCustomProviderConnectionsByDisplayName →
+    // findMissingCustomProviderIds → patchEnabledProvidersBanner.
+    // Each link is a separate microtask, so flush several times.
+    for (let i = 0; i < 20; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const banner = document.querySelector('[data-mp-count-fix="s7"]');
+    expect(banner).not.toBeNull();
+    const dismissBtn = banner?.querySelector('[data-mp-action="dismiss"]') as HTMLButtonElement | null;
+    expect(dismissBtn).not.toBeNull();
+
+    // Disconnect the MutationObserver before clicking Dismiss. Without
+    // this, removing the banner from the DOM triggers the observer,
+    // which re-runs installOnCurrentRoute() → runPatch() →
+    // findMissingCustomProviderIds() → patchEnabledProvidersBanner(),
+    // which re-paints the banner we just removed.
+    for (const obs of activeObservers) {
+      obs.disconnect();
+    }
+    activeObservers.length = 0;
+
+    dismissBtn?.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Banner is removed from the DOM.
+    expect(document.querySelector('[data-mp-count-fix="s7"]')).toBeNull();
+    // No PUT fetch was issued.
+    const putCalls = fetchMock.mock.calls.filter((c) => {
+      const init = c[1] as RequestInit | undefined;
+      return init && init.method === 'PUT';
+    });
+    expect(putCalls.length).toBe(0);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // S7 Test C: no banner when every custom provider is already enabled
+  // ─────────────────────────────────────────────────────────────────────────
+  it('S7: no banner is painted when every custom provider is already in enabled-providers', async () => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'panel';
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    const tbody = document.createElement('tbody');
+    const tr = document.createElement('tr');
+    const nameCell = document.createElement('td');
+    nameCell.textContent = 'claude-proxy';
+    const typeCell = document.createElement('td');
+    const connCell = document.createElement('td');
+    const modelsCell = document.createElement('td');
+    modelsCell.textContent = '-';
+    tr.appendChild(nameCell);
+    tr.appendChild(typeCell);
+    tr.appendChild(connCell);
+    tr.appendChild(modelsCell);
+    tbody.appendChild(tr);
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+    document.body.appendChild(wrapper);
+
+    const tenantProviders = [
+      {
+        id: 'tp-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        is_active: true,
+        has_api_key: true,
+        key_prefix: null,
+        label: 'Default',
+        priority: 0,
+        region: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        models_fetched_at: null,
+        cached_model_count: 0,
+      },
+    ];
+    const customProviders = [
+      {
+        id: UUID_A,
+        name: 'claude-proxy',
+        base_url: 'http://localhost:9997/agy/v1',
+        api_kind: 'anthropic',
+        has_api_key: true,
+        models: [{ id: 'claude-opus-5' }],
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ];
+    const connectionDetail = {
+      connection: {
+        id: 'tp-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        label: 'Default',
+        cached_model_count: 0,
+        key_prefix: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        is_active: true,
+        last_used_at: null,
+      },
+      agents: [],
+      model_usage: [],
+      recent_messages: [],
+    };
+
+    const fetchMock = jest.fn().mockImplementation((url: string) => {
+      let body: unknown = [];
+      if (url.indexOf('/api/v1/provider-analytics/connection-detail') === 0) {
+        body = connectionDetail;
+      } else if (url.indexOf('/api/v1/agents/AgentRouter/enabled-providers') === 0) {
+        // tp-1 IS already enabled — the banner should not paint.
+        body = { enabled: ['tp-1'] };
+      } else if (url.indexOf('/custom-providers') !== -1) {
+        body = customProviders;
+      } else if (url.indexOf('/api/v1/routing/AgentRouter/providers') === 0) {
+        body = tenantProviders;
+      } else if (url.indexOf('/available-models') !== -1) {
+        body = [];
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+        status: 200,
+        statusText: 'OK',
+      } as Response);
+    });
+
+    runScriptAndInstall({
+      pathname: '/harnesses/AgentRouter/providers',
+      fetchMock,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // No banner painted — every custom provider is already enabled.
+    expect(document.querySelector('[data-mp-count-fix="s7"]')).toBeNull();
+  });
 });
