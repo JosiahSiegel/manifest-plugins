@@ -242,4 +242,43 @@ describe('CustomProviderModelCountFixPlugin', () => {
     expect(script).toContain('/api/v1/routing/Playground/custom-providers');
     expect(script).toMatch(/cp\.models\.length/);
   });
+
+  it('script body contains the harness-Providers name→connectionId helper and both of its endpoints', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The agent-list (harness Providers) branch must resolve the
+    // operator-configured count per row, not just the picker count.
+    // The helper joins:
+    //   1. GET /api/v1/routing/<agent>/providers
+    //      → tenant_providers rows ({id, provider: 'custom:<uuid>', ...})
+    //   2. GET /api/v1/routing/<agent>/custom-providers
+    //      → custom provider rows ({id, name, models})
+    // and emits a map from custom-provider display name →
+    // tenant_providers.id (the connectionId fetchConfiguredModelCount
+    // needs). Assert the helper name and both endpoint path fragments
+    // so a future refactor that drops the join is caught.
+    expect(script).toContain('fetchCustomProviderConnectionsByDisplayName');
+    expect(script).toMatch(/\/api\/v1\/routing\/' \+ encodeURIComponent\(agentName\) \+ '\/providers'/);
+    expect(script).toMatch(/\/api\/v1\/routing\/' \+ encodeURIComponent\(agentName\) \+ '\/custom-providers'/);
+  });
+
+  it('script body wires patchTable to prefer the configured count over the picker count', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // patchTable's signature is now (table, countsByName,
+    // configuredCountByName). The picker count is the fallback when
+    // the configured lookup fails. Assert the new parameter is read
+    // and the per-row configured-count preference site so a future
+    // refactor that reverts to picker-only is caught.
+    expect(script).toMatch(/function patchTable\(table, countsByName, configuredCountByName\)/);
+    expect(script).toMatch(/configuredCountByName\[providerName\]/);
+    // The configured-count path uses the SAME subtitle as S3's success
+    // path — `(patched: this connection)` — because the value came
+    // from this connection's custom_providers.models column. The
+    // picker fallback keeps the legacy S1 subtitle.
+    expect(script).toContain('(patched: this connection)');
+    expect(script).toContain('(patched by manifest-plugin)');
+  });
 });

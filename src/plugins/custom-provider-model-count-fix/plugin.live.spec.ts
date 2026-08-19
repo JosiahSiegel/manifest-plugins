@@ -789,4 +789,235 @@ describe('CustomProviderModelCountFixPlugin (live)', () => {
     expect(valueSpan.dataset.mwpModelCountPatched).toBe('true');
     expect(valueSpan.textContent).toContain('scoping unavailable');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // S1 configured-count: harness Providers page prefers the Edit-form count
+  // over the picker count when the picker returns ZERO custom rows
+  // ─────────────────────────────────────────────────────────────────────────
+  it('S1: harness Providers page shows the configured model count when the picker returns zero custom rows', async () => {
+    // Build a table whose single row's Provider cell shows the custom
+    // provider's display name (claude-proxy) and whose Models cell is
+    // in the broken `–` state — exactly the DOM the user reported.
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    const tbody = document.createElement('tbody');
+    const tr = document.createElement('tr');
+    const nameCell = document.createElement('td');
+    nameCell.textContent = 'claude-proxy';
+    const typeCell = document.createElement('td');
+    typeCell.textContent = 'API Key';
+    const connCell = document.createElement('td');
+    connCell.textContent = 'Default';
+    const modelsCell = document.createElement('td');
+    modelsCell.textContent = '-';
+    tr.appendChild(nameCell);
+    tr.appendChild(typeCell);
+    tr.appendChild(connCell);
+    tr.appendChild(modelsCell);
+    tbody.appendChild(tr);
+    table.appendChild(tbody);
+    document.body.appendChild(table);
+
+    const tenantProviders = [
+      {
+        id: 'tp-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        is_active: true,
+        has_api_key: true,
+        key_prefix: null,
+        label: 'Default',
+        priority: 0,
+        region: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        models_fetched_at: null,
+        cached_model_count: 0,
+      },
+    ];
+    const customProviders = [
+      {
+        id: UUID_A,
+        name: 'claude-proxy',
+        base_url: 'http://localhost:9997/agy/v1',
+        api_kind: 'anthropic',
+        has_api_key: true,
+        models: [
+          { id: 'claude-opus-5' },
+          { id: 'claude-sonnet-4' },
+          { id: 'claude-haiku-3' },
+        ],
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ];
+    const connectionDetail = {
+      connection: {
+        id: 'tp-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        label: 'Default',
+        cached_model_count: 0,
+        key_prefix: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        is_active: true,
+        last_used_at: null,
+      },
+      agents: [],
+      model_usage: [],
+      recent_messages: [],
+    };
+
+    const fetchMock = jest.fn().mockImplementation((url: string) => {
+      let body: unknown = [];
+      if (url.indexOf('/api/v1/provider-analytics/connection-detail') === 0) {
+        body = connectionDetail;
+      } else if (url.indexOf('/custom-providers') !== -1) {
+        // fetchCustomProviderConnectionsByDisplayName hits the agent-scoped
+        // URL; fetchConfiguredModelCount hits the Playground URL. Both
+        // return the same tenant-global custom provider list.
+        body = customProviders;
+      } else if (url.indexOf('/api/v1/routing/AgentRouter/providers') === 0) {
+        body = tenantProviders;
+      } else if (url.indexOf('/available-models') !== -1) {
+        // The picker returns ZERO custom rows for this harness — the
+        // upstream bug the user hit.
+        body = [];
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+        status: 200,
+        statusText: 'OK',
+      } as Response);
+    });
+
+    runScriptAndInstall({
+      pathname: '/harnesses/AgentRouter/providers',
+      fetchMock,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The configured count (3) wins over the picker count (0).
+    expect(modelsCell.textContent).toContain('3');
+    expect(modelsCell.dataset.mwpModelCountPatched).toBe('true');
+    const note = modelsCell.querySelector('.mwp-model-count-patch-note');
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toContain('(patched: this connection)');
+
+    // Both join endpoints were queried.
+    const calledUrls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(calledUrls.some((u) => u.indexOf('/api/v1/routing/AgentRouter/providers') === 0)).toBe(true);
+    expect(calledUrls.some((u) => u.indexOf('/api/v1/routing/AgentRouter/custom-providers') === 0)).toBe(true);
+    expect(calledUrls.some((u) => u.indexOf('/api/v1/provider-analytics/connection-detail?connection_id=tp-1') === 0)).toBe(true);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // S1 picker-fallback: configured lookup fails → picker count + legacy subtitle
+  // ─────────────────────────────────────────────────────────────────────────
+  it('S1: harness Providers page falls back to the picker count when the configured lookup fails', async () => {
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    const tbody = document.createElement('tbody');
+    const tr = document.createElement('tr');
+    const nameCell = document.createElement('td');
+    nameCell.textContent = 'claude-proxy';
+    const typeCell = document.createElement('td');
+    typeCell.textContent = 'API Key';
+    const connCell = document.createElement('td');
+    connCell.textContent = 'Default';
+    const modelsCell = document.createElement('td');
+    modelsCell.textContent = '-';
+    tr.appendChild(nameCell);
+    tr.appendChild(typeCell);
+    tr.appendChild(connCell);
+    tr.appendChild(modelsCell);
+    tbody.appendChild(tr);
+    table.appendChild(tbody);
+    document.body.appendChild(table);
+
+    const tenantProviders = [
+      {
+        id: 'tp-1',
+        provider: `custom:${UUID_A}`,
+        auth_type: 'api_key',
+        is_active: true,
+        has_api_key: true,
+        key_prefix: null,
+        label: 'Default',
+        priority: 0,
+        region: null,
+        connected_at: '2026-01-01T00:00:00Z',
+        models_fetched_at: null,
+        cached_model_count: 0,
+      },
+    ];
+    const customProviders = [
+      {
+        id: UUID_A,
+        name: 'claude-proxy',
+        base_url: 'http://localhost:9997/agy/v1',
+        api_kind: 'anthropic',
+        has_api_key: true,
+        models: [
+          { id: 'claude-opus-5' },
+          { id: 'claude-sonnet-4' },
+          { id: 'claude-haiku-3' },
+        ],
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ];
+    // The picker returns 13 custom rows for claude-proxy — the legacy
+    // over-counted value the user saw before the per-connection scoping
+    // landed. When the configured lookup fails the patch must fall back
+    // to this count.
+    const pickerRows = Array.from({ length: 13 }, (_, i) => ({
+      provider: `custom:${UUID_A}`,
+      provider_display_name: 'claude-proxy',
+      display_name: `model-${i}`,
+      id: `custom:${UUID_A}/model-${i}`,
+      model_name: `model-${i}`,
+    }));
+
+    const fetchMock = jest.fn().mockImplementation((url: string) => {
+      if (url.indexOf('/api/v1/provider-analytics/connection-detail') === 0) {
+        return Promise.resolve({
+          ok: false,
+          json: () => Promise.resolve({}),
+          text: () => Promise.resolve('boom'),
+          status: 500,
+          statusText: 'Server Error',
+        } as Response);
+      }
+      let body: unknown = [];
+      if (url.indexOf('/custom-providers') !== -1) {
+        body = customProviders;
+      } else if (url.indexOf('/api/v1/routing/AgentRouter/providers') === 0) {
+        body = tenantProviders;
+      } else if (url.indexOf('/available-models') !== -1) {
+        body = pickerRows;
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+        status: 200,
+        statusText: 'OK',
+      } as Response);
+    });
+
+    runScriptAndInstall({
+      pathname: '/harnesses/AgentRouter/providers',
+      fetchMock,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The picker count (13) is the fallback when the configured lookup 500s.
+    expect(modelsCell.textContent).toContain('13');
+    expect(modelsCell.dataset.mwpModelCountPatched).toBe('true');
+    const note = modelsCell.querySelector('.mwp-model-count-patch-note');
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toContain('(patched by manifest-plugin)');
+  });
 });
