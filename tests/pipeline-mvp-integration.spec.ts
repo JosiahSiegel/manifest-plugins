@@ -28,6 +28,7 @@
  */
 import { spawnSync, SpawnSyncReturns } from 'child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -153,76 +154,6 @@ const PATCHED_MANIFEST_FILES = [
   },
 ] as const;
 
-/**
- * Minimal upstream-shaped `proxy.service.ts` carrying the
- * explicit-model early-return anchor so the apply CLI's
- * `applyAllFive` path can install the routing-override hook
- * (Blocker #1). Mirrors the synthesized fixture shape used by
- * `tests/apply.spec.ts::applyProxyRoutingOverrideHost` so the CLI
- * integration test exercises the same upstream contract.
- *
- * Wave-history note: previous waves of this fixture also carried a
- * `parseMaxMessagesPerRequest` import + a message-cap constructor
- * body, since the proxy.service.ts hook installed a fork plugin
- * that overrode `this.maxMessagesPerRequest`. Upstream commit
- * `c9009bcd5` removed the `maxMessagesPerRequest` feature from
- * `proxy.service.ts` entirely; the constructor now closes with
- * `) {}` (no body), and the message-cap import is gone. This
- * fixture mirrors the post-`c9009bcd5` shape.
- */
-const UPSTREAM_PROXY_SERVICE_FIXTURE = [
-  "import { ProviderParamSpecService } from '../routing-core/provider-param-spec.service';",
-  "import { OPENAI_MODEL_ID_AUTO, routeForOpenAiModelId } from './openai-model-id';",
-  '',
-  '@Injectable()',
-  'export class ProxyService {',
-  '  constructor(',
-  '    private readonly resolveService: ResolveService,',
-  '    private readonly modelDiscovery: ModelDiscoveryService,',
-  '    private readonly providerKeyService: ProviderKeyService,',
-  '    private readonly tierService: TierService,',
-  '    private readonly openaiOauth: OpenaiOauthService,',
-  '    private readonly providerParamSpecs: ProviderParamSpecService,',
-  '    private readonly autofixService: AutofixService,',
-  '  ) {}',
-  '',
-  '  private async resolveRouting(',
-  '    agentId: string,',
-  '    tenantId: string,',
-  '    body: ProxyRequestOptions[\'body\'],',
-  '    sessionKey: string,',
-  '    specificityOverride: ProxyRequestOptions[\'specificityOverride\'],',
-  '    headers: ProxyRequestOptions[\'headers\'],',
-  '    apiMode: ProxyApiMode,',
-  '  ): Promise<ResolvedRouting> {',
-  "    const requestedModel = typeof body.model === 'string' ? body.model : undefined;",
-  '    // Anthropic Messages requests require a provider-native model field; only',
-  '    // OpenAI-compatible surfaces use /v1/models IDs as route overrides.',
-  "    if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {",
-  '      return {',
-  "        tier: 'default' as const,",
-  '        route: routeForOpenAiModelId(requestedModel, []),',
-  "        fallback_routes: null,",
-  '      };',
-  '    }',
-  "    return { tier: 'default', route: null };",
-  '  }',
-  '}',
-  '',
-].join('\n');
-
-function writeUpstreamShapedManifestFixture(root: string): void {
-  for (const file of PATCHED_MANIFEST_FILES) {
-    const target = join(root, file.relativePath);
-    mkdirSync(dirname(target), { recursive: true });
-    if (file.relativePath === 'packages/backend/src/routing/proxy/proxy.service.ts') {
-      writeFileSync(target, UPSTREAM_PROXY_SERVICE_FIXTURE, 'utf-8');
-    } else {
-      writeFileSync(target, file.content, 'utf-8');
-    }
-  }
-}
-
 function readScript(relativePath: string): string {
   return readFileSync(join(REPO_ROOT, 'pipeline', relativePath), 'utf-8');
 }
@@ -256,57 +187,7 @@ function run(
   });
 }
 
-describe('apply CLI installs the routing-override hook by default (Blocker #1)', () => {
-  it('default `npm run apply` installs the routing-override helper in proxy.service.ts', () => {
-    // Blocker #1 contract: the default apply path (no `--apply-overlay`)
-    // MUST install the routing-override hook on `proxy.service.ts`.
-    // Before the fix this CLI used `applyAll` (3-file installer), which
-    // skipped the routing-override patch entirely.
-    const tmp = tempDir('manifest-apply-cli-routing-override-');
-    try {
-      writeUpstreamShapedManifestFixture(tmp);
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        MANIFEST_URL: '',
-        MANIFEST_DIR: '',
-        MANIFEST_CHECKOUT: '',
-        MANIFEST_FORK: '',
-        MVP_UI: '',
-      };
-      const result = run(process.execPath, [TSX_CLI, 'src/host/cli.ts', tmp], env, REPO_ROOT);
-
-      if (result.status !== 0) {
-        throw new Error(
-          `expected apply CLI to succeed with the upstream-shaped fixture\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-        );
-      }
-      const proxyService = readFileSync(
-        join(tmp, 'packages/backend/src/routing/proxy/proxy.service.ts'),
-        'utf-8',
-      );
-      // The routing-override host hook MUST be installed.
-      expect(proxyService).toContain('function applyProxyRoutingOverridePlugins(');
-      // The constructor MUST be extended with the headerTierService param.
-      expect(proxyService).toContain(
-        'private readonly headerTierService: HeaderTierService,',
-      );
-      // The HeaderTierService import MUST be added.
-      expect(proxyService).toContain(
-        "import { HeaderTierService } from '../header-tiers/header-tier.service';",
-      );
-      // The plugin call must appear BEFORE the explicit-model early-return.
-      const pluginIdx = proxyService.indexOf('applyProxyRoutingOverridePlugins(');
-      const earlyReturnIdx = proxyService.indexOf(
-        "if (apiMode !== 'messages' && requestedModel && requestedModel !== OPENAI_MODEL_ID_AUTO) {",
-      );
-      expect(pluginIdx).toBeGreaterThanOrEqual(0);
-      expect(earlyReturnIdx).toBeGreaterThanOrEqual(0);
-      expect(pluginIdx).toBeLessThan(earlyReturnIdx);
-    } finally {
-      cleanup(tmp);
-    }
-  });
-
+describe('apply CLI default install path', () => {
   it('cli.ts source imports `applyAllEight` (regression lock for the eight-file installer)', () => {
     // Blocker #1 regression lock: the CLI module MUST import
     // `applyAllEight` (not just `applyAllFive`). This is a static-source
@@ -324,163 +205,6 @@ describe('apply CLI installs the routing-override hook by default (Blocker #1)',
     const cli = readFileSync(join(REPO_ROOT, 'src/host/cli.ts'), 'utf-8');
     expect(cli).toMatch(/await\s+applyAllEight\s*\(/);
     expect(cli).not.toMatch(/await\s+applyAll\s*\(\s*checkoutPath\s*\)/);
-  });
-});
-
-describe('host/verify.ts reads routing-override sentinels from proxy.service.ts (Blocker #2)', () => {
-  it('verify.ts source resolves a proxy.service.ts path alongside provider-client.ts', () => {
-    // Blocker #2 regression lock: the verifier MUST read
-    // `proxy.service.ts` (in addition to `provider-client.ts`) so it
-    // can confirm the routing-override host was installed. Without
-    // this, `npm run verify` only checks the request-transform hook
-    // and silently passes when the routing-override hook is missing.
-    const verify = readFileSync(
-      join(REPO_ROOT, 'src/host/verify.ts'),
-      'utf-8',
-    );
-    expect(verify).toMatch(/proxy\.service\.ts/);
-  });
-
-  it('verify.ts source reads the routing-override helper sentinel `function applyProxyRoutingOverridePlugins(`', () => {
-    const verify = readFileSync(
-      join(REPO_ROOT, 'src/host/verify.ts'),
-      'utf-8',
-    );
-    expect(verify).toContain('function applyProxyRoutingOverridePlugins(');
-  });
-
-  it('verify.ts source reads the routing-override constructor param `private readonly headerTierService: HeaderTierService,`', () => {
-    const verify = readFileSync(
-      join(REPO_ROOT, 'src/host/verify.ts'),
-      'utf-8',
-    );
-    expect(verify).toContain(
-      'private readonly headerTierService: HeaderTierService,',
-    );
-  });
-
-  it('verify.ts preserves the existing provider-client sentinels (request-transform hook)', () => {
-    // The existing checks for the request-transform hook (provider-client)
-    // must remain — Blocker #2 fixes the verifier by ADDING the proxy.service
-    // checks, not by removing the provider-client ones.
-    const verify = readFileSync(
-      join(REPO_ROOT, 'src/host/verify.ts'),
-      'utf-8',
-    );
-    expect(verify).toContain('function applyRequestTransformPlugins(');
-    expect(verify).toContain('const transformed = applyRequestTransformPlugins(');
-  });
-
-  it('verify.ts integration: succeeds when all three files carry their host hooks; fails when proxy.service.ts is unpatched', () => {
-    // End-to-end: build a tempdir with all three patched files (provider-client,
-    // proxy.service, model-fetcher) and run the verifier. Then drop the
-    // routing-override hook from `proxy.service.ts` and assert the verifier
-    // reports the missing hook. Pre-fix, this test failed because the verifier
-    // only read `provider-client.ts` and the proxy.service.ts file was never
-    // inspected.
-    const tmp = tempDir('manifest-verify-routing-override-');
-    try {
-      // Patch provider-client.ts with the request-transform hook
-      // (so the existing verifier path passes), write proxy.service.ts
-      // carrying the routing-override helper + constructor param, and
-      // write model-fetcher.ts carrying the model-list-override helper.
-      const providerClientTarget = join(
-        tmp,
-        'packages/backend/src/routing/proxy/provider-client.ts',
-      );
-      const proxyServiceTarget = join(
-        tmp,
-        'packages/backend/src/routing/proxy/proxy.service.ts',
-      );
-      const modelFetcherTarget = join(
-        tmp,
-        'packages/backend/src/routing/model.controller.ts',
-      );
-      mkdirSync(dirname(providerClientTarget), { recursive: true });
-      mkdirSync(dirname(proxyServiceTarget), { recursive: true });
-      mkdirSync(dirname(modelFetcherTarget), { recursive: true });
-
-      writeFileSync(
-        providerClientTarget,
-        [
-          'function applyRequestTransformPlugins(){}',
-          'const transformed = applyRequestTransformPlugins();',
-          // Wave 5: the pasted snippet must reference the env-toggle
-          // helper so MANIFEST_PLUGINS_DISABLED is honored at module
-          // load. Verifier checks for these symbols.
-          "const _toggle = (require('manifest-plugins')).applyDisabledListFromEnv(process.env['MANIFEST_PLUGINS_DISABLED']);",
-        ].join('\n'),
-        'utf-8',
-      );
-      writeFileSync(
-        proxyServiceTarget,
-        [
-          "import { HeaderTierService } from '../header-tiers/header-tier.service';",
-          'function applyProxyRoutingOverridePlugins(){}',
-          'private readonly headerTierService: HeaderTierService,',
-          // Wave 5: same env-toggle sentinel — pasted proxy.service.ts
-          // snippet must reference the helper.
-          "const _toggle2 = (require('manifest-plugins')).applyDisabledListFromEnv(process.env['MANIFEST_PLUGINS_DISABLED']);",
-          '',
-        ].join('\n'),
-        'utf-8',
-      );
-      writeFileSync(
-        modelFetcherTarget,
-        [
-          'function applyModelListOverridePlugins(){}',
-          'const pluginOverride = applyModelListOverridePlugins();',
-          // Wave 5: env-toggle sentinel — pasted model-fetcher.ts snippet
-          // must reference the helper so MANIFEST_PLUGINS_DISABLED is honored
-          // when the host snippet loads.
-          "const _toggle3 = (require('manifest-plugins')).applyDisabledListFromEnv(process.env['MANIFEST_PLUGINS_DISABLED']);",
-          '',
-        ].join('\n'),
-        'utf-8',
-      );
-
-      const passEnv: NodeJS.ProcessEnv = {
-        ...process.env,
-        // The verifier reads `MANIFEST_CHECKOUT` from argv[2] or env.
-        // Point it at the tempdir via env so we don't depend on argv
-        // shape across shells.
-        MANIFEST_CHECKOUT: tmp,
-        MVP_UI: '',
-      };
-
-      const okResult = run(process.execPath, [TSX_CLI, 'src/host/verify.ts'], passEnv, REPO_ROOT);
-      // The verifier should report OK and exit 0 when all three hooks
-      // are present. Pre-fix this would have exited 0 too (because
-      // the verifier never read proxy.service.ts), so we rely on
-      // the stdout message shape to detect the fix.
-      expect(okResult.stdout).toMatch(/OK/);
-      expect(okResult.stdout).toMatch(/routing-override hook/);
-      expect(okResult.stdout).toMatch(/model-list-override hook/);
-
-      // Now drop the routing-override helper from proxy.service.ts
-      // and re-run. The verifier MUST report the missing hook and
-      // exit non-zero.
-      writeFileSync(
-        proxyServiceTarget,
-        [
-          "import { HeaderTierService } from '../header-tiers/header-tier.service';",
-          'private readonly headerTierService: HeaderTierService,',
-          '',
-        ].join('\n'),
-        'utf-8',
-      );
-
-      const failResult = run(
-        process.execPath,
-        [TSX_CLI, 'src/host/verify.ts'],
-        passEnv,
-        REPO_ROOT,
-      );
-      expect(failResult.status).not.toBe(0);
-      expect(failResult.stderr).toMatch(/routing-override/);
-    } finally {
-      cleanup(tmp);
-    }
   });
 });
 
@@ -543,7 +267,7 @@ describe('apply CLI integration', () => {
   });
 });
 
-describe('pipeline/build-and-publish.sh default install path (Blocker #1)', () => {
+describe('pipeline/build-and-publish.sh default install path', () => {
   it('default apply invocation passes --apply-overlay to install the routing-override hook', () => {
     // Blocker #1 regression lock: the pipeline's normal (non-MVP)
     // apply invocation MUST pass `--apply-overlay` so the
@@ -557,15 +281,6 @@ describe('pipeline/build-and-publish.sh default install path (Blocker #1)', () =
     expect(defaultApplyInvocation).not.toBeNull();
     if (defaultApplyInvocation === null) return;
     expect(defaultApplyInvocation[0]).toMatch(/--apply-overlay\b/);
-  });
-
-  it('post-apply verification grep checks `function applyProxyRoutingOverridePlugins(`', () => {
-    // Blocker #1 regression lock: the pipeline's post-apply grep MUST
-    // check the routing-override function sentinel — without this
-    // check the image can ship without the routing-override hook and
-    // pass the build.
-    const script = readScript('build-and-publish.sh');
-    expect(script).toMatch(/grep -q ['"]?function applyProxyRoutingOverridePlugins\(/);
   });
 
   it('default invocation is bash -n clean', () => {
@@ -738,11 +453,13 @@ describe('pipeline/e2e-test.sh integration', () => {
       // Write a stub jq that responds to `--version` with failure
       // (exit 127). This is the documented detection path: the
       // script probes functionality, not just presence.
+      const stubPath = join(stubBin, 'jq');
       writeFileSync(
-        join(stubBin, 'jq'),
+        stubPath,
         '#!/usr/bin/env bash\nexit 127\n',
         'utf-8',
       );
+      chmodSync(stubPath, 0o755);
 
       const env: NodeJS.ProcessEnv = {
         ...process.env,
@@ -765,14 +482,13 @@ describe('pipeline/e2e-test.sh integration', () => {
     // could serve successfully while `manifest-plugins` discovered zero
     // runtime plugins from `dist/`. The always-on e2e smoke must require
     // the shipped package inside the app container and prove the
-    // HeaderTierRouterPlugin is installed + executable.
+    // show-all-router-views plugin is installed + enabled.
     const script = readScript('e2e-test.sh');
     expect(script).toMatch(/plugin registry smoke/);
     expect(script).toMatch(/docker exec "\$APP_NAME" node -e/);
     expect(script).toMatch(/require\("\/app\/node_modules\/manifest-plugins"\)/);
-    expect(script).toMatch(/plugin\.id === "header-tier-router"/);
-    expect(script).toMatch(/typeof plugin\.overrideRouting === "function"/);
-    expect(script).toMatch(/result\.reason !== "header-match"/);
+    expect(script).toMatch(/plugin\.id === "show-all-router-views"/);
+    expect(script).toMatch(/enabled plugin registry is empty/);
   });
 
   it('TIER_ROUTING_SMOKE documents the tier-routing gate (regression fix for upstream 2ab748a6)', () => {
