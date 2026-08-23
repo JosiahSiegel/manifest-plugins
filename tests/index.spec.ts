@@ -1,10 +1,11 @@
 import {
+  CustomProviderModelCountFixPlugin,
   installedPlugins,
   ShowAllRouterViewsPlugin,
 } from '../src/index';
 
 describe('plugin registry', () => {
-  it('exports the one remaining built-in plugin', () => {
+  it('exports the two remaining built-in plugins', () => {
     // The fork previously shipped four built-in plugins:
     //   - DefaultPolicyPlugin       (retired 2026-07-10 — duplicated
     //                                 upstream's hardcoded CONCURRENCY_MAX)
@@ -20,16 +21,26 @@ describe('plugin registry', () => {
     //                                 plugin implemented is no longer needed
     //                                 for the standard image build)
     //   - ShowAllRouterViewsPlugin  (still shipped — see plugin source)
+    //   - CustomProviderModelCountFixPlugin (added 2026-08-18 — patches the
+    //                                 Connections page "0 models" badge
+    //                                 for custom Anthropic-compatible providers
+    //                                 until upstream fixes the cached_models
+    //                                 JSON null fallback in
+    //                                 tenant-providers.controller.ts)
     //
     // Tests assert against `installedPlugins` (always-shipped, regardless
     // of runtime toggle) rather than `plugins` (the enabled-only subset
     // consumed by the host), so a plugin disabled by `manifest-plugins.config.json`
     // (`enabled: false`) still appears here.
-    expect(installedPlugins).toHaveLength(1);
+    expect(installedPlugins).toHaveLength(2);
   });
 
   it('includes the ShowAllRouterViewsPlugin', () => {
     expect(installedPlugins).toContainEqual(expect.any(ShowAllRouterViewsPlugin));
+  });
+
+  it('includes the CustomProviderModelCountFixPlugin', () => {
+    expect(installedPlugins).toContainEqual(expect.any(CustomProviderModelCountFixPlugin));
   });
 
   it('freezes the registry to prevent runtime mutation', () => {

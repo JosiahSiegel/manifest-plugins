@@ -606,6 +606,12 @@ export {
   SHOW_ALL_ROUTER_VIEWS_SCRIPT,
 } from './plugins/show-all-router-views/plugin';
 
+export {
+  CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA,
+  CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT,
+  CustomProviderModelCountFixPlugin,
+} from './plugins/custom-provider-model-count-fix/plugin';
+
 // =============================================================================
 // Re-exports for the pasted host snippets
 // =============================================================================

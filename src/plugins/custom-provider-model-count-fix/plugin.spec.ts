@@ -1,0 +1,339 @@
+/**
+ * Unit tests for `custom-provider-model-count-fix`
+ * (`CustomProviderModelCountFixPlugin`).
+ *
+ * The plan's task 1 calls for exactly six assertions that lock the
+ * plugin's contract end-to-end:
+ *
+ *   1. metadata shape — id matches the scaffolder, kind is
+ *      `dashboard-transform`, name/version/description are non-empty
+ *      strings.
+ *   2. `static metadata` identity — the class's static field points
+ *      at the same frozen metadata object the module exports.
+ *   3. constructability — `new CustomProviderModelCountFixPlugin()`
+ *      does not throw.
+ *   4. script presence — `getDashboardScript()` returns a non-empty
+ *      string.
+ *   5. script contents — the script string contains the expected
+ *      pieces (IIFE wrapper, the API URL, the `custom:` filter, the
+ *      MutationObserver registration, and the `data-mwp-` marker
+ *      prefix). Regex assertions are used so the test does not depend
+ *      on exact whitespace.
+ *   6. metadata identity — `metadata.id === 'custom-provider-model-count-fix'`.
+ *
+ * Everything beyond those six is "operator-visible" behavior we
+ * can only meaningfully verify against a live Manifest stack, so
+ * it lives in wave 3 of the plan, not in this unit suite.
+ */
+import type { PluginMetadata } from '../..';
+import {
+  CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA,
+  CustomProviderModelCountFixPlugin,
+} from './plugin';
+
+describe('CustomProviderModelCountFixPlugin', () => {
+  it('declares metadata with the scaffolder id, a dashboard-transform kind, and non-empty name/version/description', () => {
+    expect(CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA).toEqual({
+      id: 'custom-provider-model-count-fix',
+      name: 'Custom provider model count fix',
+      version: '0.2.0',
+      description: expect.any(String),
+      kind: 'dashboard-transform',
+    } satisfies PluginMetadata);
+    expect((CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA.description as string).length).toBeGreaterThan(0);
+  });
+
+  it('exposes the metadata via the static class field as the same frozen object', () => {
+    // Strict identity — not just deep equality. The scaffolder exports
+    // the metadata via Object.freeze, and the class field must point
+    // at the same instance so per-request metadata walks find it.
+    expect(CustomProviderModelCountFixPlugin.metadata).toBe(CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA);
+    expect(Object.isFrozen(CustomProviderModelCountFixPlugin.metadata)).toBe(true);
+  });
+
+  it('is constructable without throwing', () => {
+    expect(() => new CustomProviderModelCountFixPlugin()).not.toThrow();
+  });
+
+  it('returns a non-empty string from getDashboardScript()', () => {
+    const script = new CustomProviderModelCountFixPlugin().getDashboardScript();
+    expect(typeof script).toBe('string');
+    expect((script as string).length).toBeGreaterThan(0);
+  });
+
+  it('script body contains the IIFE wrapper, routing URL, custom: filter, MutationObserver, and data-mwp- marker', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // IIFE wrapper — must be an immediately-invoked function expression
+    // either as `(function() {...})()` or `function() {...}()` style.
+    // We deliberately allow the trailing-comment and whitespace variants.
+    expect(script).toMatch(/\(function\s*\(\)\s*\{[\s\S]*?\}\)\(\);?\s*$/);
+
+    // The routing-picker endpoint must be present. We deliberately
+    // match against the literal string `/api/v1/routing/` and a
+    // `custom:` token because those are the public contract surface
+    // the upstream router exposes.
+    expect(script).toContain('/api/v1/routing/');
+    expect(script).toContain('available-models');
+
+    // The filter must check `provider.startsWith('custom:')` (or the
+    // equivalent `indexOf('custom:') === 0` form used by the plugin).
+    expect(script).toMatch(/custom:/);
+
+    // The MutationObserver registration is what keeps the patch alive
+    // across SPA navigation. Without it, the fix is one-shot.
+    expect(script).toContain('MutationObserver');
+    expect(script).toMatch(/observer\.observe\([^)]*\{[\s\S]*?childList[\s\S]*?subtree[\s\S]*?\}\)/);
+
+    // The data-mwp- marker prefix is the idempotency key. Any variant
+    // (data-mwp-model-count-patched, data-mwp-model-count-patched-note,
+    // mwpModelCountPatched) all share this namespace; the test asserts
+    // the namespace is present so future renames don't silently break it.
+    expect(script).toContain('data-mwp-');
+  });
+
+  it('metadata.id matches the scaffolder id exactly', () => {
+    expect(CustomProviderModelCountFixPlugin.metadata.id).toBe('custom-provider-model-count-fix');
+    // And the exported object agrees — catches accidental divergence
+    // (e.g. someone changing the class field but forgetting the export).
+    expect(CUSTOM_PROVIDER_MODEL_COUNT_FIX_PLUGIN_METADATA.id).toBe('custom-provider-model-count-fix');
+  });
+
+  it('script body contains the ConnectionDetail patcher and its URL pattern', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The ConnectionDetail patcher function must be present so the
+    // /providers/connections/<id> page gets the same fix as the
+    // per-agent list page.
+    expect(script).toContain('patchConnectionDetail');
+
+    // The URL pattern for the ConnectionDetail page. The script matches
+    // `/providers/connections/<id>` literally; we assert the regex
+    // source is present so a future rename of the route is caught.
+    expect(script).toContain('/providers\\/connections\\/');
+  });
+
+  it('script body contains the span-pair detection logic for the Models label', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The ConnectionDetail page renders fields as inline <span> pairs
+    // (label + value). The patcher walks every <span> looking for the
+    // literal "Models:" label, then patches the next-sibling <span>.
+    // Assert both the literal label and the nextElementSibling walk
+    // are present so a future refactor that switches to a different
+    // DOM strategy is caught.
+    expect(script).toContain('\'Models:\'');
+    expect(script).toContain('nextElementSibling');
+  });
+
+  it('script body contains the S5 marker assignment (data-mp-count-fix="s5")', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The S5 patcher (per-row badge on the /providers connections-list
+    // page) tags the patched <td> via `dataset.mpCountFix = 's5'`, which
+    // the browser materialises as the `data-mp-count-fix="s5"`
+    // attribute. The IIFE is JavaScript, so the literal HTML attribute
+    // form is NOT in the string — only the assignment site. We assert
+    // the assignment site and the literal value to lock the marker
+    // contract end-to-end.
+    expect(script).toMatch(/dataset\.mpCountFix\s*=\s*'s5'/);
+  });
+
+  it('script body contains the S6 marker assignment (data-mp-count-fix="s6")', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The S6 patcher (routing-picker relabel) tags the parent element
+    // of each rewritten text node with `dataset.mpCountFix = 's6'`.
+    // As with S5, the IIFE carries the JS assignment, not the HTML
+    // attribute form — the browser emits the attribute at runtime.
+    expect(script).toMatch(/dataset\.mpCountFix\s*=\s*'s6'/);
+  });
+
+  it('script body contains the S2 regex /models?:\\s*\\d+/i', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // S2 rewrites the agent-list subscription note span whose text
+    // matches `/models?:\s*\d+/i`. The IIFE is built by joining a
+    // string array with '\n', so the literal backslashes are escaped
+    // as `\\s` and `\\d` in the joined output. We assert the
+    // JS-source form so the test does not depend on what the
+    // `String.prototype.replace` regex engine sees at runtime.
+    expect(script).toMatch(/models\?:\\s\*\\d\+/i);
+  });
+
+  it('script body contains the S6 regex /^custom:[0-9a-f-]{36}$/', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // S6 matches text nodes whose content is exactly `custom:<uuid>`
+    // (36 hex/dash chars after the colon). The regex source contains
+    // no backslashes, so the IIFE carries it verbatim.
+    expect(script).toContain('^custom:[0-9a-f-]{36}$');
+  });
+
+  it('script body contains the provider_display_name field for the label map', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The S6 label map is built from the SAME fetch as the count data
+    // — there is no second network request for the routing picker
+    // relabel. We assert the field name appears in the IIFE so a
+    // future refactor that adds a separate fetch path is caught. The
+    // field also appears in fetchAvailableModels (count data), so
+    // occurrence-count would be >= 2; we only assert presence.
+    expect(script).toContain('provider_display_name');
+  });
+
+  it('script body contains the S3 per-connection scoping branch', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // S3 is now scoped per-connection: the patcher parses the
+    // connection ID from the URL, inspects the page header for a
+    // stable provider-name selector, and uses the scoped count with
+    // subtitle "(patched: this connection)" when found. When the
+    // selector is missing, the subtitle falls back to the strict
+    // "(patched: all custom providers — scoping unavailable)"
+    // message. Both branches are part of the per-connection
+    // scoping contract; assert the connectionId parse site AND the
+    // scoped subtitle so a future refactor that drops the fallback
+    // branch is caught.
+    expect(script).toContain('connectionId');
+    expect(script).toContain('(patched: this connection)');
+  });
+
+  it('script body contains the UUID-slug fallback for missing provider_display_name', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The fetchAvailableModels function must NOT skip rows that lack
+    // provider_display_name. Instead it falls back to a truncated-UUID
+    // slug so totalCustom still increments for every custom: row.
+    // Assert the ellipsis escape and the custom:-prefix reconstruction
+    // so a future refactor that drops the fallback is caught.
+    expect(script).toContain('\\u2026');
+    expect(script).toMatch(/providerKey\.indexOf\('custom:'\)\s*===\s*0/);
+    expect(script).toMatch(/uuid\.slice\(0,\s*8\)/);
+  });
+
+  it('script body contains the per-connection configured-models endpoints for ConnectionDetail', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The ConnectionDetail page must read the OPERATOR-CONFIGURED model
+    // count (the custom_providers.models JSON column the Edit form
+    // writes), not the routing-picker count. The lookup is two cheap
+    // config reads:
+    //   1. GET /api/v1/provider-analytics/connection-detail?connection_id=<id>
+    //      → connection.provider = 'custom:<uuid>'
+    //   2. GET /api/v1/routing/Playground/custom-providers
+    //      → entry with id === uuid exposes the configured models array.
+    // Assert both endpoint URLs and the models.length count site so a
+    // future refactor that reverts to the picker count is caught.
+    expect(script).toContain('fetchConfiguredModelCount');
+    expect(script).toContain('/api/v1/provider-analytics/connection-detail');
+    expect(script).toContain('connection_id=');
+    expect(script).toContain('/api/v1/routing/Playground/custom-providers');
+    expect(script).toMatch(/cp\.models\.length/);
+  });
+
+  it('script body contains the harness-Providers name→connectionId helper and both of its endpoints', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The agent-list (harness Providers) branch must resolve the
+    // operator-configured count per row, not just the picker count.
+    // The helper joins:
+    //   1. GET /api/v1/routing/<agent>/providers
+    //      → tenant_providers rows ({id, provider: 'custom:<uuid>', ...})
+    //   2. GET /api/v1/routing/<agent>/custom-providers
+    //      → custom provider rows ({id, name, models})
+    // and emits a map from custom-provider display name →
+    // tenant_providers.id (the connectionId fetchConfiguredModelCount
+    // needs). Assert the helper name and both endpoint path fragments
+    // so a future refactor that drops the join is caught.
+    expect(script).toContain('fetchCustomProviderConnectionsByDisplayName');
+    expect(script).toMatch(/\/api\/v1\/routing\/' \+ encodeURIComponent\(agentName\) \+ '\/providers'/);
+    expect(script).toMatch(/\/api\/v1\/routing\/' \+ encodeURIComponent\(agentName\) \+ '\/custom-providers'/);
+  });
+
+  it('script body wires patchTable to prefer the configured count over the picker count', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // patchTable's signature is now (table, countsByName,
+    // configuredCountByName). The picker count is the fallback when
+    // the configured lookup fails. Assert the new parameter is read
+    // and the per-row configured-count preference site so a future
+    // refactor that reverts to picker-only is caught.
+    expect(script).toMatch(/function patchTable\(table, countsByName, configuredCountByName\)/);
+    expect(script).toMatch(/configuredCountByName\[providerName\]/);
+    // The configured-count path uses the SAME subtitle as S3's success
+    // path — `(patched: this connection)` — because the value came
+    // from this connection's custom_providers.models column. The
+    // picker fallback keeps the legacy S1 subtitle.
+    expect(script).toContain('(patched: this connection)');
+    expect(script).toContain('(patched by manifest-plugin)');
+  });
+
+  it('script body contains the S7 missing-enabled-providers helper, banner patcher, and the enabled-providers endpoints', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The S7 surface paints a consent-gated banner on the harness
+    // Providers page when one or more custom providers are connected
+    // (tenant_providers row exists) but NOT enabled (missing from
+    // agent_enabled_providers). The helper joins three endpoints:
+    //   1. GET /api/v1/routing/<agent>/providers
+    //   2. GET /api/v1/agents/<agent>/enabled-providers
+    //   3. GET /api/v1/routing/<agent>/custom-providers
+    // and the banner's Enable button fires
+    //   PUT /api/v1/agents/<agent>/enabled-providers/<tenant_provider_id>
+    // for each missing id. Assert the helper name, the banner patcher,
+    // and both endpoint path fragments so a future refactor that drops
+    // the join or the PUT is caught.
+    expect(script).toContain('findMissingCustomProviderIds');
+    expect(script).toContain('patchEnabledProvidersBanner');
+    expect(script).toMatch(/\/api\/v1\/agents\/' \+ encodeURIComponent\(agentName\) \+ '\/enabled-providers'/);
+    expect(script).toMatch(/\/api\/v1\/agents\/' \+ encodeURIComponent\(agentName\) \+ '\/enabled-providers\/' \+ encodeURIComponent\(tpId\)/);
+    // The PUT method must be present on the enable call.
+    expect(script).toMatch(/method:\s*'PUT'/);
+  });
+
+  it('script body builds the S7 banner via createElement/appendChild/textContent (never innerHTML) and tags it with the s7 marker', () => {
+    const plugin = new CustomProviderModelCountFixPlugin();
+    const script = plugin.getDashboardScript() as string;
+
+    // The banner DOM construction must use createElement, appendChild,
+    // and textContent exclusively. innerHTML is forbidden by the plan
+    // (XSS risk from provider display names). The marker is set via
+    // setAttribute('data-mp-count-fix', 's7') — the IIFE carries the
+    // JS assignment site, not the HTML attribute form (the browser
+    // materialises the attribute at runtime).
+    expect(script).toMatch(/setAttribute\('data-mp-count-fix',\s*'s7'\)/);
+    expect(script).toMatch(/document\.createElement\('div'\)/);
+    expect(script).toMatch(/document\.createElement\('button'\)/);
+    // Both buttons carry data-mp-action markers for test selection.
+    expect(script).toMatch(/setAttribute\('data-mp-action',\s*'enable'\)/);
+    expect(script).toMatch(/setAttribute\('data-mp-action',\s*'dismiss'\)/);
+    // The IIFE must NOT use innerHTML as a DOM-write API. The string
+    // "innerHTML" appears in code comments (e.g. "never innerHTML") so
+    // a naive not.toContain('innerHTML') would false-positive. Assert
+    // the actual usage patterns instead: no `.innerHTML =` assignment
+    // and no `innerHTML(` call.
+    expect(script).not.toMatch(/\.innerHTML\s*=/);
+    expect(script).not.toMatch(/innerHTML\s*\(/);
+    // The banner must NOT persist the Dismiss state. The string
+    // "localStorage" appears in an IIFE comment ("no localStorage, no
+    // persistence") so a naive not.toContain would false-positive.
+    // Assert the actual usage pattern instead: no `localStorage.` API
+    // access.
+    expect(script).not.toMatch(/localStorage\./);
+  });
+});

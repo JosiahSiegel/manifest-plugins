@@ -106,6 +106,13 @@ ENV PATH=/nodejs/bin:$PATH
 # Copy the production node_modules (without devDeps, without esbuild/vitest
 # platform-specific binaries, without source maps / READMEs / ts source).
 COPY --from=prod-deps --chown=nonroot:nonroot /app/node_modules node_modules
+# Workspace-local hoisted deps (e.g. `modelparams` for `manifest-backend`)
+# live under `packages/<workspace>/node_modules/`, NOT under the root
+# `node_modules/`. Without this COPY, the runtime image ships without
+# those deps and the backend fails at boot with
+# `Cannot find module 'modelparams/package.json'` because the upstream
+# Dockerfile copies this path too.
+COPY --from=prod-deps --chown=nonroot:nonroot /app/packages/backend/node_modules packages/backend/node_modules
 COPY --from=prod-deps --chown=nonroot:nonroot /app/package.json package.json
 COPY --from=build --chown=nonroot:nonroot /app/packages/shared/dist packages/shared/dist
 COPY --from=build --chown=nonroot:nonroot /app/packages/backend/dist packages/backend/dist
