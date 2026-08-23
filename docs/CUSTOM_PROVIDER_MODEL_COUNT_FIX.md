@@ -250,7 +250,7 @@ When (or if) Manifest ships the upstream fix in
 `await customProviderRepo.models(uuid).length`), this plugin becomes a
 no-op. The patch guards skip any row whose current text is not `0`,
 `-`, or the already-patched count, so once the upstream fix lands the
-    plugin silently stops patching and can be removed at your leisure.
+plugin silently stops patching and can be removed at your leisure.
 
 ## Released in v0.2.0
 
