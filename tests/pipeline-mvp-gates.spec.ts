@@ -21,7 +21,7 @@
  * commands are no-ops / captured.
  */
 import { spawnSync } from 'child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -141,7 +141,9 @@ describe('pipeline/e2e-test.sh MVP_UI plugin-route gate', () => {
     try {
       const stubBin = join(tmp, 'bin');
       mkdirSync(stubBin, { recursive: true });
-      writeFileSync(join(stubBin, 'jq'), '#!/usr/bin/env bash\nexit 127\n', 'utf-8');
+      const stubPath = join(stubBin, 'jq');
+      writeFileSync(stubPath, '#!/usr/bin/env bash\nexit 127\n', 'utf-8');
+      chmodSync(stubPath, 0o755);
       const result = spawnSync('bash', [E2E_SCRIPT, 'whatever:latest'], {
         env: {
           ...process.env,

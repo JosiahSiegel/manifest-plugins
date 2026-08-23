@@ -33,6 +33,7 @@ interface LoadedModule {
   readonly getPersistedStateFile: () => string;
   readonly resetPersistedPluginState: () => void;
   readonly ShowAllRouterViewsPlugin: new (...args: never[]) => unknown;
+  readonly CustomProviderModelCountFixPlugin: new (...args: never[]) => unknown;
 }
 
 function freshStateFile(): string {
@@ -63,7 +64,7 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     }
   });
 
-  it('applies a persisted false entry by removing the plugin from the runtime array', () => {
+  it('applies a persisted false entry by removing that plugin from the runtime array', () => {
     writeFileSync(
       stateFile,
       JSON.stringify({ 'show-all-router-views': false }) + '\n',
@@ -76,10 +77,11 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    // The single shipped plugin is enabled by default; persisting
-    // show-all-router-views=false leaves the runtime array empty.
-    expect(mod!.plugins).toHaveLength(0);
+    // The single plugin explicitly disabled at the state file is the only
+    // one absent from the runtime array; the other shipped plugin stays.
+    expect(mod!.plugins).toHaveLength(1);
     expect(mod!.plugins).not.toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
+    expect(mod!.plugins).toContainEqual(expect.any(mod!.CustomProviderModelCountFixPlugin));
   });
 
   it('applies a persisted true entry so getInstalledPlugins reports enabled=true for that id', () => {
@@ -113,12 +115,15 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    // The single shipped plugin is enabled by default.
-    expect(mod!.plugins).toHaveLength(1);
+    // Both shipped plugins are enabled by default.
+    expect(mod!.plugins).toHaveLength(2);
     const installed = mod!.getInstalledPlugins();
     const sarv = installed.find((p) => p.id === 'show-all-router-views');
     expect(sarv!.enabled).toBe(true);
     expect(sarv!.enabledByDefault).toBe(true);
+    const cpfix = installed.find((p) => p.id === 'custom-provider-model-count-fix');
+    expect(cpfix!.enabled).toBe(true);
+    expect(cpfix!.enabledByDefault).toBe(true);
   });
 
   it('exposes getPersistedStateFile() reading the env var (and a default when unset)', () => {
@@ -147,19 +152,20 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     });
 
     // Boot has dropped show-all-router-views (persisted false). Runtime
-    // array is empty.
-    expect(mod!.plugins).toHaveLength(0);
+    // array only contains the other shipped plugin.
+    expect(mod!.plugins).toHaveLength(1);
+    expect(mod!.plugins).not.toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
 
     mod!.resetPersistedPluginState();
 
     expect(existsSync(stateFile)).toBe(false);
 
-    // After reset: per-plugin defaults are restored. The single shipped
-    // plugin is back to enabled by default.
+    // After reset: per-plugin defaults are restored. Both shipped
+    // plugins are back to enabled by default.
     const installed = mod!.getInstalledPlugins();
     const sarv = installed.find((p) => p.id === 'show-all-router-views');
     expect(sarv!.enabled).toBe(true);
     expect(sarv!.enabledByDefault).toBe(true);
-    expect(mod!.plugins).toHaveLength(1);
+    expect(mod!.plugins).toHaveLength(2);
   });
 });

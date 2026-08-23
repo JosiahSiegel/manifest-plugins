@@ -31,6 +31,7 @@ type PluginJson = {
 };
 
 const EXPECTED_PLUGIN_IDS = [
+  'custom-provider-model-count-fix',
   'show-all-router-views',
 ];
 
