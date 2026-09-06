@@ -18,10 +18,7 @@
  * the spec file does the same so both compile under the existing config.
  *
  * NOTE: The UI is generic — it renders whatever plugins the API returns.
- * The fixture below uses only the in-tree plugin (show-all-router-views).
- * External plugins like anthropic-billing-header can be added by the
- * operator via external-plugins.local.json — the UI shows them
- * transparently.
+ * The fixture uses only the in-tree plugins.
  */
 import '@testing-library/jest-dom';
 import { act, cleanup, screen, waitFor } from '@testing-library/react';

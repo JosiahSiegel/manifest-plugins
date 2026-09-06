@@ -588,11 +588,8 @@ export function setPluginEnabled(pluginId: string, enabled: boolean): void {
 // Re-exports for plugin authors
 // =============================================================================
 //
-// Built-in plugins are re-exported here for direct import by plugin authors
-// who want to compose or test them. External plugins (e.g.
-// anthropic-billing-header — see docs/EXTERNAL_PLUGINS.md) are NOT re-exported
-// because their source doesn't live in this repo; consumers fetch them via
-// the external-plugins loader and `require('manifest-plugins').loadPlugin(...)`.
+// Only in-tree plugins are re-exported here; plugin source must live
+// under `src/plugins/<name>/` to be re-exported.
 
 // `header-tier-router` was retired on 2026-07-10. Upstream PR #2468
 // (commit `fccb0e2`) restored header-tier precedence over explicit

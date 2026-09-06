@@ -168,8 +168,8 @@ on the next build) and set the plugin id to `false`:
 ```json
 {
   "plugins": {
-    "anthropic-billing-header": true,
-    "show-all-router-views": false
+    "show-all-router-views": false,
+    "custom-provider-model-count-fix": true
   }
 }
 ```
