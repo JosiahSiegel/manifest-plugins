@@ -45,7 +45,6 @@ import {
   ADMIN_MOUNT_NEW,
   ADMIN_MOUNT_OLD,
   HELPER_MARKER_OLD,
-  HOST_HELPER_SOURCE,
   MODEL_LIST_OVERRIDE_HOST_SOURCE,
   MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD,
   MODEL_LIST_OVERRIDE_NEW,
@@ -263,23 +262,37 @@ export async function applyProviderClientHost(
 }
 
 /**
- * Patch `proxy-rate-limiter.ts` to install the rate-limit host. Two
- * operations: insert `getResolvedConcurrencyMax` helper before the
- * `@Injectable()` decorator of the class, then replace the
- * `const CONCURRENCY_MAX = 10;` constant with a call to the helper.
+ * Patch `proxy-rate-limiter.ts` to install the rate-limit host. Single
+ * operation: replace the upstream `const DEFAULT_CONCURRENCY_MAX = 10;`
+ * module-scope constant with `${RATE_LIMITER_HOST_SOURCE}const
+ * DEFAULT_CONCURRENCY_MAX = getResolvedConcurrencyMax();`, which both
+ * inlines the helper definition and rewires the constant.
+ *
+ * Wave-history note: prior to upstream commit `3c5af562c` the file
+ * declared `const CONCURRENCY_MAX = 10;` at module scope; the patch
+ * replaced that line. Upstream commit `3c5af562c` (2026-09-06) renamed
+ * the constant to `DEFAULT_CONCURRENCY_MAX` and moved the
+ * env-var-backed initializer into the class as a `readonly` field
+ * (`private readonly concurrencyMax = optionalPositiveInteger(...)
+ * ?? DEFAULT_CONCURRENCY_MAX;`). The new anchor is the renamed
+ * module-scope literal; the class field initializer is left untouched
+ * and picks up the patched constant transparently.
+ *
+ * No `helperMarkerOld` is set: the rate-limit helper is inlined into
+ * `RATE_LIMITER_NEW` at module scope (above the class), so the apply
+ * tool only needs the single text replacement. Earlier waves of this
+ * patcher accidentally also inserted `HOST_HELPER_SOURCE` (the
+ * request-transform helper) at the `@Injectable()` anchor — that
+ * produced dead code in proxy-rate-limiter.ts but didn't break
+ * anything because both helpers compile standalone. Removing the
+ * redundant helper-insertion step keeps the patched file to the
+ * minimum: one helper definition + one rewired constant + the
+ * untouched upstream class body.
  */
 export async function applyProxyRateLimiterHost(
   filePath: string,
   options: ApplyOptions = {},
 ): Promise<ApplyResult> {
-  // Helper insertion marker: the `@Injectable()` decorator + class
-  // declaration. We include `implements OnModuleDestroy` because the
-  // upstream class declares that interface; if upstream adds/removes an
-  // interface, update this anchor.
-  const helperMarkerOld = `@Injectable()
-export class ProxyRateLimiter implements OnModuleDestroy {
-`;
-  const helperMarkerNew = `${HOST_HELPER_SOURCE}${helperMarkerOld}`;
   return applyPatch(
     {
       filePath,
@@ -287,8 +300,6 @@ export class ProxyRateLimiter implements OnModuleDestroy {
       oldText: RATE_LIMITER_OLD,
       oldTextAlternatives: [HOUSEKEEPING_RATE_LIMITER_OLD],
       newText: RATE_LIMITER_NEW,
-      helperMarkerOld,
-      helperMarkerNew,
     },
     options,
   );
