@@ -325,13 +325,11 @@ describe('plugin admin HTTP API', () => {
   });
 
   it('GET /admin/dashboard-transform/<id>.js returns 400 when the plugin is not a dashboard-transform', async () => {
-    // No in-tree plugin is a model-list-override anymore, so any
-    // dashboard-transform request for a non-existent plugin id would
-    // hit the 404 branch instead. The 400 branch is exercised by
-    // external plugins (e.g. an operator-supplied model-list-override
-    // via external-plugins.local.json); the regression lock here just
-    // confirms the 400 path still returns the expected body shape when
-    // triggered.
+    // The 400 path is only reachable when a non-existent dashboard-transform
+    // id is queried, which doesn't currently happen with the in-tree plugin
+    // set. The 404 path is exercised below as a regression lock; the 400
+    // body shape is locked here for the rare case it's triggered by a
+    // future plugin or operator config.
     const app = createApp();
     // 404 first to confirm the not-found path still works for a
     // plugin id that the registry does not know about.

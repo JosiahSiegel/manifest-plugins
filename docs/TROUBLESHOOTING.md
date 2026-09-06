@@ -94,25 +94,6 @@ echo $GITHUB_TOKEN | docker login ghcr.io -u <username> --password-stdin
 
 For the public version, use `ghcr.io/josiahsiegel/manifest-with-plugins:latest` (the [repo settings](https://github.com/JosiahSiegel/manifest-plugins/settings) control visibility).
 
-### Anthropic Pro/Max traffic still returns 429
-
-The `AnthropicBillingHeaderPlugin` isn't running. Most common causes:
-
-1. **`provider-client.ts` was reverted** by a fresh upstream `git pull`. Re-apply: `make apply`.
-2. **The plugin is excluded** via `manifest-plugins.config.json`. Check that `"anthropic-billing-header": true` (keys are plugin ids, not class names).
-3. **The classifier version is stale.** Anthropic rotates the `cc_version` they classify against; bump `MANIFEST_CC_VERSION` and rebuild.
-
-Verify the plugin is actually loaded:
-
-```bash
-docker run --rm -p 2099:2099 <image> /nodejs/bin/node -e \
-  'console.log(require("/app/node_modules/manifest-plugins/dist/index.js").plugins.map(p => p.constructor.name))'
-# Expected: [ 'AnthropicBillingHeaderPlugin', 'ShowAllRouterViewsPlugin' ]
-# (To disable a plugin locally, materialize `manifest-plugins.config.json`
-# from `config.example.json` and set its id to `false` — see
-# `docs/PLUGIN_REGISTRY.md` for the copy-on-missing workflow.)
-```
-
 ## Development environment issues
 
 ### Tests fail on Windows with "Invalid regular expression"
@@ -194,7 +175,7 @@ each plugin's `id: '...'` field, and validates the config against that set.
 A typo here causes the build script to error out:
 
 ```
-manifest-plugins.config.json: unknown plugin id "anthropic-billing-plugin" — shipped plugins are: anthropic-billing-header, show-all-router-views. (Plugin ids are the 'id' field of each plugin's metadata, not the class name.)
+manifest-plugins.config.json: unknown plugin id "show-all-router-views-v2" — shipped plugins are: show-all-router-views, custom-provider-model-count-fix. (Plugin ids are the 'id' field of each plugin's metadata, not the class name.)
 ```
 
 Note: keys are lowercase-with-dashes (`show-all-router-views`), not

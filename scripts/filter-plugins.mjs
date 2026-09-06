@@ -17,9 +17,8 @@
  *     noise, no circular imports.
  *
  * Rewriting strategy:
- *   - The filter walks `dist/plugins/<name>/plugin.js` (every plugin shipped,
- *     including ones fetched as external plugins from a private repo
- *     via `external-plugins.local.json`).
+ *   - The filter walks `dist/plugins/<name>/plugin.js` for every
+ *     shipped in-tree plugin.
  *   - For each compiled plugin, it reads the `id: '<plugin-id>'` field
  *     out of the metadata literal to learn the plugin's identifier.
  *   - If `manifest-plugins.config.json` mentions that id with an explicit
@@ -32,9 +31,9 @@
  *   - Plugins not mentioned in the config are left untouched (their
  *     source-declared default — true or false — wins).
  *
- * This is per-plugin rather than per-class-name: external plugins
- * fetched at build time (e.g. AnthropicBillingHeaderPlugin) are
- * supported without editing this script.
+ * This is per-plugin rather than per-class-name: every plugin that
+ * ships in `dist/plugins/<name>/plugin.js` is supported without
+ * editing this script.
  *
  * Run automatically via `npm run build`. Re-runnable (idempotent if
  * the files are already in the desired shape).

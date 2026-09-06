@@ -1,7 +1,7 @@
 {
   "name": "@josiahsiegel/manifest-plugins",
   "version": "0.1.0",
-  "description": "Fork-only plugins for Manifest — applied post-sync via npm run apply. The plugin host is injected into mnfst/manifest by `src/host/apply.ts` so the fork can install/request-modify Anthropic (and future) providers without re-syncing overlay patches.",
+  "description": "Fork-only plugins for Manifest — applied post-sync via npm run apply. The plugin host is injected into mnfst/manifest by `src/host/apply.ts` so the fork can install Anthropic-compatible providers via the in-tree plugins without re-syncing overlay patches.",
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,9 +16,8 @@
     "src/host/apply.ts"
   ],
   "scripts": {
-    "build": "node scripts/fetch-external-plugins.mjs && tsc -p tsconfig.json && find dist -type f \\( -name '*.spec.js' -o -name '*.spec.d.ts' -o -name '*.spec.js.map' -o -name '*.spec.d.ts.map' \\) -delete && node scripts/sync-config.mjs && node scripts/filter-plugins.mjs && node scripts/vendor-hash-wasm.mjs && node scripts/build-overlay.mjs && node scripts/build-admin-ui.mjs",
+    "build": "tsc -p tsconfig.json && find dist -type f \\( -name '*.spec.js' -o -name '*.spec.d.ts' -o -name '*.spec.js.map' -o -name '*.spec.d.ts.map' \\) -delete && node scripts/sync-config.mjs && node scripts/filter-plugins.mjs && node scripts/vendor-hash-wasm.mjs && node scripts/build-overlay.mjs && node scripts/build-admin-ui.mjs",
     "build:overlay": "node scripts/build-overlay.mjs",
-    "fetch:external-plugins": "node scripts/fetch-external-plugins.mjs",
     "clean": "rimraf dist coverage .tsbuildinfo",
     "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts'",
     "test": "jest",
@@ -69,8 +68,7 @@
     "mnfst",
     "plugin",
     "anthropic",
-    "oauth",
-    "billing-header"
+    "oauth"
   ],
   "license": "MIT"
 }

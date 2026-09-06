@@ -294,6 +294,7 @@ fi
 # `dist/` discovery looked for `plugin.ts`, found zero plugins, and booted with
 # an empty registry even though the dashboard served successfully.
 if docker exec "$APP_NAME" node -e '
+const fs = require("fs");
 const pkg = require("/app/node_modules/manifest-plugins");
 const installed = pkg.getInstalledPlugins();
 if (!Array.isArray(installed)) throw new Error("getInstalledPlugins() did not return an array");
@@ -303,13 +304,22 @@ if (installed.length === 0) {
 if (!installed.some((plugin) => plugin.id === "show-all-router-views")) {
   throw new Error(`show-all-router-views missing from installed plugins: ${JSON.stringify(installed)}`);
 }
+if (!installed.some((plugin) => plugin.id === "custom-provider-model-count-fix")) {
+  throw new Error(`custom-provider-model-count-fix missing from installed plugins: ${JSON.stringify(installed)}`);
+}
+if (installed.some((plugin) => plugin.id === "anthropic-billing-header")) {
+  throw new Error(`anthropic-billing-header present in installed plugins (retired external plugin): ${JSON.stringify(installed)}`);
+}
+if (fs.existsSync("/app/node_modules/manifest-plugins/dist/plugins/anthropic-billing-header")) {
+  throw new Error("anthropic-billing-header present on disk under dist/plugins/ (retired external plugin leaked into shipped image)");
+}
 if (!Array.isArray(pkg.plugins) || pkg.plugins.length === 0) {
   throw new Error("enabled plugin registry is empty");
 }
 ' >/dev/null; then
-  log "plugin registry smoke      → pass (show-all-router-views installed + enabled)"
+  log "plugin registry smoke      → pass (both in-tree plugins installed + enabled; retired external plugin rejected)"
 else
-  fail "plugin registry smoke failed — manifest-plugins is missing, empty, or show-all-router-views is not executable in the built image" 3
+  fail "plugin registry smoke failed — manifest-plugins is missing, empty, missing an in-tree plugin, or contains the retired external plugin in registry metadata or dist/plugins/ filesystem" 3
 fi
 
 # (e) (MVP_UI=1 only) /api/v1/plugins — assert the upstream Manifest
