@@ -267,6 +267,12 @@ describe('discoverPlugins (compiled JS shape — post-tsc runtime)', () => {
    * shape the host hits at boot. If `npm run build` hasn't been run
    * yet, the test skips with a clear message (so `npm test` doesn't
    * fail in a fresh checkout).
+   *
+   * The build context can otherwise ship ignored stale plugin output
+   * (a leftover `dist/plugins/<retired-id>/` directory whose source
+   * is no longer in `src/plugins/`); because `dist/` is checked into
+   * the image, tsc won't notice the orphan and the host would boot
+   * with a ghost plugin. A clean rebuild is required to drop it.
    */
   it('discovers the built-in plugins from the compiled dist/plugins tree', () => {
     // dist/ is one directory up from src/, next to package.json.
@@ -282,26 +288,31 @@ describe('discoverPlugins (compiled JS shape — post-tsc runtime)', () => {
       return;
     }
     const discovered = discoverPlugins(distPluginsDir);
+    const ids = discovered.map((entry) => entry.metadata.id);
     const classNames = discovered.map((entry) => entry.pluginClassName);
-    // The dist tree contains the in-tree plugins. External plugins
-    // (e.g. anthropic-billing-header) are only present when an operator
-    // has configured external-plugins.local.json + run the loader; the
-    // distPluginsDir walk here is a structural assertion, not a fixture
-    // count. PR #17 removed anthropic-billing-header from this repo; PR
-    // #18 added the build-order fix so external plugins reach dist when
-    // the loader runs. The earlier `default-policy` and `header-tier-router`
-    // plugins were retired (default-policy duplicated upstream's hardcoded
-    // cap; header-tier-router was subsumed by upstream PR #2468 — see the
-    // "Chore: retire obsolete plugins" commit), so they are no longer
-    // asserted here.
+
+    // Positive gate: the in-tree plugins MUST be present in dist.
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'show-all-router-views',
+        'custom-provider-model-count-fix',
+      ]),
+    );
     expect(classNames).toEqual(
       expect.arrayContaining([
         'ShowAllRouterViewsPlugin',
+        'CustomProviderModelCountFixPlugin',
       ]),
     );
-    // Must discover all in-tree plugins. External plugins may add to
-    // this count when present.
-    expect(discovered.length).toBeGreaterThanOrEqual(1);
+
+    // Negative gate: the retired external plugin MUST NOT be present.
+    // anthropic-billing-header was removed from this repo; any leftover
+    // dist artifact would still be discovered and shipped.
+    expect(ids).not.toContain('anthropic-billing-header');
+    expect(classNames).not.toContain('AnthropicBillingHeaderPlugin');
+    expect(existsSync(join(distPluginsDir, 'anthropic-billing-header'))).toBe(
+      false,
+    );
   });
 });
 
