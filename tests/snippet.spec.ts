@@ -110,13 +110,18 @@ describe('host snippet: existing anchors (pre-existing fixtures, regression cove
     expect(injectableIdx).toBeGreaterThan(helperIdx);
   });
 
-  it('RATE_LIMITER_OLD anchors on the bare CONCURRENCY_MAX constant', () => {
-    expect(RATE_LIMITER_OLD).toBe('const CONCURRENCY_MAX = 10;\n');
+  it('RATE_LIMITER_OLD anchors on the renamed DEFAULT_CONCURRENCY_MAX constant', () => {
+    // Wave-history: pre-upstream-refactor this asserted
+    // `const CONCURRENCY_MAX = 10;\n`. Upstream commit 3c5af562c
+    // renamed the constant to DEFAULT_CONCURRENCY_MAX and moved
+    // the env-var-backed initializer into the class. The anchor
+    // tracks the renamed module-scope literal.
+    expect(RATE_LIMITER_OLD).toBe('const DEFAULT_CONCURRENCY_MAX = 10;\n');
   });
 
-  it('RATE_LIMITER_NEW delegates to getResolvedConcurrencyMax()', () => {
+  it('RATE_LIMITER_NEW delegates to getResolvedConcurrencyMax() and rewires DEFAULT_CONCURRENCY_MAX', () => {
     expect(RATE_LIMITER_NEW).toContain('function getResolvedConcurrencyMax(');
-    expect(RATE_LIMITER_NEW).toContain('const CONCURRENCY_MAX = getResolvedConcurrencyMax();');
+    expect(RATE_LIMITER_NEW).toContain('const DEFAULT_CONCURRENCY_MAX = getResolvedConcurrencyMax();');
   });
 
   it('RATE_LIMITER_HOST_SOURCE declares the helper and reads from manifest-plugins', () => {

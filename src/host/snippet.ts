@@ -206,15 +206,38 @@ export function buildHelperMarkerNew(): string {
 
 /**
  * The host query inserted into `proxy-rate-limiter.ts`. Resolves the
- * `CONCURRENCY_MAX` value at module load by:
+ * `DEFAULT_CONCURRENCY_MAX` value at module load by:
  *   1. Walking the plugin array and asking each plugin for a policy.
  *   2. Falling through to `process.env.CONCURRENCY_MAX` if no plugin has
  *      an opinion.
- *   3. Falling through to the `DEFAULT_CONCURRENCY_MAX = 10` constant if
- *      the env var is unset or invalid.
+ *   3. Falling through to the literal `10` constant if the env var is
+ *      unset or invalid.
  *
- * Replaces the upstream env-backed `CONCURRENCY_MAX` initialization with
- * `const CONCURRENCY_MAX = getResolvedConcurrencyMax();`.
+ * Replaces the upstream `const DEFAULT_CONCURRENCY_MAX = 10;` line
+ * with `const DEFAULT_CONCURRENCY_MAX = getResolvedConcurrencyMax();`.
+ *
+ * Wave-history note: prior to upstream's refactor (commit f460dc0b,
+ * 2026-09-06), the file declared `const CONCURRENCY_MAX = 10;` at
+ * module scope and the `ProxyRateLimiter` class used it directly via
+ * `private readonly concurrencyMax = CONCURRENCY_MAX;`. Upstream
+ * renamed the constant to `DEFAULT_CONCURRENCY_MAX`, switched the
+ * instance field to read `process.env.MANIFEST_CONCURRENCY_MAX` via
+ * `optionalPositiveInteger(...)`, and made the constant the fallback
+ * of the `??` chain. Anchoring on `DEFAULT_CONCURRENCY_MAX = 10;`
+ * (and replacing it with a `getResolvedConcurrencyMax()` call) keeps
+ * the patch surface to a single line at module scope — the instance
+ * field `this.concurrencyMax = optionalPositiveInteger(...) ??
+ * DEFAULT_CONCURRENCY_MAX` is left untouched and continues to compile
+ * against the renamed symbol.
+ *
+ * The helper still reads the legacy `CONCURRENCY_MAX` env var (the
+ * one operators were told to set before the upstream rename), so
+ * existing deployments keep working without a config change. The
+ * upstream-canonical `MANIFEST_CONCURRENCY_MAX` env var is honored
+ * via the unchanged `optionalPositiveInteger(...)` path inside the
+ * class field initializer — net precedence under the new shape:
+ * plugin policy → `CONCURRENCY_MAX` env var → `MANIFEST_CONCURRENCY_MAX`
+ * env var → literal `10`.
  */
 export const RATE_LIMITER_HOST_SOURCE = `/**
  * Resolve the per-agent concurrent-request cap. Plugins override first;
@@ -281,20 +304,32 @@ function getResolvedConcurrencyMax(): number {
 /**
  * The exact text from upstream/main's `proxy-rate-limiter.ts` that the
  * apply tool replaces. Verbatim against the canonical upstream shape —
- * any whitespace difference breaks the patcher. `apply.ts`'s
- * `oldTextAlternatives` accepts the housekeeping overlay variant for
- * forks that already patched the file.
+ * any whitespace difference breaks the patcher.
+ *
+ * Wave-history note: prior to upstream commit f460dc0b (2026-09-06)
+ * the anchor was `const CONCURRENCY_MAX = 10;\n`. Upstream renamed
+ * the constant to `DEFAULT_CONCURRENCY_MAX` and moved the
+ * env-var-backed initializer into the class as a `readonly` field.
+ * `apply.ts`'s `oldTextAlternatives` keeps the pre-rename variant
+ * around for stale checkouts (the housekeeping overlay shape from
+ * when the file was `const DEFAULT_CONCURRENCY_MAX = 10;\n` followed
+ * by `const CONCURRENCY_MAX = positiveIntegerEnv(...)`) so re-runs
+ * against an already-patched but pre-refactor checkout still detect
+ * the anchor.
  */
-export const RATE_LIMITER_OLD = `const CONCURRENCY_MAX = 10;
+export const RATE_LIMITER_OLD = `const DEFAULT_CONCURRENCY_MAX = 10;
 `;
 
 /**
- * The replacement text. The original env-backed `CONCURRENCY_MAX` block
- * is replaced with a call to `getResolvedConcurrencyMax()` (defined in
- * `RATE_LIMITER_HOST_SOURCE`, which the apply tool inserts immediately
- * above this line).
+ * The replacement text. The upstream module-scope
+ * `DEFAULT_CONCURRENCY_MAX = 10` literal is replaced with a call to
+ * `getResolvedConcurrencyMax()` (defined in `RATE_LIMITER_HOST_SOURCE`,
+ * which the apply tool inserts immediately above this line). The
+ * class's `readonly concurrencyMax = optionalPositiveInteger(...)
+ * ?? DEFAULT_CONCURRENCY_MAX` field initializer is left untouched and
+ * picks up the new resolved value transparently.
  */
-export const RATE_LIMITER_NEW = `${RATE_LIMITER_HOST_SOURCE}const CONCURRENCY_MAX = getResolvedConcurrencyMax();
+export const RATE_LIMITER_NEW = `${RATE_LIMITER_HOST_SOURCE}const DEFAULT_CONCURRENCY_MAX = getResolvedConcurrencyMax();
 `;
 
 // =============================================================================

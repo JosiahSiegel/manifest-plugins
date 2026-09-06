@@ -220,8 +220,10 @@ describe('applyAll (two-file patcher)', () => {
 
       const rateLimiter = readFileSync(files.proxyRateLimiter, 'utf-8');
       expect(rateLimiter).toContain('function getResolvedConcurrencyMax(');
-      expect(rateLimiter).not.toContain('const CONCURRENCY_MAX = 10;');
-      expect(rateLimiter).toContain('const CONCURRENCY_MAX = getResolvedConcurrencyMax();');
+      expect(rateLimiter).not.toContain('const DEFAULT_CONCURRENCY_MAX = 10;');
+      expect(rateLimiter).toContain(
+        'const DEFAULT_CONCURRENCY_MAX = getResolvedConcurrencyMax();',
+      );
     });
   });
 
@@ -269,11 +271,17 @@ describe('applyAll (two-file patcher)', () => {
     // using a different code path: the OLD upstream anchor is gone but
     // the new-text sentinel (the post-patch call site) is present. The
     // patcher should report noop, not drift.
+    //
+    // Wave-history: pre-upstream-refactor (commit 3c5af562c) the
+    // upstream anchor was `const CONCURRENCY_MAX = 10;` and the
+    // post-patch call site was `const CONCURRENCY_MAX =
+    // getResolvedConcurrencyMax();`. Upstream renamed the constant
+    // to `DEFAULT_CONCURRENCY_MAX`; this test mirrors that rename.
     await withTempManifest(async (files) => {
       const original = readFileSync(files.proxyRateLimiter, 'utf-8');
       const customized = original.replace(
-        'const CONCURRENCY_MAX = 10;\n',
-        'const CONCURRENCY_MAX = getResolvedConcurrencyMax();\n',
+        'const DEFAULT_CONCURRENCY_MAX = 10;\n',
+        'const DEFAULT_CONCURRENCY_MAX = getResolvedConcurrencyMax();\n',
       );
       writeFileSync(files.proxyRateLimiter, customized, 'utf-8');
 
