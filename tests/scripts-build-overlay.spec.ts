@@ -17,7 +17,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
@@ -127,17 +129,15 @@ describe('scripts/build-overlay.mjs', () => {
         );
         return;
       }
-      // Copy the tsc .bin shim. The build script resolves TSC_BIN
-      // at <stubRoot>/node_modules/.bin/tsc[.cmd] and execs it; we
-      // don't need a working tsc toolchain (the test only asserts
-      // the artifact compiles) — copying the shim is enough.
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require('node:fs').copyFileSync(
-        realTscBin,
-        process.platform === 'win32'
-          ? join(stubBin, 'tsc.cmd')
-          : join(stubBin, 'tsc'),
-      );
+      const stubTscBin = process.platform === 'win32'
+        ? join(stubBin, 'tsc.cmd')
+        : join(stubBin, 'tsc');
+      if (process.platform === 'win32') {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('node:fs').copyFileSync(realTscBin, stubTscBin);
+      } else {
+        symlinkSync(readlinkSync(realTscBin), stubTscBin);
+      }
       // Recursive copy of node_modules/typescript so tsc can find
       // its own bin/tsc + lib/*.d.ts when the shim is invoked.
       const realTscDir = join(REPO_ROOT, 'node_modules', 'typescript');

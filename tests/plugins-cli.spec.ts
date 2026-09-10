@@ -67,9 +67,10 @@ describe('plugins-cli operator CLI', () => {
         MANIFEST_PLUGINS_STATE_FILE: tempFile,
       });
       expect(result.status).toBe(0);
-      // Both in-tree plugins are listed; the auto-discovery walks
+      // All three in-tree plugins are listed; the auto-discovery walks
       // `src/plugins/` and `dist/plugins/` at build time.
       expect(result.stdout).toContain('show-all-router-views');
+      expect(result.stdout).toContain('gpt-astra-model-list-override');
       // The header row must include the ENABLED column so the column
       // layout is intentional.
       expect(result.stdout).toMatch(/ENABLED/);
@@ -78,6 +79,7 @@ describe('plugins-cli operator CLI', () => {
     // constant to its value so the KIND column shows the real
     // kind instead of "unknown". Regression lock.
     expect(result.stdout).toMatch(/dashboard-transform/);
+    expect(result.stdout).toMatch(/model-list-override/);
     } finally {
       rmSync(join(tempFile, '..'), { recursive: true, force: true });
     }

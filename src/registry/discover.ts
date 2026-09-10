@@ -111,8 +111,7 @@ function findExportedClassName(pluginFile: string): string | null {
   let match: RegExpExecArray | null;
   let found: string | null = null;
   while ((match = pattern.exec(text)) !== null) {
-    const className = match[1];
-    if (className === undefined) continue;
+    const className = String(match[1]);
     if (found !== null) {
       throw new PluginDiscoveryError(
         `${pluginFile}: multiple exported classes are not allowed; found '${found}' and '${className}'`,
