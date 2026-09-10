@@ -12,6 +12,13 @@ const HOST_HELPER_SYMBOL = 'function applyRequestTransformPlugins(';
 const RETURN_TRANSFORMED_SYMBOL = 'const transformed = applyRequestTransformPlugins(';
 const MODEL_LIST_OVERRIDE_SYMBOL = 'function applyModelListOverridePlugins(';
 const MODEL_LIST_OVERRIDE_RETURN_SYMBOL = 'const pluginOverride = applyModelListOverridePlugins(';
+
+export const PROVIDER_PARAM_SPEC_HELPER_SYMBOL = 'function applyProviderParamSpecPlugins(';
+export const PROVIDER_PARAM_SPEC_GET_SPECS_SYMBOL =
+  'applyProviderParamSpecPlugins(\n      providerId,\n      authType,\n      model,\n      fallbackSpecs,\n    )';
+export const PROVIDER_PARAM_SPEC_LIST_MODEL_IDS_SYMBOL =
+  'applyProviderParamSpecPlugins(\n      undefined,\n      undefined,\n      undefined,\n      list,\n    ) as Array<{ provider: string; authType: AuthType; model: string }>';
+
 // Wave 5: every pasted host snippet must call
 // `require('manifest-plugins').applyDisabledListFromEnv(...)` so the
 // MANIFEST_PLUGINS_DISABLED env var is honored at process start.
@@ -38,6 +45,10 @@ function main(): number {
     checkoutPath,
     'packages/backend/src/routing/model.controller.ts',
   );
+  const providerParamSpecPath = resolve(
+    checkoutPath,
+    'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+  );
 
   if (!existsSync(providerClientPath)) {
     process.stderr.write(`[manifest-plugins/verify] missing: ${providerClientPath}\n`);
@@ -47,9 +58,14 @@ function main(): number {
     process.stderr.write(`[manifest-plugins/verify] missing: ${modelFetcherPath}\n`);
     return 2;
   }
+  if (!existsSync(providerParamSpecPath)) {
+    process.stderr.write(`[manifest-plugins/verify] missing: ${providerParamSpecPath}\n`);
+    return 2;
+  }
 
   const providerClientText = readFileSync(providerClientPath, 'utf-8');
   const modelFetcherText = readFileSync(modelFetcherPath, 'utf-8');
+  const providerParamSpecText = readFileSync(providerParamSpecPath, 'utf-8');
   const hasHelper = providerClientText.includes(HOST_HELPER_SYMBOL);
   const hasReturnWrap = providerClientText.includes(RETURN_TRANSFORMED_SYMBOL);
   const hasModelListOverrideHelper = modelFetcherText.includes(MODEL_LIST_OVERRIDE_SYMBOL);
@@ -62,6 +78,18 @@ function main(): number {
   const hasModelFetcherEnvToggle =
     modelFetcherText.includes(ENV_TOGGLE_SYMBOL) &&
     modelFetcherText.includes(ENV_VAR_SYMBOL);
+  const hasProviderParamSpecHelper = providerParamSpecText.includes(
+    PROVIDER_PARAM_SPEC_HELPER_SYMBOL,
+  );
+  const hasProviderParamSpecGetSpecs = providerParamSpecText.includes(
+    PROVIDER_PARAM_SPEC_GET_SPECS_SYMBOL,
+  );
+  const hasProviderParamSpecListModelIds = providerParamSpecText.includes(
+    PROVIDER_PARAM_SPEC_LIST_MODEL_IDS_SYMBOL,
+  );
+  const hasProviderParamSpecEnvToggle =
+    providerParamSpecText.includes(ENV_TOGGLE_SYMBOL) &&
+    providerParamSpecText.includes(ENV_VAR_SYMBOL);
 
   if (
     hasHelper &&
@@ -69,12 +97,17 @@ function main(): number {
     hasModelListOverrideHelper &&
     hasModelListOverrideReturn &&
     hasProviderEnvToggle &&
-    hasModelFetcherEnvToggle
+    hasModelFetcherEnvToggle &&
+    hasProviderParamSpecHelper &&
+    hasProviderParamSpecGetSpecs &&
+    hasProviderParamSpecListModelIds &&
+    hasProviderParamSpecEnvToggle
   ) {
     process.stdout.write(
       `[manifest-plugins/verify] OK — hosts installed in ${checkoutPath}\n` +
         `  ✓ request-transform hook (provider-client.ts)\n` +
         `  ✓ model-list-override hook (model.controller.ts)\n` +
+        `  ✓ provider-param-spec hooks (provider-param-spec.service.ts)\n` +
         `  ✓ MANIFEST_PLUGINS_DISABLED env-toggle wired\n`,
     );
     return 0;
@@ -88,9 +121,15 @@ function main(): number {
       `  model-list-override return wrapped: ${hasModelListOverrideReturn}\n` +
       `  env-toggle wired (provider-client): ${hasProviderEnvToggle}\n` +
       `  env-toggle wired (model-fetcher):   ${hasModelFetcherEnvToggle}\n` +
+      `  provider-param-spec helper present: ${hasProviderParamSpecHelper}\n` +
+      `  provider-param-spec getSpecs call present: ${hasProviderParamSpecGetSpecs}\n` +
+      `  provider-param-spec listModelIds call present: ${hasProviderParamSpecListModelIds}\n` +
+      `  env-toggle wired (provider-param-spec): ${hasProviderParamSpecEnvToggle}\n` +
       `  run \`npm run apply\` from this repo.\n`,
   );
   return 1;
 }
 
-process.exit(main());
+if (require.main === module) {
+  process.exit(main());
+}
