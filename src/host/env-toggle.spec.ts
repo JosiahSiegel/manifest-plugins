@@ -55,6 +55,10 @@ describe('parseDisabledList', () => {
       'mu',
     ]);
   });
+
+  it('deduplicates repeated ids while keeping the first occurrence', () => {
+    expect(parseDisabledList('alpha,alpha,beta,alpha')).toEqual(['alpha', 'beta']);
+  });
 });
 
 describe('applyDisabledListFromEnv', () => {
