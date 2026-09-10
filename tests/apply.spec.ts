@@ -24,7 +24,11 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
-import { providerParamValueIsValid, type ProviderParamSpec, type ModelCapability } from 'manifest-shared';
+import {
+  providerParamValueIsValid,
+  type ModelCapability,
+  type ProviderParamSpec,
+} from '../src';
 import {
   applyAll,
   applyAllEight,
@@ -128,7 +132,7 @@ const SYNTHESIZED_MAIN_TS = [
 
 const SYNTHESIZED_PROVIDER_PARAM_SPEC_SERVICE = [
   "import { Injectable, type OnModuleInit } from '@nestjs/common';",
-  "import { getProviderModelCapabilities, getProviderParamSpecs, normalizeProviderParamProviderId, type ProviderParamSpec } from 'manifest-shared';",
+  "import { getProviderModelCapabilities, getProviderParamSpecs, normalizeProviderParamProviderId, type ProviderParamSpec } from './_fixtures/provider-params';",
   '',
   'function providerMetadataIdentity(providerId: string | undefined, model: string | undefined): { provider: string; model: string } | null {',
   '  return providerId !== undefined && model !== undefined ? { provider: providerId, model } : null;',
@@ -323,7 +327,7 @@ function loadPatchedProviderParamService(
   }).outputText;
   const module = { exports: {} as Record<string, unknown> };
   const requireFromFixture = (id: string): unknown => {
-    if (id === 'manifest-shared') {
+    if (id === './_fixtures/provider-params') {
       return {
         getProviderParamSpecs: () => specs,
         getProviderModelCapabilities: () => capabilities,
@@ -465,6 +469,61 @@ describe('applyAll (two-file patcher)', () => {
   });
 });
 
+describe('local provider-param validator', () => {
+  const definition = {
+    path: 'value',
+    type: 'number',
+    label: 'Value',
+    description: 'Fixture value.',
+    group: 'sampling',
+  } as const;
+
+  it('preserves upstream boolean and string type semantics', () => {
+    expect(providerParamValueIsValid({ ...definition, type: 'boolean' }, true)).toBe(true);
+    expect(providerParamValueIsValid({ ...definition, type: 'boolean' }, 'true')).toBe(false);
+    expect(providerParamValueIsValid({ ...definition, type: 'string' }, 'value')).toBe(true);
+    expect(providerParamValueIsValid({ ...definition, type: 'string' }, 1)).toBe(false);
+  });
+
+  it('preserves upstream integer and number range semantics', () => {
+    const integer = { ...definition, type: 'integer', range: { min: 1, max: 3 } } as const;
+    expect(providerParamValueIsValid(integer, 2)).toBe(true);
+    expect(providerParamValueIsValid(integer, 2.5)).toBe(false);
+    expect(providerParamValueIsValid(integer, 0)).toBe(false);
+    expect(providerParamValueIsValid(integer, 4)).toBe(false);
+    expect(providerParamValueIsValid({ ...definition, range: { min: 0, max: 1 } }, 0.5)).toBe(true);
+    expect(providerParamValueIsValid(definition, Number.NaN)).toBe(false);
+  });
+
+  it('preserves upstream enum membership and missing-values semantics', () => {
+    expect(
+      providerParamValueIsValid({ ...definition, type: 'enum', values: ['low', 'high'] }, 'high'),
+    ).toBe(true);
+    expect(providerParamValueIsValid({ ...definition, type: 'enum' }, 'high')).toBe(false);
+    expect(
+      providerParamValueIsValid({ ...definition, type: 'enum', values: [{ nested: true }] }, { nested: true }),
+    ).toBe(true);
+    expect(
+      providerParamValueIsValid({ ...definition, type: 'enum', values: [{ nested: true }] }, 'different'),
+    ).toBe(false);
+    expect(
+      providerParamValueIsValid({ ...definition, type: 'enum', values: [[1, 2]] }, [1, 2]),
+    ).toBe(true);
+    expect(
+      providerParamValueIsValid({ ...definition, type: 'enum', values: [null] }, null),
+    ).toBe(true);
+  });
+
+  it('rejects an unknown runtime type from a malformed upstream row', () => {
+    expect(
+      Reflect.apply(providerParamValueIsValid, undefined, [
+        { ...definition, type: 'unknown' },
+        'value',
+      ]),
+    ).toBe(false);
+  });
+});
+
 describe('per-file wrappers', () => {
   it('applyProviderClientHost patches a single provider-client.ts in isolation', async () => {
     await withTempManifest(async (files) => {
@@ -511,6 +570,7 @@ describe('per-file wrappers', () => {
       expect(specs[0]?.values).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
       expect(providerParamValueIsValid(specs[0] ?? direct, 'xhigh')).toBe(true);
       expect(providerParamValueIsValid(specs[0] ?? direct, 'max')).toBe(true);
+      expect(providerParamValueIsValid(specs[0] ?? direct, 'unsupported')).toBe(false);
       const capabilities = await service.getCapabilities('openai', 'api_key', 'gpt-6-astra');
       expect(capabilities).toEqual(['text', 'image', 'stream']);
       expect(capabilities?.every((capability) => typeof capability === 'string')).toBe(true);

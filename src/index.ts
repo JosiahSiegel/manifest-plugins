@@ -38,7 +38,7 @@
  * `git pull` of upstream, run `npm run apply -- /path/to/manifest` to
  * re-inject the hosts. No fork repo or housekeeping overlay needed.
  */
-import type { ProviderParamSpec } from 'manifest-shared';
+import type { ProviderParamSpec } from './provider-params';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { applyDisabledListFromEnv } from './host/env-toggle';
@@ -468,6 +468,24 @@ export interface ModelListOverridePlugin {
 // =============================================================================
 // ProviderParamSpecPlugin — model-parameter catalog hook
 // =============================================================================
+
+export type {
+  AuthType,
+  JsonPrimitive,
+  JsonValue,
+  ModelCapability,
+  ModelParamDefinition,
+  ModelParamGroup,
+  ModelParamRange,
+  ModelParamType,
+  ParamApplicability,
+  ParamApplicabilityCondition,
+  ParamApplicabilityMatch,
+  ParamApplicabilityRule,
+  ParamApplicabilityValue,
+  ProviderParamSpec,
+} from './provider-params';
+export { providerParamValueIsValid } from './provider-params';
 
 export interface ProviderParamSpecPlugin {
   overrideProviderParamSpecs(

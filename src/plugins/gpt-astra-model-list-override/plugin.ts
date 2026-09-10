@@ -2,14 +2,15 @@ import { readFileSync } from 'fs';
 import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import type {
+  AuthType,
   ModelListOverrideContext,
   ModelListOverrideDiscoveredModel,
   ModelListOverridePlugin,
   ModelListOverrideResult,
   PluginMetadata,
+  ProviderParamSpec,
   ProviderParamSpecPlugin,
 } from '../..';
-import type { ProviderParamSpec } from 'manifest-shared';
 
 export const GPT_ASTRA_MODEL_LIST_OVERRIDE_PLUGIN_METADATA: PluginMetadata = Object.freeze({
   id: 'gpt-astra-model-list-override',
@@ -34,7 +35,6 @@ export const GPT_ASTRA_MODEL_LIST_OVERRIDE_PLUGIN_METADATA: PluginMetadata = Obj
 const ASTRA_MODEL_ID = 'gpt-6-astra';
 const ASTRA_TIERS: readonly string[] = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 const OPENAI_AUTH_TYPES = ['api_key', 'subscription'] as const;
-type AuthType = 'api_key' | 'subscription' | 'local';
 type ProviderParamIdentity = Pick<ProviderParamSpec, 'provider' | 'authType' | 'model'>;
 
 interface CatalogParamSpec extends ProviderParamSpec {

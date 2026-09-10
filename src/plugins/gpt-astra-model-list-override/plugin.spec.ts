@@ -39,8 +39,8 @@ import type {
   ModelListOverridePlugin,
   ModelListOverrideResult,
   PluginMetadata,
+  ProviderParamSpec,
 } from '../..';
-import type { ProviderParamSpec } from 'manifest-shared';
 import { applyDisabledListFromEnv } from '../../host/env-toggle';
 import { plugins as livePlugins, setPluginEnabled } from '../..';
 
