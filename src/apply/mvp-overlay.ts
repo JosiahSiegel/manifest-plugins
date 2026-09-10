@@ -38,6 +38,7 @@ import { existsSync, promises as fs } from 'fs';
 import { join } from 'path';
 import {
   applyProviderClientHost,
+  applyProviderParamSpecHost,
   applyProxyRateLimiterHost,
   type ApplyResult,
 } from '../host/apply';
@@ -177,7 +178,11 @@ export async function _applyOverlayForTesting(
   } catch {
     return { status: 'failed', id: overlay.id };
   }
-  if (current.includes(overlay.postPatchSymbol)) {
+  const postPatchSymbols = [
+    overlay.postPatchSymbol,
+    ...(overlay.requiredPostPatchSymbols ?? []),
+  ];
+  if (postPatchSymbols.every((symbol) => current.includes(symbol))) {
     return { status: 'noop', id: overlay.id };
   }
 
@@ -194,6 +199,8 @@ export async function _applyOverlayForTesting(
       result = await applyProviderClientHost(targetPath);
     } else if (overlay.id === 'proxy-rate-limiter-policy-host') {
       result = await applyProxyRateLimiterHost(targetPath);
+    } else if (overlay.id === 'provider-param-spec-host') {
+      result = await applyProviderParamSpecHost(targetPath);
     } else {
       // The MVP overlay spec is closed (OVERLAY_SPEC in the manifest
       // module is the only producer). Any other id is a bug in the
@@ -211,7 +218,10 @@ export async function _applyOverlayForTesting(
   if (result.status === 'upstream-drift') {
     return { status: 'failed', id: overlay.id };
   }
-  return { status: 'applied', id: overlay.id };
+  if (result.status === 'noop' && overlay.requiredPostPatchSymbols !== undefined) {
+    return { status: 'failed', id: overlay.id };
+  }
+  return { status: result.status, id: overlay.id };
 }
 
 /**

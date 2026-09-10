@@ -16,6 +16,7 @@
  * `src/host/snippet.ts` — the MVP overlay path is the typed +
  * declarative surface that consumes those snippets in one batch.
  */
+import './manifest.json';
 import { mountDashboardPluginManager } from './mount-dashboard';
 import { mountDashboardTransform } from './mount-dashboard-transform';
 
@@ -28,10 +29,11 @@ export interface MvpOverlaySpec {
    */
   readonly target: string;
   /**
-   * Symbol the apply tool checks to decide "already applied" — if the
-   * target file already contains this string, the overlay is a no-op.
+   * Primary symbol the apply tool checks for an already-applied overlay.
+   * Every `requiredPostPatchSymbols` entry must also be present.
    */
   readonly postPatchSymbol: string;
+  readonly requiredPostPatchSymbols?: readonly string[];
   /**
    * Optional custom applicator. When omitted, the default apply path
    * writes the overlay's compiled JS content into `target`. When set,
@@ -47,10 +49,8 @@ export interface MvpOverlaySpec {
  * The overlays mirror the patch sites in `src/host/apply.ts`:
  *   - `provider-client-transform-host`         → Anthropic request-transform host
  *   - `proxy-rate-limiter-policy-host`         → per-agent concurrency cap host
- *   - `model-controller-list-override-host`    → model-list-override hook on
- *     `model.controller.ts::getAvailableModels`, so `ModelListOverridePlugin`
- *     rows reach the `/v1/models` response body.
- *   - `dashboard-plugin-manager-mount`       → plugin admin UI mount in
+ *   - provider parameter-spec host             → plugin-supplied parameter specs and model identity rows
+ *   - `dashboard-plugin-manager-mount`         → plugin admin UI mount in
  *     `packages/frontend/index.html`.
  *
  * Wave-history note: the `proxy-service-policy-host` overlay
@@ -70,6 +70,15 @@ export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
     id: 'proxy-rate-limiter-policy-host',
     target: 'packages/backend/src/routing/proxy/proxy-rate-limiter.ts',
     postPatchSymbol: 'function getResolvedConcurrencyMax(',
+  }),
+  Object.freeze({
+    id: 'provider-param-spec-host',
+    target: 'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+    postPatchSymbol: 'function applyProviderParamSpecPlugins(',
+    requiredPostPatchSymbols: Object.freeze([
+      'applyProviderParamSpecPlugins(\n      providerId,\n      authType,\n      model,\n      fallbackSpecs,\n    )',
+      'applyProviderParamSpecPlugins(\n      undefined,\n      undefined,\n      undefined,\n      list,\n    ) as Array<{ provider: string; authType: AuthType; model: string }>',
+    ]),
   }),
   Object.freeze({
     id: 'dashboard-plugin-manager-mount',

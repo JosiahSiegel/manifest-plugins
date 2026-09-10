@@ -18,6 +18,12 @@ import {
 } from './mvp-overlay';
 import { OVERLAY_SPEC, MVP_OVERLAY_SPEC } from '../overlays/mvp';
 import type { MvpOverlaySpec } from '../overlays/mvp/manifest';
+import {
+  PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD,
+  PROVIDER_PARAM_SPEC_HOST_SOURCE,
+  PROVIDER_PARAM_SPEC_NEW_GET_SPECS,
+  PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+} from '../host/snippet';
 
 interface TempDir {
   readonly path: string;
@@ -54,10 +60,17 @@ const UPSTREAM_FIXTURES: UpstreamFixtures = {
 
 function seedUpstream(manifestRoot: string): void {
   const proxyDir = join(manifestRoot, 'packages/backend/src/routing/proxy');
+  const routingCoreDir = join(manifestRoot, 'packages/backend/src/routing/routing-core');
   mkdirSync(proxyDir, { recursive: true });
+  mkdirSync(routingCoreDir, { recursive: true });
   writeFileSync(join(proxyDir, 'provider-client.ts'), UPSTREAM_FIXTURES.providerClient, 'utf-8');
   writeFileSync(join(proxyDir, 'proxy-rate-limiter.ts'), UPSTREAM_FIXTURES.proxyRateLimiter, 'utf-8');
   writeFileSync(join(proxyDir, 'proxy.service.ts'), UPSTREAM_FIXTURES.proxyService, 'utf-8');
+  writeFileSync(
+    join(routingCoreDir, 'provider-param-spec.service.ts'),
+    'function applyProviderParamSpecPlugins() {}\n',
+    'utf-8',
+  );
 }
 
 interface SpyGitRunners {
@@ -218,6 +231,10 @@ describe('applyMvpOverlay (synthesized Manifest checkout)', () => {
         tmp.path,
         'packages/backend/src/routing/proxy/proxy.service.ts',
       );
+      const providerParamSpecPath = join(
+        tmp.path,
+        'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+      );
       writeFileSync(
         rateLimiterPath,
         `${UPSTREAM_FIXTURES.proxyRateLimiter}\nfunction getResolvedConcurrencyMax() {}\n`,
@@ -226,6 +243,16 @@ describe('applyMvpOverlay (synthesized Manifest checkout)', () => {
       writeFileSync(
         proxyServicePath,
         `${UPSTREAM_FIXTURES.proxyService}\nfunction applyProxyRoutingOverridePlugins() {}\n`,
+        'utf-8',
+      );
+      writeFileSync(
+        providerParamSpecPath,
+        [
+          PROVIDER_PARAM_SPEC_HOST_SOURCE,
+          PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD,
+          PROVIDER_PARAM_SPEC_NEW_GET_SPECS,
+          PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+        ].join('\n'),
         'utf-8',
       );
 
@@ -333,6 +360,19 @@ describe('applyMvpOverlay (synthesized Manifest checkout)', () => {
         }
         writeFileSync(path, `${overlay.postPatchSymbol}\n`, 'utf-8');
       }
+      writeFileSync(
+        join(
+          tmp.path,
+          'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+        ),
+        [
+          PROVIDER_PARAM_SPEC_HOST_SOURCE,
+          PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD,
+          PROVIDER_PARAM_SPEC_NEW_GET_SPECS,
+          PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+        ].join('\n'),
+        'utf-8',
+      );
 
       const runners = spyRunners('0'.repeat(40));
       const result = await applyMvpOverlay(tmp.path, {
@@ -872,6 +912,115 @@ describe('_applyOverlayForTesting (per-overlay branches)', () => {
     }
   });
 
+  it('returns noop when the production provider-param overlay is complete', async () => {
+    const tmp = tempDir('manifest-plugins-mvp-overlay-provider-param-noop-');
+    try {
+      seedUpstream(tmp.path);
+      const target = join(
+        tmp.path,
+        'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+      );
+      writeFileSync(
+        target,
+        [
+          PROVIDER_PARAM_SPEC_HOST_SOURCE,
+          PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD,
+          PROVIDER_PARAM_SPEC_NEW_GET_SPECS,
+          PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+        ].join('\n'),
+        'utf-8',
+      );
+      const overlay = MVP_OVERLAY_SPEC.find(({ id }) => id === 'provider-param-spec-host');
+      expect(overlay).toBeDefined();
+      if (overlay === undefined) {
+        throw new Error('provider-param-spec-host fixture is missing');
+      }
+
+      const outcome = await _applyOverlayForTesting(overlay, tmp.path);
+
+      expect(outcome).toEqual({
+        status: 'noop',
+        id: 'provider-param-spec-host',
+      });
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('rejects a noop result when a required overlay sentinel is missing', async () => {
+    const tmp = tempDir('manifest-plugins-mvp-overlay-required-sentinel-');
+    try {
+      seedUpstream(tmp.path);
+      const target = join(
+        tmp.path,
+        'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+      );
+      writeFileSync(
+        target,
+        [
+          PROVIDER_PARAM_SPEC_HOST_SOURCE,
+          PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD,
+          PROVIDER_PARAM_SPEC_NEW_GET_SPECS,
+          PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+        ].join('\n'),
+        'utf-8',
+      );
+      const outcome = await _applyOverlayForTesting(
+        {
+          id: 'provider-param-spec-host',
+          target: 'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+          postPatchSymbol: 'function applyProviderParamSpecPlugins(',
+          requiredPostPatchSymbols: Object.freeze(['required-future-sentinel']),
+        },
+        tmp.path,
+      );
+      expect(outcome).toEqual({
+        status: 'failed',
+        id: 'provider-param-spec-host',
+      });
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('does not report noop when the production provider-param overlay is only partially applied', async () => {
+    const tmp = tempDir('manifest-plugins-mvp-overlay-provider-param-partial-');
+    try {
+      seedUpstream(tmp.path);
+      const target = join(
+        tmp.path,
+        'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+      );
+      writeFileSync(
+        target,
+        [
+          PROVIDER_PARAM_SPEC_HOST_SOURCE,
+          PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD,
+           PROVIDER_PARAM_SPEC_NEW_GET_SPECS.replace(
+             'applyProviderParamSpecPlugins(\n      providerId,\n      authType,\n      model,\n      fallbackSpecs,\n    )',
+             'incompleteProviderParamSpecPlugins(\n      providerId,\n      authType,\n      model,\n      fallbackSpecs,\n    )',
+           ),
+           PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+        ].join('\n'),
+        'utf-8',
+      );
+      const overlay = MVP_OVERLAY_SPEC.find(({ id }) => id === 'provider-param-spec-host');
+      expect(overlay).toBeDefined();
+      if (overlay === undefined) {
+        throw new Error('provider-param-spec-host fixture is missing');
+      }
+
+      const outcome = await _applyOverlayForTesting(overlay, tmp.path);
+
+      expect(outcome).toEqual({
+        status: 'failed',
+        id: 'provider-param-spec-host',
+      });
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
   it('reports failed for an unknown overlay id (the closed-spec branch)', async () => {
     const tmp = tempDir('manifest-plugins-mvp-overlay-unknown-');
     try {
@@ -906,10 +1055,10 @@ describe('OVERLAY_SPEC re-exports', () => {
   it('MVP_OVERLAY_SPEC and OVERLAY_SPEC reference the same frozen array', () => {
     expect(OVERLAY_SPEC).toBe(MVP_OVERLAY_SPEC);
     expect(Object.isFrozen(OVERLAY_SPEC)).toBe(true);
-    // 4 overlays: provider-client + rate-limiter + dashboard mounts.
+    // 5 overlays: provider-client + rate-limiter + provider-param + dashboard mounts.
     // The `proxy-service-routing-override-host` overlay was retired
     // on 2026-07-10 when upstream PR #2468 subsumed the behavior.
-    expect(OVERLAY_SPEC).toHaveLength(4);
+    expect(OVERLAY_SPEC).toHaveLength(5);
     for (const overlay of OVERLAY_SPEC) {
       expect(typeof overlay.id).toBe('string');
       expect(typeof overlay.target).toBe('string');
