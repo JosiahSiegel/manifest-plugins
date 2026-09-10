@@ -153,6 +153,25 @@ const PATCHED_MANIFEST_FILES = [
       '}\n',
   },
   {
+    relativePath: 'packages/backend/src/routing/routing-core/provider-key.service.ts',
+    content:
+      'function Injectable(): ClassDecorator { return () => undefined; }\n' +
+      '\n' +
+      '@Injectable()\n' +
+      'export class ProviderKeyService {\n' +
+      '  async isRouteAvailable(tenantId: string, route: ModelRoute, agentId?: string): Promise<boolean> {\n' +
+      '    const providerNames = expandProviderNames([route.provider]);\n' +
+      '    const discovered = await this.discoveryService.getModelsForAgent(tenantId, agentId);\n' +
+      '    const connectionModels = discovered.filter(\n' +
+      '      (m) =>\n' +
+      '        providerNames.has(m.provider.toLowerCase()) &&\n' +
+      '        (!route.authType || !m.authType || m.authType === route.authType),\n' +
+      '    );\n' +
+      '    return connectionModels.some((m) => m.id === route.model);\n' +
+      '  }\n' +
+      '}\n',
+  },
+  {
     relativePath:
       'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
     content:
@@ -242,7 +261,7 @@ function run(
 }
 
 describe('apply CLI default install path', () => {
-  it('cli.ts source imports `applyAllEight` (regression lock for the nine-file installer)', () => {
+  it('cli.ts source imports `applyAllEight` (regression lock for the ten-file installer)', () => {
     // Blocker #1 regression lock: the CLI module MUST import
     // `applyAllEight` (not just `applyAllFive`). This is a static-source
     // assertion so a future refactor cannot silently revert to the
@@ -255,11 +274,11 @@ describe('apply CLI default install path', () => {
   it('cli.ts source enables the provider-param patch in the default path', () => {
     // Regression lock for the production default.
     const cli = readFileSync(join(REPO_ROOT, 'src/host/cli.ts'), 'utf-8');
-    expect(cli).toMatch(
-      /await\s+applyAllEight\(checkoutPath, undefined, \{ providerParamSpec: true \}\)/,
-    );
+    expect(cli).toContain('providerParamSpec: true');
+    expect(cli).toContain('providerKeyRouteAvailability: true');
     expect(cli).not.toMatch(/await\s+applyAll\s*\(\s*checkoutPath\s*\)/);
-    expect(cli).toContain('[manifest-plugins/apply] all nine host hooks patched (or already no-op)');
+    expect(cli).toContain("logResult('provider-key-route-availability', all.providerKeyRouteAvailability)");
+    expect(cli).toContain('[manifest-plugins/apply] all ten host hooks patched (or already no-op)');
   });
 });
 
@@ -287,7 +306,7 @@ describe('apply CLI integration', () => {
       expect(result.stderr).not.toContain('choose only one Manifest source');
       expect(result.stdout).toContain('[manifest-plugins/apply] SOURCE_COMMIT=');
       expect(result.stdout).toContain(
-        '[manifest-plugins/apply] all nine host hooks patched (or already no-op)',
+        '[manifest-plugins/apply] all ten host hooks patched (or already no-op)',
       );
     } finally {
       cleanup(tmp);

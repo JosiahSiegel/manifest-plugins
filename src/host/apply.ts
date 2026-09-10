@@ -55,6 +55,9 @@ import {
   PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
   PROVIDER_PARAM_SPEC_OLD_GET_SPECS,
   PROVIDER_PARAM_SPEC_OLD_LIST_MODEL_IDS,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_MARKER_OLD,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_NEW,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_OLD,
   ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_HEADER_TIER,
   ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_SPECIFICITY,
   ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_TIER,
@@ -66,6 +69,7 @@ import {
   RATE_LIMITER_OLD,
   buildHelperMarkerNew,
   buildModelListOverrideHelperMarkerNew,
+  buildProviderKeyRouteAvailabilityHelperMarkerNew,
   buildProviderParamSpecHelperMarkerNew,
 } from './snippet';
 import {
@@ -407,6 +411,23 @@ export async function applyRoutingModelListOverrideHost(
     options,
   );
 }
+export async function applyProviderKeyRouteAvailabilityHost(
+  filePath: string,
+  options: ApplyOptions = {},
+): Promise<ApplyResult> {
+  return applyPatch(
+    {
+      filePath,
+      postPatchSymbol: PROVIDER_KEY_ROUTE_AVAILABILITY_NEW,
+      oldText: PROVIDER_KEY_ROUTE_AVAILABILITY_OLD,
+      newText: PROVIDER_KEY_ROUTE_AVAILABILITY_NEW,
+      helperMarkerOld: PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_MARKER_OLD,
+      helperMarkerNew: buildProviderKeyRouteAvailabilityHelperMarkerNew(),
+    },
+    options,
+  );
+}
+
 /**
  * Install one module-scope helper and patch the three public
  * provider-param-spec methods independently. Method patches use a byte-equal
@@ -541,11 +562,16 @@ export interface ManifestFileSpec {
    * Path to upstream's `routing-core/provider-param-spec.service.ts`.
    * Used by `applyAllEight` (when the `providerParamSpec` option is
    * enabled — default true) to install the provider-param-spec host
-    * on `getSpecs` / `listModelIds`. Optional;
-   * when omitted, the provider-param-spec patch is skipped with a
-   * synthetic `noop` result.
+   * on `getSpecs` / `listModelIds`. Optional; when omitted, the
+   * provider-param-spec patch is skipped with a synthetic `noop` result.
    */
   providerParamSpecService?: string;
+  /**
+   * Path to upstream's `routing-core/provider-key.service.ts`. Used by
+   * `applyAllEight` to expose plugin-added models to `isRouteAvailable`.
+   * Optional for backward compatibility; omission produces a synthetic noop.
+   */
+  providerKeyService?: string;
 }
 
 export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
@@ -558,6 +584,8 @@ export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
   headerTierService: 'packages/backend/src/routing/header-tiers/header-tier.service.ts',
   providerParamSpecService:
     'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+  providerKeyService:
+    'packages/backend/src/routing/routing-core/provider-key.service.ts',
 };
 
 export interface ApplyAllResult {
@@ -651,6 +679,7 @@ export interface ApplyAllFiveResult extends ApplyAllResult {
 /** `providerParamSpec` defaults to enabled; set it to `false` to skip the host. */
 export type ApplyAllEightOptions = ApplyOptions & {
   readonly providerParamSpec?: boolean;
+  readonly providerKeyRouteAvailability?: boolean;
 };
 
 /**
@@ -666,6 +695,8 @@ export interface ApplyAllEightResult extends ApplyAllFiveResult {
   headerTierServiceRoutingModelList: ApplyResult;
   /** Result of the provider-param-spec patch on `provider-param-spec.service.ts`. */
   providerParamSpec: ApplyResult;
+  /** Result of the route-availability patch on `provider-key.service.ts`. */
+  providerKeyRouteAvailability: ApplyResult;
 }
 
 export async function applyAllFive(
@@ -788,10 +819,30 @@ export async function applyAllEight(
       ),
     );
   }
+  const providerKeyRouteAvailabilityEnabled =
+    options.providerKeyRouteAvailability !== false;
+  const providerKeyPatches: Array<
+    Promise<{ key: 'providerKeyRouteAvailability'; result: ApplyResult }>
+  > = [];
+  if (
+    providerKeyRouteAvailabilityEnabled &&
+    files.providerKeyService !== undefined
+  ) {
+    providerKeyPatches.push(
+      applyProviderKeyRouteAvailabilityHost(
+        resolve(files.providerKeyService),
+        options,
+      ).then((result) => ({
+        key: 'providerKeyRouteAvailability' as const,
+        result,
+      })),
+    );
+  }
 
   const resolved = await Promise.all([
     ...routingPatches,
     ...providerParamSpecPatches,
+    ...providerKeyPatches,
   ]);
 
   const tierServiceRoutingModelList: ApplyResult =
@@ -814,12 +865,18 @@ export async function applyAllEight(
       status: 'noop',
       file: '<providerParamSpec not requested>',
     };
+  const providerKeyRouteAvailability: ApplyResult =
+    resolved.find((r) => r.key === 'providerKeyRouteAvailability')?.result ?? {
+      status: 'noop',
+      file: '<providerKeyService not requested>',
+    };
 
   const allDrift = [
     tierServiceRoutingModelList,
     specificityServiceRoutingModelList,
     headerTierServiceRoutingModelList,
     providerParamSpec,
+    providerKeyRouteAvailability,
   ];
   const hasDrift = fiveFileResult.hasDrift || allDrift.some((r) => r.status === 'upstream-drift');
   const fullyApplied = fiveFileResult.fullyApplied && allDrift.every((r) => r.status !== 'upstream-drift');
@@ -830,6 +887,7 @@ export async function applyAllEight(
     specificityServiceRoutingModelList,
     headerTierServiceRoutingModelList,
     providerParamSpec,
+    providerKeyRouteAvailability,
     fullyApplied,
     hasDrift,
   };

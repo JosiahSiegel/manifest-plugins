@@ -623,6 +623,97 @@ export const ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_HEADER_TIER =
   '@Injectable()\nexport class HeaderTierService {\n';
 
 // =============================================================================
+// Provider-key route-availability model-list override host
+// =============================================================================
+
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_HOST_SOURCE = `function applyProviderKeyModelListOverridePlugins(
+  tenantId: string,
+  agentId: string | undefined,
+  discoveredModels: ReadonlyArray<unknown>,
+): ReadonlyArray<unknown> {
+  const fallback = Object.freeze([...discoveredModels]);
+  let pkg: {
+    plugins?: unknown;
+    applyDisabledListFromEnv?: unknown;
+  } | undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    pkg = require('manifest-plugins') as {
+      plugins?: unknown;
+      applyDisabledListFromEnv?: unknown;
+    };
+  } catch {
+    return fallback;
+  }
+  if (!pkg || !Array.isArray(pkg.plugins)) return fallback;
+  try {
+    const toggle = pkg.applyDisabledListFromEnv;
+    if (typeof toggle === 'function') {
+      (toggle as (value: string | undefined) => void)(
+        process.env['MANIFEST_PLUGINS_DISABLED'],
+      );
+    }
+  } catch {
+    // The environment toggle is best-effort and must not block route availability.
+  }
+  for (const plugin of pkg.plugins) {
+    if (
+      !plugin ||
+      typeof (plugin as { overrideModelList?: unknown }).overrideModelList !== 'function'
+    ) {
+      continue;
+    }
+    try {
+      const out = (plugin as {
+        overrideModelList: (ctx: unknown) => unknown;
+      }).overrideModelList({
+        tenantId,
+        agentId,
+        discoveredModels: fallback,
+        requestMetadata: { source: 'provider-key.service.is-route-available' },
+      });
+      if (
+        out &&
+        typeof out === 'object' &&
+        Array.isArray((out as { discoveredModels?: unknown }).discoveredModels)
+      ) {
+        const replacement = out as {
+          discoveredModels: ReadonlyArray<unknown>;
+        };
+        return Object.freeze([...replacement.discoveredModels]);
+      }
+    } catch (err) {
+      const name =
+        (plugin as { constructor?: { name?: string } }).constructor?.name ?? 'plugin';
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(
+        \`[manifest-plugins] \${name} overrideModelList failed: \${msg}\`,
+      );
+    }
+  }
+  return fallback;
+}
+
+`;
+
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_OLD = `    const discovered = await this.discoveryService.getModelsForAgent(tenantId, agentId);`;
+
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_NEW = `    const discoveredRaw = await this.discoveryService.getModelsForAgent(tenantId, agentId);
+    const discovered = applyProviderKeyModelListOverridePlugins(
+      tenantId,
+      agentId,
+      discoveredRaw,
+    ) as typeof discoveredRaw;`;
+
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_MARKER_OLD =
+  '@Injectable()\nexport class ProviderKeyService {\n';
+
+export function buildProviderKeyRouteAvailabilityHelperMarkerNew(): string {
+  return `${PROVIDER_KEY_ROUTE_AVAILABILITY_HOST_SOURCE}${PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_MARKER_OLD}`;
+}
+
+// =============================================================================
 // Admin Express app mount (injected into main.ts)
 // =============================================================================
 

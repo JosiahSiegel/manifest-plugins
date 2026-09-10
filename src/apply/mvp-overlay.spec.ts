@@ -23,6 +23,10 @@ import {
   PROVIDER_PARAM_SPEC_HOST_SOURCE,
   PROVIDER_PARAM_SPEC_NEW_GET_SPECS,
   PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_MARKER_OLD,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_HOST_SOURCE,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_NEW,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_OLD,
 } from '../host/snippet';
 
 interface TempDir {
@@ -69,6 +73,23 @@ function seedUpstream(manifestRoot: string): void {
   writeFileSync(
     join(routingCoreDir, 'provider-param-spec.service.ts'),
     'function applyProviderParamSpecPlugins() {}\n',
+    'utf-8',
+  );
+  writeFileSync(
+    join(routingCoreDir, 'provider-key.service.ts'),
+    [
+      'function Injectable(): ClassDecorator { return () => undefined; }',
+      '',
+      PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_MARKER_OLD.trimEnd(),
+      '  async isRouteAvailable(tenantId: string, route: ModelRoute, agentId?: string) {',
+      PROVIDER_KEY_ROUTE_AVAILABILITY_OLD.trimEnd(),
+      '      () => false,',
+      '    );',
+      '    return connectionModels.length > 0;',
+      '  }',
+      '}',
+      '',
+    ].join('\n'),
     'utf-8',
   );
 }
@@ -1021,6 +1042,63 @@ describe('_applyOverlayForTesting (per-overlay branches)', () => {
     }
   });
 
+  it('applies and recognizes a complete provider-key route-availability overlay', async () => {
+    const tmp = tempDir('manifest-plugins-mvp-overlay-provider-key-');
+    try {
+      seedUpstream(tmp.path);
+      const overlay = MVP_OVERLAY_SPEC.find(
+        ({ id }) => id === 'provider-key-route-availability-host',
+      );
+      expect(overlay).toBeDefined();
+      if (overlay === undefined) throw new Error('provider-key overlay fixture is missing');
+
+      const first = await _applyOverlayForTesting(overlay, tmp.path);
+      const second = await _applyOverlayForTesting(overlay, tmp.path);
+      const target = join(
+        tmp.path,
+        'packages/backend/src/routing/routing-core/provider-key.service.ts',
+      );
+      const patched = readFileSync(target, 'utf-8');
+
+      expect(first).toEqual({ status: 'applied', id: overlay.id });
+      expect(second).toEqual({ status: 'noop', id: overlay.id });
+      expect(patched).toContain(PROVIDER_KEY_ROUTE_AVAILABILITY_HOST_SOURCE);
+      expect(patched).toContain(PROVIDER_KEY_ROUTE_AVAILABILITY_NEW);
+      expect(patched).not.toContain(PROVIDER_KEY_ROUTE_AVAILABILITY_OLD);
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
+  it('does not false-noop when the provider-key route call sentinel is missing', async () => {
+    const tmp = tempDir('manifest-plugins-mvp-overlay-provider-key-partial-');
+    try {
+      seedUpstream(tmp.path);
+      const target = join(
+        tmp.path,
+        'packages/backend/src/routing/routing-core/provider-key.service.ts',
+      );
+      writeFileSync(
+        target,
+        PROVIDER_KEY_ROUTE_AVAILABILITY_HOST_SOURCE +
+          PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_MARKER_OLD +
+          '// route call moved upstream\n',
+        'utf-8',
+      );
+      const overlay = MVP_OVERLAY_SPEC.find(
+        ({ id }) => id === 'provider-key-route-availability-host',
+      );
+      expect(overlay).toBeDefined();
+      if (overlay === undefined) throw new Error('provider-key overlay fixture is missing');
+
+      const outcome = await _applyOverlayForTesting(overlay, tmp.path);
+
+      expect(outcome).toEqual({ status: 'failed', id: overlay.id });
+    } finally {
+      tmp.cleanup();
+    }
+  });
+
   it('reports failed for an unknown overlay id (the closed-spec branch)', async () => {
     const tmp = tempDir('manifest-plugins-mvp-overlay-unknown-');
     try {
@@ -1055,10 +1133,10 @@ describe('OVERLAY_SPEC re-exports', () => {
   it('MVP_OVERLAY_SPEC and OVERLAY_SPEC reference the same frozen array', () => {
     expect(OVERLAY_SPEC).toBe(MVP_OVERLAY_SPEC);
     expect(Object.isFrozen(OVERLAY_SPEC)).toBe(true);
-    // 5 overlays: provider-client + rate-limiter + provider-param + dashboard mounts.
+    // 6 overlays: provider-client + rate-limiter + provider-param + provider-key + dashboard mounts.
     // The `proxy-service-routing-override-host` overlay was retired
     // on 2026-07-10 when upstream PR #2468 subsumed the behavior.
-    expect(OVERLAY_SPEC).toHaveLength(5);
+    expect(OVERLAY_SPEC).toHaveLength(6);
     for (const overlay of OVERLAY_SPEC) {
       expect(typeof overlay.id).toBe('string');
       expect(typeof overlay.target).toBe('string');

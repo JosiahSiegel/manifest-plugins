@@ -38,6 +38,7 @@ import { existsSync, promises as fs } from 'fs';
 import { join } from 'path';
 import {
   applyProviderClientHost,
+  applyProviderKeyRouteAvailabilityHost,
   applyProviderParamSpecHost,
   applyProxyRateLimiterHost,
   type ApplyResult,
@@ -201,6 +202,8 @@ export async function _applyOverlayForTesting(
       result = await applyProxyRateLimiterHost(targetPath);
     } else if (overlay.id === 'provider-param-spec-host') {
       result = await applyProviderParamSpecHost(targetPath);
+    } else if (overlay.id === 'provider-key-route-availability-host') {
+      result = await applyProviderKeyRouteAvailabilityHost(targetPath);
     } else {
       // The MVP overlay spec is closed (OVERLAY_SPEC in the manifest
       // module is the only producer). Any other id is a bug in the

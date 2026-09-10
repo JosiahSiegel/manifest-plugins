@@ -81,6 +81,14 @@ export const MVP_OVERLAY_SPEC: readonly MvpOverlaySpec[] = Object.freeze([
     ]),
   }),
   Object.freeze({
+    id: 'provider-key-route-availability-host',
+    target: 'packages/backend/src/routing/routing-core/provider-key.service.ts',
+    postPatchSymbol: 'function applyProviderKeyModelListOverridePlugins(',
+    requiredPostPatchSymbols: Object.freeze([
+      'const discovered = applyProviderKeyModelListOverridePlugins(',
+    ]),
+  }),
+  Object.freeze({
     id: 'dashboard-plugin-manager-mount',
     target: 'packages/frontend/index.html',
     postPatchSymbol: 'id="plugin-manager-root"',

@@ -36,6 +36,7 @@ import {
   applyAllFive,
   applyModelListOverrideHost,
   applyProviderClientHost,
+  applyProviderKeyRouteAvailabilityHost,
   applyProviderParamSpecHost,
   applyProxyRateLimiterHost,
   applyRoutingModelListOverrideHost,
@@ -52,6 +53,10 @@ import {
   PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
   PROVIDER_PARAM_SPEC_OLD_GET_SPECS,
   PROVIDER_PARAM_SPEC_OLD_LIST_MODEL_IDS,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_HOST_SOURCE,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_NEW,
+  PROVIDER_KEY_ROUTE_AVAILABILITY_OLD,
+  RATE_LIMITER_OLD,
   RETURN_NEW,
   RETURN_OLD,
 } from '../src/host/snippet';
@@ -126,6 +131,119 @@ const SYNTHESIZED_MAIN_TS = [
   "  const port = Number(process.env['PORT'] ?? 3001);",
   "  const host = process.env['BIND_ADDRESS'] ?? '127.0.0.1';",
   '  await app.listen(port, host);',
+  '}',
+  '',
+].join('\n');
+
+const SYNTHESIZED_PROVIDER_CLIENT = [
+  HELPER_MARKER_OLD,
+  '  async buildRequest() {',
+  '    const endpoint = {',
+  "      baseUrl: '',",
+  '      buildPath: (_model: string) => \"\",',
+  '      buildHeaders: (_apiKey: string, _authType: string | undefined) => ({}),',
+  '    };',
+  "    const bareModel = '';",
+  "    const apiKey = '';",
+  '    const authType = undefined;',
+  '    const requestBody = {};',
+  RETURN_OLD,
+  '  }',
+  '}',
+  '',
+].join('\n');
+const SYNTHESIZED_RATE_LIMITER = `export class ProxyRateLimiter {}\n${RATE_LIMITER_OLD}`;
+
+const PROVIDER_KEY_SERVICE_PATH =
+  'packages/backend/src/routing/routing-core/provider-key.service.ts';
+
+type ProviderKeyModel = {
+  readonly id: string;
+  readonly provider: string;
+  readonly authType?: string;
+};
+
+type ProviderKeyRoute = {
+  readonly provider: string;
+  readonly authType: string;
+  readonly model: string;
+};
+
+type ProviderKeyPluginPackage = {
+  plugins?: ReadonlyArray<{
+    readonly overrideModelList?: (ctx: {
+      readonly tenantId: string;
+      readonly agentId: string;
+      readonly discoveredModels: readonly ProviderKeyModel[];
+      readonly requestMetadata?: Readonly<Record<string, unknown>>;
+    }) => { readonly discoveredModels: readonly ProviderKeyModel[] } | null;
+  }>;
+  readonly applyDisabledListFromEnv?: (value: string | undefined) => void;
+  readonly warn?: (message: string) => void;
+};
+
+const SYNTHESIZED_PROVIDER_KEY_SERVICE = [
+  "type ModelRoute = { readonly provider?: string; readonly authType?: string; readonly model: string };",
+  "type DiscoveredModel = { readonly id: string; readonly provider: string; readonly authType?: string };",
+  '',
+  'function Injectable(): ClassDecorator { return () => undefined; }',
+  '',
+  'function expandProviderNames(providers: readonly string[]): ReadonlySet<string> {',
+  '  return new Set(providers.map((provider) => provider.toLowerCase()));',
+  '}',
+  '',
+  'function isManifestUsableProvider(): boolean { return true; }',
+  '',
+  '@Injectable()',
+  'export class ProviderKeyService {',
+  '  constructor(',
+  '    private readonly discoveryService: { getModelsForAgent: (tenantId: string, agentId?: string) => Promise<readonly DiscoveredModel[]> },',
+  '    private readonly providerRepo: { find: (query: unknown) => Promise<readonly unknown[]> },',
+  '  ) {}',
+  '',
+  '  async isModelAvailable(_tenantId: string, _model: string, _agentId?: string): Promise<boolean> {',
+  '    return false;',
+  '  }',
+  '',
+  '  private async filterProvidersForAgent(providers: readonly unknown[], _agentId?: string): Promise<readonly unknown[]> {',
+  '    return providers;',
+  '  }',
+  '',
+  '  async isRouteAvailable(tenantId: string, route: ModelRoute, agentId?: string): Promise<boolean> {',
+  '    if (!route.provider) {',
+  '      return this.isModelAvailable(tenantId, route.model, agentId);',
+  '    }',
+  '    const providerNames = expandProviderNames([route.provider]);',
+  '    const discovered = await this.discoveryService.getModelsForAgent(tenantId, agentId);',
+  '    const connectionModels = discovered.filter(',
+  '      (m) =>',
+  '        providerNames.has(m.provider.toLowerCase()) &&',
+  '        (!route.authType || !m.authType || m.authType === route.authType),',
+  '    );',
+  '    if (connectionModels.some((m) => m.id === route.model)) return true;',
+  '    if (connectionModels.length > 0) return false;',
+  '',
+  '    // Qwen/Alibaba model IDs must come from native discovery. The provider has',
+  '    // region-specific routable names, so an active key alone is not enough.',
+  "    if (providerNames.has('qwen') || providerNames.has('alibaba')) return false;",
+  '',
+  '    // Discovery can be cold for a connection; fall back to "an active, usable',
+  '    // record for the pinned provider exists" only when discovery returned no',
+  '    // model evidence for that pinned provider/authType.',
+  '    const records = (',
+  '      await this.filterProvidersForAgent(',
+  '        await this.providerRepo.find({',
+  '          where: { tenant_id: tenantId, is_active: true },',
+  '        }),',
+  '        agentId,',
+  '      )',
+  '    ).filter(isManifestUsableProvider);',
+  '    return records.some(',
+  '      (r) =>',
+  '        providerNames.has(r.provider.toLowerCase()) &&',
+  '        (!route.authType || r.auth_type === route.authType),',
+  '    );',
+  '  }',
   '}',
   '',
 ].join('\n');
@@ -219,21 +337,41 @@ interface TempFiles {
   proxyRateLimiter: string;
   main: string;
   modelFetcher: string;
+  providerKeyService: string;
   providerParamSpecService: string;
   cleanup: () => void;
 }
 
+function withSynthesizedProviderKeyService(
+  fn: (filePath: string) => Promise<void> | void,
+): Promise<void> {
+  const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-provider-key-'));
+  const filePath = join(tmp, PROVIDER_KEY_SERVICE_PATH);
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, SYNTHESIZED_PROVIDER_KEY_SERVICE, 'utf-8');
+  return Promise.resolve(fn(filePath)).finally(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+}
+
 function withTempManifest(
   fn: (files: TempFiles) => Promise<void> | void,
+  useSynthesizedBase = false,
 ): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-apply-'));
-  const upstream = readAllUpstream();
 
   const writeFile = (relPath: string, content: string) => {
     const fullPath = join(tmp, relPath);
     mkdirSync(dirname(fullPath), { recursive: true });
     writeFileSync(fullPath, content, 'utf-8');
   };
+  const upstream = useSynthesizedBase
+    ? {
+        providerClient: SYNTHESIZED_PROVIDER_CLIENT,
+        proxyRateLimiter: SYNTHESIZED_RATE_LIMITER,
+        main: SYNTHESIZED_MAIN_TS,
+      }
+    : readAllUpstream();
   writeFile(FILES.providerClient, upstream.providerClient);
   writeFile(FILES.proxyRateLimiter, upstream.proxyRateLimiter);
   writeFile(
@@ -288,6 +426,7 @@ function withTempManifest(
       'packages/backend/src/routing/header-tiers/header-tier.service.ts',
     synthesizedRoutingService('HeaderTierService'),
   );
+  writeFile(PROVIDER_KEY_SERVICE_PATH, SYNTHESIZED_PROVIDER_KEY_SERVICE);
   writeFile(
     FILES.providerParamSpecService ??
       'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
@@ -303,6 +442,7 @@ function withTempManifest(
       tmp,
       FILES.modelFetcher ?? 'packages/backend/src/routing/model.controller.ts',
     ),
+    providerKeyService: join(tmp, PROVIDER_KEY_SERVICE_PATH),
     providerParamSpecService: join(
       tmp,
       FILES.providerParamSpecService ??
@@ -347,6 +487,69 @@ function loadPatchedProviderParamService(
   const service = new Service();
   Object.defineProperty(service, 'specs', { value: specs });
   return service;
+}
+
+function loadProviderKeyService(
+  source: string,
+  discoveredModels: readonly ProviderKeyModel[],
+  pluginPackage: ProviderKeyPluginPackage | Error,
+): {
+  readonly isRouteAvailable: (
+    tenantId: string,
+    route: ProviderKeyRoute,
+    agentId?: string,
+  ) => Promise<boolean>;
+} {
+  const transpiled = transpileModule(source, {
+    compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
+  }).outputText;
+  const module = { exports: {} as Record<string, unknown> };
+  const requireFromFixture = (id: string): unknown => {
+    if (id === 'manifest-plugins') {
+      if (pluginPackage instanceof Error) throw pluginPackage;
+      return pluginPackage;
+    }
+    throw new Error(`unexpected fixture dependency: ${id}`);
+  };
+  new Function('require', 'module', 'exports', 'process', 'console', transpiled)(
+    requireFromFixture,
+    module,
+    module.exports,
+    process,
+    { warn: pluginPackage instanceof Error ? () => undefined : pluginPackage.warn ?? (() => undefined) },
+  );
+  const Service = module.exports['ProviderKeyService'] as new (
+    discoveryService: {
+      readonly getModelsForAgent: () => Promise<readonly ProviderKeyModel[]>;
+    },
+    providerRepo: { readonly find: () => Promise<readonly unknown[]> },
+  ) => {
+    readonly isRouteAvailable: (
+      tenantId: string,
+      route: ProviderKeyRoute,
+      agentId?: string,
+    ) => Promise<boolean>;
+  };
+  return new Service(
+    { getModelsForAgent: async () => discoveredModels },
+    { find: async () => [] },
+  );
+}
+
+async function selectAvailableRoute(
+  service: {
+    readonly isRouteAvailable: (
+      tenantId: string,
+      route: ProviderKeyRoute,
+      agentId?: string,
+    ) => Promise<boolean>;
+  },
+  routes: readonly ProviderKeyRoute[],
+): Promise<ProviderKeyRoute | null> {
+  for (const route of routes) {
+    if (await service.isRouteAvailable('tenant-1', route, 'agent-1')) return route;
+  }
+  return null;
 }
 
 function expectStatus(
@@ -685,8 +888,219 @@ describe('applyAllFive (provider-client + rate-limiter + admin-mount + model-lis
   });
 });
 
+describe('ProviderKeyService route-availability host', () => {
+  const rawModels = Object.freeze([
+    Object.freeze({ id: 'gpt-5', provider: 'openai', authType: 'api_key' }),
+  ]);
+  const savedAstraRoute = Object.freeze({
+    provider: 'openai',
+    authType: 'api_key',
+    model: 'gpt-6-astra',
+  });
+  const fallbackRoute = Object.freeze({
+    provider: 'openai',
+    authType: 'api_key',
+    model: 'gpt-5',
+  });
+  const astraModel = Object.freeze({
+    id: 'gpt-6-astra',
+    provider: 'openai',
+    authType: 'api_key',
+  });
+
+  it('selects the fallback before patching and the saved Astra route after patching', async () => {
+    await withSynthesizedProviderKeyService(async (providerKeyService) => {
+      // Given: current-upstream route availability only sees raw gpt-5 discovery.
+      const routes = [savedAstraRoute, fallbackRoute];
+      const before = loadProviderKeyService(
+        SYNTHESIZED_PROVIDER_KEY_SERVICE,
+        rawModels,
+        new Error('manifest-plugins is not installed'),
+      );
+
+      // When: the unpatched predicate chooses the first available saved/fallback route.
+      const preFixSelection = await selectAvailableRoute(before, routes);
+
+      // Then: Astra is rejected and the raw-discovery fallback wins.
+      expect(preFixSelection).toEqual(fallbackRoute);
+
+      // When: the host patch is applied and the same predicate runs with the override plugin.
+      const first = await applyProviderKeyRouteAvailabilityHost(providerKeyService);
+      const patchedSource = readFileSync(providerKeyService, 'utf-8');
+      const after = loadProviderKeyService(patchedSource, rawModels, {
+        plugins: [
+          {
+            overrideModelList: (ctx) => ({
+              discoveredModels: [...ctx.discoveredModels, astraModel],
+            }),
+          },
+        ],
+      });
+      const postFixSelection = await selectAvailableRoute(after, routes);
+
+      // Then: the plugin-added Astra row is visible to isRouteAvailable.
+      expectStatus('provider-key-route-availability', first, 'applied');
+      expect(postFixSelection).toEqual(savedAstraRoute);
+      expect(patchedSource.match(/function applyProviderKeyModelListOverridePlugins\(/g)).toHaveLength(1);
+      expect(patchedSource.match(/const discoveredRaw = await this\.discoveryService\.getModelsForAgent\(/g)).toHaveLength(1);
+
+      // When/Then: reapplying is a byte-preserving noop with no duplicate helper or wrapper.
+      const second = await applyProviderKeyRouteAvailabilityHost(providerKeyService);
+      expectStatus('provider-key-route-availability-rerun', second, 'noop');
+      expect(readFileSync(providerKeyService, 'utf-8')).toBe(patchedSource);
+    });
+  });
+
+  it('reports drift when the getModelsForAgent anchor moves', async () => {
+    await withSynthesizedProviderKeyService(async (providerKeyService) => {
+      // Given: current upstream no longer contains the byte-exact route predicate anchor.
+      const moved = SYNTHESIZED_PROVIDER_KEY_SERVICE.replace(
+        '    const discovered = await this.discoveryService.getModelsForAgent(tenantId, agentId);',
+        '    const discovered = await this.discoveryService.listModelsForAgent(tenantId, agentId);',
+      );
+      writeFileSync(providerKeyService, moved, 'utf-8');
+
+      // When: the provider-key host patch is applied.
+      const result = await applyProviderKeyRouteAvailabilityHost(providerKeyService);
+
+      // Then: drift is explicit and the source remains untouched.
+      expectStatus('provider-key-route-availability-drift', result, 'upstream-drift');
+      expect(readFileSync(providerKeyService, 'utf-8')).toBe(moved);
+    });
+  });
+
+  it('preserves raw behavior for missing packages and null or errored plugins', async () => {
+    await withSynthesizedProviderKeyService(async (providerKeyService) => {
+      // Given: a patched predicate with raw gpt-5 discovery.
+      await applyProviderKeyRouteAvailabilityHost(providerKeyService);
+      const patchedSource = readFileSync(providerKeyService, 'utf-8');
+      const warnings: string[] = [];
+      const erroredThenNull: ProviderKeyPluginPackage = {
+        plugins: [
+          { overrideModelList: () => { throw new Error('broken override'); } },
+          { overrideModelList: () => null },
+        ],
+        warn: (message) => warnings.push(message),
+      };
+
+      // When: the package is absent, or every plugin errors/returns null.
+      const missingSelection = await selectAvailableRoute(
+        loadProviderKeyService(
+          patchedSource,
+          rawModels,
+          new Error('manifest-plugins is not installed'),
+        ),
+        [savedAstraRoute, fallbackRoute],
+      );
+      const nullSelection = await selectAvailableRoute(
+        loadProviderKeyService(patchedSource, rawModels, erroredThenNull),
+        [savedAstraRoute, fallbackRoute],
+      );
+
+      // Then: both paths retain the upstream fallback decision.
+      expect(missingSelection).toEqual(fallbackRoute);
+      expect(nullSelection).toEqual(fallbackRoute);
+      expect(warnings).toEqual([
+        '[manifest-plugins] Object overrideModelList failed: broken override',
+        '[manifest-plugins] Object overrideModelList failed: broken override',
+      ]);
+    });
+  });
+
+  it('honors the env disable hook without changing route semantics', async () => {
+    await withSynthesizedProviderKeyService(async (providerKeyService) => {
+      // Given: the env toggle disables the only model-list override plugin.
+      await applyProviderKeyRouteAvailabilityHost(providerKeyService);
+      const patchedSource = readFileSync(providerKeyService, 'utf-8');
+      let enabled = true;
+      const pluginPackage: ProviderKeyPluginPackage = {
+        applyDisabledListFromEnv: (value) => { enabled = value !== 'gpt-astra-model-list-override'; },
+        plugins: [
+          {
+            overrideModelList: (ctx) => enabled
+              ? { discoveredModels: [...ctx.discoveredModels, astraModel] }
+              : null,
+          },
+        ],
+      };
+      const previous = process.env['MANIFEST_PLUGINS_DISABLED'];
+      process.env['MANIFEST_PLUGINS_DISABLED'] = 'gpt-astra-model-list-override';
+      try {
+        // When: route availability invokes the disabled plugin host.
+        const selection = await selectAvailableRoute(
+          loadProviderKeyService(patchedSource, rawModels, pluginPackage),
+          [savedAstraRoute, fallbackRoute],
+        );
+
+        // Then: upstream fallback behavior remains in force.
+        expect(selection).toEqual(fallbackRoute);
+      } finally {
+        if (previous === undefined) delete process.env['MANIFEST_PLUGINS_DISABLED'];
+        else process.env['MANIFEST_PLUGINS_DISABLED'] = previous;
+      }
+    });
+  });
+
+  it('passes a fresh order-preserving list and preserves provider, auth, model, and non-Astra behavior', async () => {
+    await withSynthesizedProviderKeyService(async (providerKeyService) => {
+      // Given: two ordered upstream rows and an override that records its input and appends Astra.
+      const orderedRaw = Object.freeze([
+        Object.freeze({ id: 'gpt-5', provider: 'openai', authType: 'api_key' }),
+        Object.freeze({ id: 'claude-sonnet', provider: 'anthropic', authType: 'subscription' }),
+      ]);
+      let received: readonly ProviderKeyModel[] | undefined;
+      await applyProviderKeyRouteAvailabilityHost(providerKeyService);
+      const patchedProviderKey = readFileSync(providerKeyService, 'utf-8');
+      expect(patchedProviderKey).toContain(PROVIDER_KEY_ROUTE_AVAILABILITY_HOST_SOURCE);
+      expect(patchedProviderKey).toContain(PROVIDER_KEY_ROUTE_AVAILABILITY_NEW);
+      expect(patchedProviderKey).not.toContain(PROVIDER_KEY_ROUTE_AVAILABILITY_OLD);
+      const service = loadProviderKeyService(
+        patchedProviderKey,
+        orderedRaw,
+        {
+          plugins: [
+            {
+              overrideModelList: (ctx) => {
+                received = ctx.discoveredModels;
+                return { discoveredModels: [...ctx.discoveredModels, astraModel] };
+              },
+            },
+          ],
+        },
+      );
+
+      // When: existing and mismatched routes exercise the patched predicate.
+      const existingOpenAi = await service.isRouteAvailable('tenant-1', fallbackRoute, 'agent-1');
+      const wrongAuth = await service.isRouteAvailable(
+        'tenant-1',
+        { ...fallbackRoute, authType: 'subscription' },
+        'agent-1',
+      );
+      const wrongProvider = await service.isRouteAvailable(
+        'tenant-1',
+        { ...fallbackRoute, provider: 'anthropic' },
+        'agent-1',
+      );
+      const unknownModel = await service.isRouteAvailable(
+        'tenant-1',
+        { ...fallbackRoute, model: 'gpt-not-present' },
+        'agent-1',
+      );
+
+      // Then: the host input is a new immutable ordered array and legacy route filters are unchanged.
+      expect(received).toEqual(orderedRaw);
+      expect(received).not.toBe(orderedRaw);
+      expect(Object.isFrozen(received)).toBe(true);
+      expect(existingOpenAi).toBe(true);
+      expect(wrongAuth).toBe(false);
+      expect(wrongProvider).toBe(false);
+      expect(unknownModel).toBe(false);
+    });
+  });
+});
+
 describe('applyAllEight provider-param-spec patch', () => {
-  it('applies all nine hooks once and preserves provider-param bytes on the noop rerun', async () => {
+  it('applies all hosts once and preserves provider host bytes on the noop rerun', async () => {
     await withTempManifest(async (files) => {
       const first = await applyAllEight(files.root, undefined, { providerParamSpec: true });
 
@@ -706,10 +1120,16 @@ describe('applyAllEight provider-param-spec patch', () => {
         'applied',
       );
       expectStatus('providerParamSpec', first.providerParamSpec, 'applied');
+      expectStatus(
+        'providerKeyRouteAvailability',
+        first.providerKeyRouteAvailability,
+        'applied',
+      );
       expect(first.fullyApplied).toBe(true);
       expect(first.hasDrift).toBe(false);
 
       const patched = readFileSync(files.providerParamSpecService, 'utf-8');
+      const patchedProviderKey = readFileSync(files.providerKeyService, 'utf-8');
       expect(patched.match(/function applyProviderParamSpecPlugins\(/g)).toHaveLength(1);
       expect(patched).toContain(PROVIDER_PARAM_SPEC_HOST_SOURCE);
       expect(patched).toContain(PROVIDER_PARAM_SPEC_NEW_GET_SPECS);
@@ -717,6 +1137,16 @@ describe('applyAllEight provider-param-spec patch', () => {
       expect(patched).toContain('async getCapabilities(');
       expect(patched).not.toContain(PROVIDER_PARAM_SPEC_OLD_GET_SPECS);
       expect(patched).not.toContain(PROVIDER_PARAM_SPEC_OLD_LIST_MODEL_IDS);
+      expect(
+        patchedProviderKey.match(
+          /function applyProviderKeyModelListOverridePlugins\(/g,
+        ),
+      ).toHaveLength(1);
+      expect(
+        patchedProviderKey.match(
+          /const discoveredRaw = await this\.discoveryService\.getModelsForAgent\(/g,
+        ),
+      ).toHaveLength(1);
 
       const second = await applyAllEight(files.root, undefined, { providerParamSpec: true });
       expectStatus('providerClient', second.providerClient, 'noop');
@@ -735,10 +1165,90 @@ describe('applyAllEight provider-param-spec patch', () => {
         'noop',
       );
       expectStatus('providerParamSpec', second.providerParamSpec, 'noop');
+      expectStatus(
+        'providerKeyRouteAvailability',
+        second.providerKeyRouteAvailability,
+        'noop',
+      );
       expect(second.fullyApplied).toBe(true);
       expect(second.hasDrift).toBe(false);
       expect(readFileSync(files.providerParamSpecService, 'utf-8')).toBe(patched);
-    });
+      expect(readFileSync(files.providerKeyService, 'utf-8')).toBe(
+        patchedProviderKey,
+      );
+    }, true);
+  });
+
+  it('skips the provider-key host when its behavior toggle is disabled', async () => {
+    await withTempManifest(async (files) => {
+      // Given: the aggregate behavior toggle is disabled.
+      const before = readFileSync(files.providerKeyService, 'utf-8');
+      const allFilesDisabled: ManifestFileSpec = {
+        providerClient: FILES.providerClient,
+        proxyRateLimiter: FILES.proxyRateLimiter,
+        main: FILES.main,
+        modelFetcher: undefined,
+        tierService: undefined,
+        specificityService: undefined,
+        headerTierService: undefined,
+        providerParamSpecService: undefined,
+        providerKeyService: FILES.providerKeyService,
+      };
+
+      // When: applyAllEight runs with every optional host disabled.
+      const result = await applyAllEight(files.root, allFilesDisabled, {
+        providerKeyRouteAvailability: false,
+      });
+
+      // Then: the new result field is a backward-compatible noop.
+      expectStatus(
+        'providerKeyRouteAvailability-disabled',
+        result.providerKeyRouteAvailability,
+        'noop',
+      );
+      expect(result.providerKeyRouteAvailability.file).toBe(
+        '<providerKeyService not requested>',
+      );
+      expect(readFileSync(files.providerKeyService, 'utf-8')).toBe(before);
+      expect(result.fullyApplied).toBe(true);
+      expect(result.hasDrift).toBe(false);
+    }, true);
+  });
+
+  it('reports provider-key drift in aggregates while applying unrelated hooks', async () => {
+    await withTempManifest(async (files) => {
+      // Given: only the provider-key call-site anchor moved upstream.
+      const moved = SYNTHESIZED_PROVIDER_KEY_SERVICE.replace(
+        '    const discovered = await this.discoveryService.getModelsForAgent(tenantId, agentId);',
+        '    const discovered = await this.discoveryService.listModelsForAgent(tenantId, agentId);',
+      );
+      writeFileSync(files.providerKeyService, moved, 'utf-8');
+      const providerKeyOnly: ManifestFileSpec = {
+        providerClient: FILES.providerClient,
+        proxyRateLimiter: FILES.proxyRateLimiter,
+        main: FILES.main,
+        modelFetcher: undefined,
+        tierService: undefined,
+        specificityService: undefined,
+        headerTierService: undefined,
+        providerParamSpecService: undefined,
+        providerKeyService: FILES.providerKeyService,
+      };
+
+      // When: the aggregate patcher reaches the provider-key host.
+      const result = await applyAllEight(files.root, providerKeyOnly);
+
+      // Then: provider-key drift participates in the aggregate result.
+      expectStatus(
+        'providerKeyRouteAvailability-drift',
+        result.providerKeyRouteAvailability,
+        'upstream-drift',
+      );
+      expectStatus('providerParamSpec', result.providerParamSpec, 'noop');
+      expect(result.fullyApplied).toBe(false);
+      expect(result.hasDrift).toBe(true);
+      expect(readFileSync(files.providerKeyService, 'utf-8')).toBe(moved);
+    }, true);
   });
 
   it('reports named provider drift while applying every unrelated hook', async () => {
@@ -770,6 +1280,11 @@ describe('applyAllEight provider-param-spec patch', () => {
         'applied',
       );
       expectStatus('providerParamSpec', result.providerParamSpec, 'upstream-drift');
+      expectStatus(
+        'providerKeyRouteAvailability',
+        result.providerKeyRouteAvailability,
+        'applied',
+      );
       expect(result.providerParamSpec.reason).toContain('getSpecs');
       expect(result.providerParamSpec.reason).not.toContain('listModelIds');
       expect(result.fullyApplied).toBe(false);
@@ -780,7 +1295,7 @@ describe('applyAllEight provider-param-spec patch', () => {
       expect(partiallyPatched).toContain(PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS);
       expect(partiallyPatched).toContain('async getCapabilities(');
       expect(partiallyPatched).not.toContain(PROVIDER_PARAM_SPEC_NEW_GET_SPECS);
-    });
+    }, true);
   });
 });
 
@@ -863,11 +1378,17 @@ describe('apply edge branches', () => {
         specificityService: undefined,
         headerTierService: undefined,
         providerParamSpecService: undefined,
+        providerKeyService: undefined,
       });
       expectStatus('tier-fallback', result.tierServiceRoutingModelList, 'noop');
       expectStatus('specificity-fallback', result.specificityServiceRoutingModelList, 'noop');
       expectStatus('header-fallback', result.headerTierServiceRoutingModelList, 'noop');
       expectStatus('provider-fallback', result.providerParamSpec, 'noop');
+      expectStatus(
+        'provider-key-fallback',
+        result.providerKeyRouteAvailability,
+        'noop',
+      );
     });
   });
 });

@@ -18,6 +18,10 @@ export const PROVIDER_PARAM_SPEC_GET_SPECS_SYMBOL =
   'applyProviderParamSpecPlugins(\n      providerId,\n      authType,\n      model,\n      fallbackSpecs,\n    )';
 export const PROVIDER_PARAM_SPEC_LIST_MODEL_IDS_SYMBOL =
   'applyProviderParamSpecPlugins(\n      undefined,\n      undefined,\n      undefined,\n      list,\n    ) as Array<{ provider: string; authType: AuthType; model: string }>';
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_SYMBOL =
+  'function applyProviderKeyModelListOverridePlugins(';
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_CALL_SYMBOL =
+  'const discovered = applyProviderKeyModelListOverridePlugins(';
 
 // Wave 5: every pasted host snippet must call
 // `require('manifest-plugins').applyDisabledListFromEnv(...)` so the
@@ -49,6 +53,10 @@ function main(): number {
     checkoutPath,
     'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
   );
+  const providerKeyPath = resolve(
+    checkoutPath,
+    'packages/backend/src/routing/routing-core/provider-key.service.ts',
+  );
 
   if (!existsSync(providerClientPath)) {
     process.stderr.write(`[manifest-plugins/verify] missing: ${providerClientPath}\n`);
@@ -62,10 +70,15 @@ function main(): number {
     process.stderr.write(`[manifest-plugins/verify] missing: ${providerParamSpecPath}\n`);
     return 2;
   }
+  if (!existsSync(providerKeyPath)) {
+    process.stderr.write(`[manifest-plugins/verify] missing: ${providerKeyPath}\n`);
+    return 2;
+  }
 
   const providerClientText = readFileSync(providerClientPath, 'utf-8');
   const modelFetcherText = readFileSync(modelFetcherPath, 'utf-8');
   const providerParamSpecText = readFileSync(providerParamSpecPath, 'utf-8');
+  const providerKeyText = readFileSync(providerKeyPath, 'utf-8');
   const hasHelper = providerClientText.includes(HOST_HELPER_SYMBOL);
   const hasReturnWrap = providerClientText.includes(RETURN_TRANSFORMED_SYMBOL);
   const hasModelListOverrideHelper = modelFetcherText.includes(MODEL_LIST_OVERRIDE_SYMBOL);
@@ -90,6 +103,14 @@ function main(): number {
   const hasProviderParamSpecEnvToggle =
     providerParamSpecText.includes(ENV_TOGGLE_SYMBOL) &&
     providerParamSpecText.includes(ENV_VAR_SYMBOL);
+  const hasProviderKeyRouteAvailabilityHelper = providerKeyText.includes(
+    PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_SYMBOL,
+  );
+  const hasProviderKeyRouteAvailabilityCall = providerKeyText.includes(
+    PROVIDER_KEY_ROUTE_AVAILABILITY_CALL_SYMBOL,
+  );
+  const hasProviderKeyEnvToggle =
+    providerKeyText.includes(ENV_TOGGLE_SYMBOL) && providerKeyText.includes(ENV_VAR_SYMBOL);
 
   if (
     hasHelper &&
@@ -101,13 +122,17 @@ function main(): number {
     hasProviderParamSpecHelper &&
     hasProviderParamSpecGetSpecs &&
     hasProviderParamSpecListModelIds &&
-    hasProviderParamSpecEnvToggle
+    hasProviderParamSpecEnvToggle &&
+    hasProviderKeyRouteAvailabilityHelper &&
+    hasProviderKeyRouteAvailabilityCall &&
+    hasProviderKeyEnvToggle
   ) {
     process.stdout.write(
       `[manifest-plugins/verify] OK — hosts installed in ${checkoutPath}\n` +
         `  ✓ request-transform hook (provider-client.ts)\n` +
         `  ✓ model-list-override hook (model.controller.ts)\n` +
         `  ✓ provider-param-spec hooks (provider-param-spec.service.ts)\n` +
+        `  ✓ provider-key route-availability hook (provider-key.service.ts)\n` +
         `  ✓ MANIFEST_PLUGINS_DISABLED env-toggle wired\n`,
     );
     return 0;
@@ -125,6 +150,9 @@ function main(): number {
       `  provider-param-spec getSpecs call present: ${hasProviderParamSpecGetSpecs}\n` +
       `  provider-param-spec listModelIds call present: ${hasProviderParamSpecListModelIds}\n` +
       `  env-toggle wired (provider-param-spec): ${hasProviderParamSpecEnvToggle}\n` +
+      `  provider-key route helper present: ${hasProviderKeyRouteAvailabilityHelper}\n` +
+      `  provider-key route call present: ${hasProviderKeyRouteAvailabilityCall}\n` +
+      `  env-toggle wired (provider-key): ${hasProviderKeyEnvToggle}\n` +
       `  run \`npm run apply\` from this repo.\n`,
   );
   return 1;
