@@ -12,7 +12,7 @@ this repo, without maintaining your own Manifest fork.
 ## What you get
 
 - The upstream Manifest app, packaged as `ghcr.io/josiahsiegel/manifest-with-plugins`.
-- Two built-in plugins: `ShowAllRouterViewsPlugin` and `CustomProviderModelCountFixPlugin`. Enable, disable, or add your own at runtime. See [Manage plugins](#manage-plugins).
+- Three built-in plugins: `ShowAllRouterViewsPlugin`, `CustomProviderModelCountFixPlugin`, and `GptAstraModelListOverridePlugin`. Enable, disable, or add your own at runtime. See [Manage plugins](#manage-plugins).
 - A build pipeline that only promotes `latest` after the image passes the end-to-end dashboard test.
 
 ## Quick start

@@ -52,13 +52,15 @@ new plugin at the next process start.
 
 ## Plugin kinds
 
-There are three plugin kinds, distinguished by lifecycle:
+There are five plugin kinds, distinguished by lifecycle:
 
 | Kind | When it fires | Hook signature | Use cases |
 | --- | --- | --- | --- |
 | `transform` | Per request, before the upstream HTTP fetch | `transformRequest(decision): RequestTransformResult \| undefined` | Mutate headers/body/URL on the outgoing call. The default kind. |
 | `policy` | Once per process (cached) | `getRateLimitPolicy(): RateLimitPolicy \| null` | Set per-agent concurrency caps and per-request message-array caps. |
 | `routing-override` | Per request, BEFORE the upstream router runs | `overrideRouting(ctx): RoutingOverrideResolvedRouting \| null` | Override routing decisions based on inbound HTTP headers or discovered models. |
+| `dashboard-transform` | When the dashboard bundle is requested | `getDashboardScript(): string \| null` | Add a self-contained browser script to the Manifest dashboard. |
+| `model-list-override` | Per `/v1/models` response, after upstream model discovery | `overrideModelList(ctx): ModelListOverrideResult \| null` | Add, filter, or rewrite discovered model rows before the response is serialized. |
 
 A plugin can implement any combination. The discoverer inspects the
 class's `static metadata.kind` and the host walks each array
@@ -112,7 +114,7 @@ export const MY_HEADER_METADATA: PluginMetadata = Object.freeze({
   name: 'My header',                      // human-readable
   version: '0.1.0',                       // semver
   description: 'Injects X-Foo header.',   // one-line summary
-  kind: 'transform',                      // transform | policy | routing-override
+  kind: 'transform',                      // transform | policy | routing-override | dashboard-transform | model-list-override
 });
 
 export class MyHeaderPlugin implements RequestTransformPlugin {
@@ -130,7 +132,7 @@ Required:
 - The class must declare `static readonly metadata: PluginMetadata`.
 - `metadata.id` must be unique across the registry.
 - The class name must be unique across the registry.
-- `metadata.kind` must be one of `transform`, `policy`, `routing-override`.
+- `metadata.kind` must be one of `transform`, `policy`, `routing-override`, `dashboard-transform`, `model-list-override`.
 
 ## TDD checklist
 
@@ -152,7 +154,7 @@ The host's error semantics:
 > continues with the original request. Never throw to abort the
 > request.
 
-This applies to ALL three kinds. Plugins that throw inside a hook
+This applies to ALL five kinds. Plugins that throw inside a hook
 are silent failures for the operator unless the host log line is
 inspected.
 
@@ -169,7 +171,8 @@ on the next build) and set the plugin id to `false`:
 {
   "plugins": {
     "show-all-router-views": false,
-    "custom-provider-model-count-fix": true
+    "custom-provider-model-count-fix": true,
+    "gpt-astra-model-list-override": true
   }
 }
 ```

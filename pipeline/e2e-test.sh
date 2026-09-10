@@ -287,7 +287,7 @@ fi
 
 # (d) Runtime plugin registry smoke — assert the built image can require
 # `manifest-plugins` from the same node_modules path the patched host uses,
-# and that the routing override plugin is both installed and executable.
+# and that all three in-tree plugins are installed and enabled.
 #
 # This is intentionally self-contained: no seeded database rows, no providers,
 # no real upstream request. It would have caught the production regression where
@@ -307,6 +307,9 @@ if (!installed.some((plugin) => plugin.id === "show-all-router-views")) {
 if (!installed.some((plugin) => plugin.id === "custom-provider-model-count-fix")) {
   throw new Error(`custom-provider-model-count-fix missing from installed plugins: ${JSON.stringify(installed)}`);
 }
+if (!installed.some((plugin) => plugin.id === "gpt-astra-model-list-override")) {
+  throw new Error(`gpt-astra-model-list-override missing from installed plugins: ${JSON.stringify(installed)}`);
+}
 if (installed.some((plugin) => plugin.id === "anthropic-billing-header")) {
   throw new Error(`anthropic-billing-header present in installed plugins (retired external plugin): ${JSON.stringify(installed)}`);
 }
@@ -317,7 +320,7 @@ if (!Array.isArray(pkg.plugins) || pkg.plugins.length === 0) {
   throw new Error("enabled plugin registry is empty");
 }
 ' >/dev/null; then
-  log "plugin registry smoke      → pass (both in-tree plugins installed + enabled; retired external plugin rejected)"
+  log "plugin registry smoke      → pass (all three in-tree plugins installed + enabled; retired external plugin rejected)"
 else
   fail "plugin registry smoke failed — manifest-plugins is missing, empty, missing an in-tree plugin, or contains the retired external plugin in registry metadata or dist/plugins/ filesystem" 3
 fi

@@ -6,14 +6,17 @@ plugins at runtime. For how to author a new plugin, see
 
 ## What the registry exposes
 
-The package `dist/index.js` exposes four registries:
+The runtime exposes five registries, four package exports plus a
+provider-param-spec host service seam. The package `dist/index.js` exports the
+four package-level entries below:
 
-| Export | Shape | Mutable? | Purpose |
+| Export or seam | Shape | Mutable? | Purpose |
 | --- | --- | --- | --- |
 | `installedPlugins` | `readonly ManifestPlugin[]` | No | All installed instances, regardless of enabled state |
 | `plugins` | `readonly ManifestPlugin[]` | No (reassigned on `setPluginEnabled`) | Enabled instances only — what the host walks |
 | `getInstalledPlugins()` | `readonly InstalledPluginMetadata[]` | No | Installed metadata with per-plugin `enabled` flag |
 | `setPluginEnabled(id, enabled)` | `void` | Side-effect | Runtime toggle |
+| `provider-param-spec.service.ts` | Host service seam | Host patch | Extends provider parameter specs and model identity rows from enabled plugins |
 
 The `installedPlugins` and `plugins` arrays are `Object.freeze`d. The
 `plugins` export is reassigned (not mutated) when `setPluginEnabled`
@@ -24,7 +27,7 @@ current enabled state.
 
 The image build pipeline (`pipeline/build-and-publish.sh`) does:
 
-1. Apply the four host patches to a clean `mnfst/manifest` checkout.
+1. Apply the five host patches to a clean `mnfst/manifest` checkout.
 2. Copy `dist/` into `node_modules/manifest-plugins/dist`.
 3. Build the Docker image.
 
@@ -33,7 +36,12 @@ At runtime, the host snippets `require('manifest-plugins')` and walk
 
 - `provider-client.ts::applyRequestTransformPlugins(...)` — request-transform hook
 - `proxy-rate-limiter.ts::getResolvedConcurrencyMax()` — config-time policy (concurrency)
+- `provider-param-spec.service.ts::applyProviderParamSpecPlugins(...)` — provider-parameter specs and model identity rows
 - `model.controller.ts::applyModelListOverridePlugins(...)` — `/v1/models` response override
+
+The provider-param entry is a host seam, not a sixth plugin kind. It lets the
+existing `model-list-override` plugin kind contribute provider parameter data
+without adding another `PluginKind` value.
 
 Each snippet:
 
@@ -192,7 +200,9 @@ import { getInstalledPlugins } from 'manifest-plugins';
 
 const installed = getInstalledPlugins();
 // [
-//   { id: 'show-all-router-views',    kind: 'dashboard-transform',  enabled: true, … },
+//   { id: 'custom-provider-model-count-fix', kind: 'dashboard-transform', enabled: true, … },
+//   { id: 'gpt-astra-model-list-override',    kind: 'model-list-override',  enabled: true, … },
+//   { id: 'show-all-router-views',             kind: 'dashboard-transform',  enabled: true, … },
 // ]
 ```
 

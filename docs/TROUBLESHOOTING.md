@@ -148,7 +148,7 @@ Verify with:
 
 ```bash
 node -e "console.log(require('./dist/index.js').getInstalledPlugins().map(p => p.id))"
-# Expected: [ 'show-all-router-views', '<your-id>' ]
+# Expected: [ 'custom-provider-model-count-fix', 'gpt-astra-model-list-override', 'show-all-router-views', '<your-id>' ]
 ```
 
 ### `npm run new-plugin` exits with code 2
@@ -157,7 +157,7 @@ The scaffolder rejects:
 
 - Missing plugin name (`npm run new-plugin` without args).
 - Names that don't match `^[a-z][a-z0-9-]*$` (kebab-case, lowercase, starts with a letter). Reject examples: `MyPlugin`, `has space`, `1leading-digit`.
-- Unknown `--kind` values. Valid: `transform`, `policy`, `routing-override`.
+- Unknown `--kind` values. Valid: `transform`, `policy`, `routing-override`, `dashboard-transform`, `model-list-override`.
 
 Fix the input and retry.
 
@@ -175,7 +175,7 @@ each plugin's `id: '...'` field, and validates the config against that set.
 A typo here causes the build script to error out:
 
 ```
-manifest-plugins.config.json: unknown plugin id "show-all-router-views-v2" — shipped plugins are: show-all-router-views, custom-provider-model-count-fix. (Plugin ids are the 'id' field of each plugin's metadata, not the class name.)
+manifest-plugins.config.json: unknown plugin id "show-all-router-views-v2" — shipped plugins are: show-all-router-views, custom-provider-model-count-fix, gpt-astra-model-list-override. (Plugin ids are the 'id' field of each plugin's metadata, not the class name.)
 ```
 
 Note: keys are lowercase-with-dashes (`show-all-router-views`), not
