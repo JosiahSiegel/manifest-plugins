@@ -201,7 +201,7 @@ async function main(): Promise<number> {
 
   process.stdout.write(`[manifest-plugins/apply] SOURCE_COMMIT=${source.commit}\n`);
   process.stdout.write(
-    `[manifest-plugins/apply] patching five host hooks in ${checkoutPath}\n`,
+    `[manifest-plugins/apply] patching nine host hooks in ${checkoutPath}\n`,
   );
 
   try {
@@ -221,7 +221,7 @@ async function main(): Promise<number> {
   }
 
   try {
-    const all = await applyAllEight(checkoutPath);
+    const all = await applyAllEight(checkoutPath, undefined, { providerParamSpec: true });
     logResult('provider-client', all.providerClient);
     logResult('proxy-rate-limiter', all.proxyRateLimiter);
     logResult('admin-mount', all.adminMount);
@@ -245,7 +245,7 @@ async function main(): Promise<number> {
     }
 
     process.stdout.write(
-      '[manifest-plugins/apply] all eight host hooks patched (or already no-op)\n',
+      '[manifest-plugins/apply] all nine host hooks patched (or already no-op)\n',
     );
 
     if (parsed.applyOverlay) {
