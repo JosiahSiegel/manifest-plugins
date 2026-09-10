@@ -38,6 +38,7 @@
  * `git pull` of upstream, run `npm run apply -- /path/to/manifest` to
  * re-inject the hosts. No fork repo or housekeeping overlay needed.
  */
+import type { ProviderParamSpec } from 'manifest-shared';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { applyDisabledListFromEnv } from './host/env-toggle';
@@ -465,6 +466,18 @@ export interface ModelListOverridePlugin {
 }
 
 // =============================================================================
+// ProviderParamSpecPlugin — model-parameter catalog hook
+// =============================================================================
+
+export interface ProviderParamSpecPlugin {
+  overrideProviderParamSpecs(
+    provider: 'openai',
+    authType: 'api_key' | 'subscription',
+    model: 'gpt-6-astra',
+  ): readonly ProviderParamSpec[] | null;
+}
+
+// =============================================================================
 // Plugin registry metadata + runtime toggles
 // =============================================================================
 
@@ -504,7 +517,8 @@ type ManifestPlugin = Partial<RequestTransformPlugin> &
   Partial<RequestPolicyPlugin> &
   Partial<RoutingOverridePlugin> &
   Partial<DashboardTransformPlugin> &
-  Partial<ModelListOverridePlugin>;
+  Partial<ModelListOverridePlugin> &
+  Partial<ProviderParamSpecPlugin>;
 
 interface PluginRegistryEntry {
   readonly pluginClassName: string;
