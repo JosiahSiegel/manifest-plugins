@@ -152,6 +152,60 @@ const PATCHED_MANIFEST_FILES = [
       '  }\n' +
       '}\n',
   },
+  {
+    relativePath:
+      'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+    content:
+      "import { Injectable, type OnModuleInit } from '@nestjs/common';\n" +
+      '\n' +
+      '@Injectable()\n' +
+      'export class ProviderParamSpecService implements OnModuleInit {\n' +
+      '  onModuleInit(): void {}\n' +
+      '\n' +
+      '  async getSpecs(\n' +
+      '    providerId: string | undefined,\n' +
+      '    authType: AuthType | undefined,\n' +
+      '    model: string | undefined,\n' +
+      '  ): Promise<readonly ProviderParamSpec[]> {\n' +
+      '    const providerlessSpecs = this.getProviderlessSpecs(this.specs, providerId, authType, model);\n' +
+      '    if (providerlessSpecs.length > 0) return providerlessSpecs;\n' +
+      '\n' +
+      '    const directSpecs = getProviderParamSpecs(this.specs, providerId, authType, model);\n' +
+      '    if (directSpecs.length > 0) return directSpecs;\n' +
+      '\n' +
+      '    const metadata = providerMetadataIdentity(providerId, model);\n' +
+      '    if (!metadata || metadataMatchesRoute(metadata, providerId, model)) return directSpecs;\n' +
+      '\n' +
+      '    return getProviderParamSpecs(this.specs, metadata.provider, authType, metadata.model).map(\n' +
+      '      (spec) => withRouteIdentity(spec, providerId, authType, model),\n' +
+      '    );\n' +
+      '  }\n' +
+      '\n' +
+      '  async getCapabilities(\n' +
+      '    providerId: string | undefined,\n' +
+      '    authType: AuthType | undefined,\n' +
+      '    model: string | undefined,\n' +
+      '  ): Promise<readonly ModelCapability[] | null> {\n' +
+      '    const direct = getProviderModelCapabilities(this.specs, providerId, authType, model);\n' +
+      '    if (direct) return direct;\n' +
+      '\n' +
+      '    const metadata = providerMetadataIdentity(providerId, model);\n' +
+      '    if (!metadata || metadataMatchesRoute(metadata, providerId, model)) return direct;\n' +
+      '    return getProviderModelCapabilities(this.specs, metadata.provider, authType, metadata.model);\n' +
+      '  }\n' +
+      '\n' +
+      '  listModelIds(): Array<{ provider: string; authType: AuthType; model: string }> {\n' +
+      '    return this.specs.map((entry) => {\n' +
+      '      const provider = normalizeProviderParamProviderId(entry.provider);\n' +
+      '      return {\n' +
+      '        provider,\n' +
+      '        authType: entry.authType,\n' +
+      '        model: entry.model,\n' +
+      '      };\n' +
+      '    });\n' +
+      '  }\n' +
+      '}\n',
+  },
 ] as const;
 
 function readScript(relativePath: string): string {
@@ -188,7 +242,7 @@ function run(
 }
 
 describe('apply CLI default install path', () => {
-  it('cli.ts source imports `applyAllEight` (regression lock for the eight-file installer)', () => {
+  it('cli.ts source imports `applyAllEight` (regression lock for the nine-file installer)', () => {
     // Blocker #1 regression lock: the CLI module MUST import
     // `applyAllEight` (not just `applyAllFive`). This is a static-source
     // assertion so a future refactor cannot silently revert to the
@@ -198,13 +252,14 @@ describe('apply CLI default install path', () => {
     expect(cli).toMatch(/import\s*\{[^}]*\bapplyAllEight\b[^}]*\}\s*from\s*['"]\.\/apply['"]/);
   });
 
-  it('cli.ts source calls `applyAllEight` (not `applyAll`) in the default path', () => {
-    // Regression lock for the production default. The CLI's main
-    // function must invoke `applyAllEight(checkoutPath, ...)` so all
-    // eight host hooks are part of the default apply surface.
+  it('cli.ts source enables the provider-param patch in the default path', () => {
+    // Regression lock for the production default.
     const cli = readFileSync(join(REPO_ROOT, 'src/host/cli.ts'), 'utf-8');
-    expect(cli).toMatch(/await\s+applyAllEight\s*\(/);
+    expect(cli).toMatch(
+      /await\s+applyAllEight\(checkoutPath, undefined, \{ providerParamSpec: true \}\)/,
+    );
     expect(cli).not.toMatch(/await\s+applyAll\s*\(\s*checkoutPath\s*\)/);
+    expect(cli).toContain('[manifest-plugins/apply] all nine host hooks patched (or already no-op)');
   });
 });
 
@@ -232,7 +287,7 @@ describe('apply CLI integration', () => {
       expect(result.stderr).not.toContain('choose only one Manifest source');
       expect(result.stdout).toContain('[manifest-plugins/apply] SOURCE_COMMIT=');
       expect(result.stdout).toContain(
-        '[manifest-plugins/apply] all eight host hooks patched (or already no-op)',
+        '[manifest-plugins/apply] all nine host hooks patched (or already no-op)',
       );
     } finally {
       cleanup(tmp);

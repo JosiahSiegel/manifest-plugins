@@ -23,12 +23,19 @@ import { spawnSync } from 'child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
+import { transpileModule, ModuleKind, ScriptTarget } from 'typescript';
+import { providerParamValueIsValid, type ProviderParamSpec, type ModelCapability } from 'manifest-shared';
 import {
   applyAll,
+  applyAllEight,
+  applyAdminMount,
   applyAllFive,
   applyModelListOverrideHost,
   applyProviderClientHost,
+  applyProviderParamSpecHost,
   applyProxyRateLimiterHost,
+  applyRoutingModelListOverrideHost,
+  formatUpstreamDriftReason,
   DEFAULT_MANIFEST_FILES,
   type ApplyResult,
   type ManifestFileSpec,
@@ -36,6 +43,11 @@ import {
 import {
   buildHelperMarkerNew,
   HELPER_MARKER_OLD,
+  PROVIDER_PARAM_SPEC_HOST_SOURCE,
+  PROVIDER_PARAM_SPEC_NEW_GET_SPECS,
+  PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+  PROVIDER_PARAM_SPEC_OLD_GET_SPECS,
+  PROVIDER_PARAM_SPEC_OLD_LIST_MODEL_IDS,
   RETURN_NEW,
   RETURN_OLD,
 } from '../src/host/snippet';
@@ -114,6 +126,88 @@ const SYNTHESIZED_MAIN_TS = [
   '',
 ].join('\n');
 
+const SYNTHESIZED_PROVIDER_PARAM_SPEC_SERVICE = [
+  "import { Injectable, type OnModuleInit } from '@nestjs/common';",
+  "import { getProviderModelCapabilities, getProviderParamSpecs, normalizeProviderParamProviderId, type ProviderParamSpec } from 'manifest-shared';",
+  '',
+  'function providerMetadataIdentity(providerId: string | undefined, model: string | undefined): { provider: string; model: string } | null {',
+  '  return providerId !== undefined && model !== undefined ? { provider: providerId, model } : null;',
+  '}',
+  'function metadataMatchesRoute(metadata: { provider: string; model: string }, providerId: string | undefined, model: string | undefined): boolean {',
+  '  return metadata.provider === providerId && metadata.model === model;',
+  '}',
+  'function withRouteIdentity(spec: ProviderParamSpec, providerId: string | undefined, authType: string | undefined, model: string | undefined): ProviderParamSpec {',
+  '  return { ...spec, provider: providerId ?? spec.provider, authType: authType ?? spec.authType, model: model ?? spec.model };',
+  '}',
+  '',
+  '@Injectable()',
+  'export class ProviderParamSpecService implements OnModuleInit {',
+  '  onModuleInit(): void {}',
+  '  private getProviderlessSpecs(_specs: readonly ProviderParamSpec[], _providerId: string | undefined, _authType: string | undefined, _model: string | undefined): readonly ProviderParamSpec[] { return []; }',
+  '',
+  '  listModelIds(): Array<{ provider: string; authType: AuthType; model: string }> {',
+  '    return this.specs.map((entry) => {',
+  '      const provider = normalizeProviderParamProviderId(entry.provider);',
+  '      return {',
+  '        provider,',
+  '        authType: entry.authType,',
+  '        model: entry.model,',
+  '      };',
+  '    });',
+  '  }',
+  '',
+  '  async getSpecs(',
+  '    providerId: string | undefined,',
+  '    authType: AuthType | undefined,',
+  '    model: string | undefined,',
+  '  ): Promise<readonly ProviderParamSpec[]> {',
+  '    const providerlessSpecs = this.getProviderlessSpecs(this.specs, providerId, authType, model);',
+  '    if (providerlessSpecs.length > 0) return providerlessSpecs;',
+  '',
+  '    const directSpecs = getProviderParamSpecs(this.specs, providerId, authType, model);',
+  '    if (directSpecs.length > 0) return directSpecs;',
+  '',
+  '    const metadata = providerMetadataIdentity(providerId, model);',
+  '    if (!metadata || metadataMatchesRoute(metadata, providerId, model)) return directSpecs;',
+  '',
+  '    return getProviderParamSpecs(this.specs, metadata.provider, authType, metadata.model).map(',
+  '      (spec) => withRouteIdentity(spec, providerId, authType, model),',
+  '    );',
+  '  }',
+  '',
+  '  async getCapabilities(',
+  '    providerId: string | undefined,',
+  '    authType: AuthType | undefined,',
+  '    model: string | undefined,',
+  '  ): Promise<readonly ModelCapability[] | null> {',
+  '    const direct = getProviderModelCapabilities(this.specs, providerId, authType, model);',
+  '    if (direct) return direct;',
+  '',
+  '    const metadata = providerMetadataIdentity(providerId, model);',
+  '    if (!metadata || metadataMatchesRoute(metadata, providerId, model)) return direct;',
+  '    return getProviderModelCapabilities(this.specs, metadata.provider, authType, metadata.model);',
+  '  }',
+  '}',
+  '',
+].join('\n');
+
+function synthesizedRoutingService(
+  className: 'TierService' | 'SpecificityService' | 'HeaderTierService',
+): string {
+  return [
+    "import { Injectable } from '@nestjs/common';",
+    '',
+    '@Injectable()',
+    `export class ${className} {`,
+    '  async buildFallbackRoutes(tenantId: string, agentId: string) {',
+    '    const available = await this.discoveryService.getModelsForAgent(tenantId, agentId);',
+    '    return available;',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+}
+
 interface TempFiles {
   /** Absolute path to the manifest root (the tempdir). */
   root: string;
@@ -121,6 +215,7 @@ interface TempFiles {
   proxyRateLimiter: string;
   main: string;
   modelFetcher: string;
+  providerParamSpecService: string;
   cleanup: () => void;
 }
 
@@ -175,6 +270,25 @@ function withTempManifest(
     FILES.modelFetcher ?? 'packages/backend/src/routing/model.controller.ts',
     modelFetcherUpstream !== '' ? modelFetcherUpstream : synthesizedModelFetcher,
   );
+  writeFile(
+    FILES.tierService ?? 'packages/backend/src/routing/routing-core/tier.service.ts',
+    synthesizedRoutingService('TierService'),
+  );
+  writeFile(
+    FILES.specificityService ??
+      'packages/backend/src/routing/routing-core/specificity.service.ts',
+    synthesizedRoutingService('SpecificityService'),
+  );
+  writeFile(
+    FILES.headerTierService ??
+      'packages/backend/src/routing/header-tiers/header-tier.service.ts',
+    synthesizedRoutingService('HeaderTierService'),
+  );
+  writeFile(
+    FILES.providerParamSpecService ??
+      'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+    SYNTHESIZED_PROVIDER_PARAM_SPEC_SERVICE,
+  );
 
   const files: TempFiles = {
     root: tmp,
@@ -185,9 +299,50 @@ function withTempManifest(
       tmp,
       FILES.modelFetcher ?? 'packages/backend/src/routing/model.controller.ts',
     ),
+    providerParamSpecService: join(
+      tmp,
+      FILES.providerParamSpecService ??
+        'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
+    ),
     cleanup: () => rmSync(tmp, { recursive: true, force: true }),
   };
   return Promise.resolve(fn(files)).finally(files.cleanup);
+}
+
+function loadPatchedProviderParamService(
+  source: string,
+  specs: readonly ProviderParamSpec[],
+  capabilities: readonly ModelCapability[] | null = null,
+): {
+  readonly getSpecs: (provider: string, authType: string, model: string) => Promise<readonly ProviderParamSpec[]>;
+  readonly getCapabilities: (provider: string, authType: string, model: string) => Promise<readonly ModelCapability[] | null>;
+  readonly listModelIds: () => ReadonlyArray<{ provider: string; authType: string; model: string }>;
+} {
+  const transpiled = transpileModule(source, {
+    compilerOptions: { module: ModuleKind.CommonJS, target: ScriptTarget.ES2022 },
+  }).outputText;
+  const module = { exports: {} as Record<string, unknown> };
+  const requireFromFixture = (id: string): unknown => {
+    if (id === 'manifest-shared') {
+      return {
+        getProviderParamSpecs: () => specs,
+        getProviderModelCapabilities: () => capabilities,
+        normalizeProviderParamProviderId: (provider: string) => provider,
+      };
+    }
+    if (id === '@nestjs/common') return { Injectable: () => () => undefined };
+    if (id === 'manifest-plugins') return require('../src/index');
+    throw new Error(`unexpected fixture dependency: ${id}`);
+  };
+  new Function('require', 'module', 'exports', transpiled)(requireFromFixture, module, module.exports);
+  const Service = module.exports['ProviderParamSpecService'] as new () => {
+    getSpecs: (provider: string, authType: string, model: string) => Promise<readonly ProviderParamSpec[]>;
+    getCapabilities: (provider: string, authType: string, model: string) => Promise<readonly ModelCapability[] | null>;
+    listModelIds: () => ReadonlyArray<{ provider: string; authType: string; model: string }>;
+  };
+  const service = new Service();
+  Object.defineProperty(service, 'specs', { value: specs });
+  return service;
 }
 
 function expectStatus(
@@ -329,12 +484,73 @@ describe('per-file wrappers', () => {
     });
   });
 
+  it('executes patched provider-param methods with capability and widening contracts', async () => {
+    await withTempManifest(async (files) => {
+      const result = await applyProviderParamSpecHost(files.providerParamSpecService);
+      expectStatus('provider-param-runtime', result, 'applied');
+      const direct = Object.freeze({
+        provider: 'openai',
+        authType: 'api_key',
+        model: 'gpt-6-astra',
+        path: 'reasoning_effort',
+        type: 'enum',
+        label: 'Reasoning effort',
+        description: 'upstream deprecated row',
+        default: 'medium',
+        values: Object.freeze(['low', 'medium', 'high']),
+        group: 'reasoning',
+      });
+      const service = loadPatchedProviderParamService(
+        readFileSync(files.providerParamSpecService, 'utf-8'),
+        [direct],
+        ['text', 'image', 'stream'],
+      );
+      const specs = await service.getSpecs('openai', 'api_key', 'gpt-6-astra');
+      expect(specs).toHaveLength(1);
+      expect(specs[0]?.path).toBe('reasoning_effort');
+      expect(specs[0]?.values).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+      expect(providerParamValueIsValid(specs[0] ?? direct, 'xhigh')).toBe(true);
+      expect(providerParamValueIsValid(specs[0] ?? direct, 'max')).toBe(true);
+      const capabilities = await service.getCapabilities('openai', 'api_key', 'gpt-6-astra');
+      expect(capabilities).toEqual(['text', 'image', 'stream']);
+      expect(capabilities?.every((capability) => typeof capability === 'string')).toBe(true);
+      const noCapabilitiesService = loadPatchedProviderParamService(
+        readFileSync(files.providerParamSpecService, 'utf-8'),
+        [direct],
+        null,
+      );
+      await expect(
+        noCapabilitiesService.getCapabilities('openai', 'api_key', 'gpt-6-astra'),
+      ).resolves.toBeNull();
+      const identities = service.listModelIds();
+      expect(identities).toEqual([
+        { provider: 'openai', authType: 'api_key', model: 'gpt-6-astra' },
+        { provider: 'openai', authType: 'subscription', model: 'gpt-6-astra' },
+      ]);
+    });
+  });
+
+  it('applyProviderParamSpecHost patches the synthesized upstream service in isolation', async () => {
+    await withTempManifest(async (files) => {
+      const result = await applyProviderParamSpecHost(files.providerParamSpecService);
+
+      expectStatus('applyProviderParamSpecHost', result, 'applied');
+      const patched = readFileSync(files.providerParamSpecService, 'utf-8');
+      expect(patched.match(/function applyProviderParamSpecPlugins\(/g)).toHaveLength(1);
+      expect(patched).toContain(PROVIDER_PARAM_SPEC_NEW_GET_SPECS);
+      expect(patched).toContain(PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS);
+      expect(patched).toContain('async getCapabilities(');
+    });
+  });
+
   it('per-file wrappers accept a no-argument call (default options)', async () => {
     // Covers the `options: ApplyOptions = {}` default parameter in applyPatch.
     await withTempManifest(async (files) => {
       // Fresh upstream content — no dryRun flag, so file IS written.
       const r1 = await applyProviderClientHost(files.providerClient);
       const r2 = await applyProxyRateLimiterHost(files.proxyRateLimiter);
+      const r3 = await applyModelListOverrideHost(files.modelFetcher);
+      expectStatus('modelListOverride', r3, 'applied');
       expectStatus('providerClient', r1, 'applied');
       expectStatus('proxyRateLimiter', r2, 'applied');
     });
@@ -409,6 +625,105 @@ describe('applyAllFive (provider-client + rate-limiter + admin-mount + model-lis
   });
 });
 
+describe('applyAllEight provider-param-spec patch', () => {
+  it('applies all nine hooks once and preserves provider-param bytes on the noop rerun', async () => {
+    await withTempManifest(async (files) => {
+      const first = await applyAllEight(files.root, undefined, { providerParamSpec: true });
+
+      expectStatus('providerClient', first.providerClient, 'applied');
+      expectStatus('proxyRateLimiter', first.proxyRateLimiter, 'applied');
+      expectStatus('adminMount', first.adminMount, 'applied');
+      expectStatus('modelListOverride', first.modelListOverride, 'applied');
+      expectStatus('tierServiceRoutingModelList', first.tierServiceRoutingModelList, 'applied');
+      expectStatus(
+        'specificityServiceRoutingModelList',
+        first.specificityServiceRoutingModelList,
+        'applied',
+      );
+      expectStatus(
+        'headerTierServiceRoutingModelList',
+        first.headerTierServiceRoutingModelList,
+        'applied',
+      );
+      expectStatus('providerParamSpec', first.providerParamSpec, 'applied');
+      expect(first.fullyApplied).toBe(true);
+      expect(first.hasDrift).toBe(false);
+
+      const patched = readFileSync(files.providerParamSpecService, 'utf-8');
+      expect(patched.match(/function applyProviderParamSpecPlugins\(/g)).toHaveLength(1);
+      expect(patched).toContain(PROVIDER_PARAM_SPEC_HOST_SOURCE);
+      expect(patched).toContain(PROVIDER_PARAM_SPEC_NEW_GET_SPECS);
+      expect(patched).toContain(PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS);
+      expect(patched).toContain('async getCapabilities(');
+      expect(patched).not.toContain(PROVIDER_PARAM_SPEC_OLD_GET_SPECS);
+      expect(patched).not.toContain(PROVIDER_PARAM_SPEC_OLD_LIST_MODEL_IDS);
+
+      const second = await applyAllEight(files.root, undefined, { providerParamSpec: true });
+      expectStatus('providerClient', second.providerClient, 'noop');
+      expectStatus('proxyRateLimiter', second.proxyRateLimiter, 'noop');
+      expectStatus('adminMount', second.adminMount, 'noop');
+      expectStatus('modelListOverride', second.modelListOverride, 'noop');
+      expectStatus('tierServiceRoutingModelList', second.tierServiceRoutingModelList, 'noop');
+      expectStatus(
+        'specificityServiceRoutingModelList',
+        second.specificityServiceRoutingModelList,
+        'noop',
+      );
+      expectStatus(
+        'headerTierServiceRoutingModelList',
+        second.headerTierServiceRoutingModelList,
+        'noop',
+      );
+      expectStatus('providerParamSpec', second.providerParamSpec, 'noop');
+      expect(second.fullyApplied).toBe(true);
+      expect(second.hasDrift).toBe(false);
+      expect(readFileSync(files.providerParamSpecService, 'utf-8')).toBe(patched);
+    });
+  });
+
+  it('reports named provider drift while applying every unrelated hook', async () => {
+    await withTempManifest(async (files) => {
+      writeFileSync(
+        files.providerParamSpecService,
+        SYNTHESIZED_PROVIDER_PARAM_SPEC_SERVICE.replace(
+          '  async getSpecs(',
+          '  async getSpecsAfterUpstreamRefactor(',
+        ),
+        'utf-8',
+      );
+
+      const result = await applyAllEight(files.root, undefined, { providerParamSpec: true });
+
+      expectStatus('providerClient', result.providerClient, 'applied');
+      expectStatus('proxyRateLimiter', result.proxyRateLimiter, 'applied');
+      expectStatus('adminMount', result.adminMount, 'applied');
+      expectStatus('modelListOverride', result.modelListOverride, 'applied');
+      expectStatus('tierServiceRoutingModelList', result.tierServiceRoutingModelList, 'applied');
+      expectStatus(
+        'specificityServiceRoutingModelList',
+        result.specificityServiceRoutingModelList,
+        'applied',
+      );
+      expectStatus(
+        'headerTierServiceRoutingModelList',
+        result.headerTierServiceRoutingModelList,
+        'applied',
+      );
+      expectStatus('providerParamSpec', result.providerParamSpec, 'upstream-drift');
+      expect(result.providerParamSpec.reason).toContain('getSpecs');
+      expect(result.providerParamSpec.reason).not.toContain('listModelIds');
+      expect(result.fullyApplied).toBe(false);
+      expect(result.hasDrift).toBe(true);
+
+      const partiallyPatched = readFileSync(files.providerParamSpecService, 'utf-8');
+      expect(partiallyPatched.match(/function applyProviderParamSpecPlugins\(/g)).toHaveLength(1);
+      expect(partiallyPatched).toContain(PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS);
+      expect(partiallyPatched).toContain('async getCapabilities(');
+      expect(partiallyPatched).not.toContain(PROVIDER_PARAM_SPEC_NEW_GET_SPECS);
+    });
+  });
+});
+
 describe('applyPatch direct invocation (covers internal defaults)', () => {
   it('uses default empty options when called with no second argument', async () => {
     // Covers the `options: ApplyOptions = {}` default parameter on
@@ -430,6 +745,70 @@ describe('applyPatch direct invocation (covers internal defaults)', () => {
     });
     // Reference DEFAULT_MANIFEST_FILES to keep it in the type graph (no-op assertion).
     expect(DEFAULT_MANIFEST_FILES).toBeDefined();
+  });
+});
+
+describe('apply edge branches', () => {
+  it('formats both present and absent drift reasons for aggregate reporting', () => {
+    expect(
+      formatUpstreamDriftReason({
+        status: 'upstream-drift',
+        file: 'provider-param-spec.service.ts',
+        reason: 'anchor missing',
+      }),
+    ).toBe('anchor missing');
+    expect(
+      formatUpstreamDriftReason({
+        status: 'upstream-drift',
+        file: 'provider-param-spec.service.ts',
+      }),
+    ).toBe('unknown drift');
+  });
+
+  it('reports helper-marker drift and requires main.ts for applyAllFive', async () => {
+    await withTempManifest(async (files) => {
+      const broken = readFileSync(files.providerClient, 'utf-8').replace(
+        'class ProviderClient',
+        'class ProviderClientChanged',
+      );
+      writeFileSync(files.providerClient, broken, 'utf-8');
+      const drift = await applyProviderClientHost(files.providerClient);
+      expectStatus('helper-marker-drift', drift, 'upstream-drift');
+    });
+    await expect(
+      applyAllFive('/tmp/f1-missing-main', {
+        providerClient: 'provider-client.ts',
+        proxyRateLimiter: 'rate-limiter.ts',
+        main: undefined,
+      }),
+    ).rejects.toThrow(/files\.main is required/);
+  });
+
+  it('covers routing service class anchors and optional apply fallbacks', async () => {
+    await withTempManifest(async (files) => {
+      const header = await applyRoutingModelListOverrideHost(files.modelFetcher, 'HeaderTierService');
+      expectStatus('header-routing', header, 'upstream-drift');
+      const specificity = await applyRoutingModelListOverrideHost(files.modelFetcher, 'SpecificityService');
+      expectStatus('specificity-routing', specificity, 'upstream-drift');
+      const admin = await applyAdminMount(files.main);
+      expectStatus('admin-mount', admin, 'applied');
+    });
+    await withTempManifest(async (files) => {
+      const result = await applyAllEight(files.root, {
+        providerClient: FILES.providerClient,
+        proxyRateLimiter: FILES.proxyRateLimiter,
+        main: FILES.main,
+        modelFetcher: undefined,
+        tierService: undefined,
+        specificityService: undefined,
+        headerTierService: undefined,
+        providerParamSpecService: undefined,
+      });
+      expectStatus('tier-fallback', result.tierServiceRoutingModelList, 'noop');
+      expectStatus('specificity-fallback', result.specificityServiceRoutingModelList, 'noop');
+      expectStatus('header-fallback', result.headerTierServiceRoutingModelList, 'noop');
+      expectStatus('provider-fallback', result.providerParamSpec, 'noop');
+    });
   });
 });
 
