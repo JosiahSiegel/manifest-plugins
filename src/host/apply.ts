@@ -49,6 +49,12 @@ import {
   MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD,
   MODEL_LIST_OVERRIDE_NEW,
   MODEL_LIST_OVERRIDE_OLD,
+  PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD,
+  PROVIDER_PARAM_SPEC_HOST_SOURCE,
+  PROVIDER_PARAM_SPEC_NEW_GET_SPECS,
+  PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+  PROVIDER_PARAM_SPEC_OLD_GET_SPECS,
+  PROVIDER_PARAM_SPEC_OLD_LIST_MODEL_IDS,
   ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_HEADER_TIER,
   ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_SPECIFICITY,
   ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_TIER,
@@ -60,6 +66,7 @@ import {
   RATE_LIMITER_OLD,
   buildHelperMarkerNew,
   buildModelListOverrideHelperMarkerNew,
+  buildProviderParamSpecHelperMarkerNew,
 } from './snippet';
 import {
   assertAnchors,
@@ -86,12 +93,16 @@ export interface ApplyOptions {
   /** Dry-run: report what would change without writing. Default: false. */
   dryRun?: boolean;
   /**
-   * Optional anchor markers to verify BEFORE reading the file. If any
-   * marker is missing, the apply fails fast with `upstream-drift`
-   * without writing the file. Used by the patcher + the apply CLI's
-   * preflight pass to fail loud when upstream restructured.
-   */
+    * Optional anchor markers to verify BEFORE reading the file. If any
+    * marker is missing, the apply fails fast with `upstream-drift`
+    * without writing the file. Used by the patcher + the apply CLI's
+    * preflight pass to fail loud when upstream restructured.
+    */
   preflightAnchors?: readonly AnchorMarker[];
+}
+
+export function formatUpstreamDriftReason(result: ApplyResult): string {
+  return result.reason ?? 'unknown drift';
 }
 
 interface PatchSpec {
@@ -396,6 +407,68 @@ export async function applyRoutingModelListOverrideHost(
     options,
   );
 }
+/**
+ * Install one module-scope helper and patch the three public
+ * provider-param-spec methods independently. Method patches use a byte-equal
+ * class marker so only the dedicated helper patch can insert the helper.
+ */
+export async function applyProviderParamSpecHost(
+  filePath: string,
+  options: ApplyOptions = {},
+): Promise<ApplyResult> {
+  const helperMarker = PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD;
+  const helperResult = await applyPatch(
+    {
+      filePath,
+      postPatchSymbol: PROVIDER_PARAM_SPEC_HOST_SOURCE,
+      oldText: helperMarker,
+      newText: buildProviderParamSpecHelperMarkerNew(),
+    },
+    options,
+  );
+  const specsResult = await applyPatch(
+    {
+      filePath,
+      postPatchSymbol: 'applyProviderParamSpecPlugins(\n      providerId,\n      authType,\n      model,\n      fallbackSpecs,\n    )',
+      oldText: PROVIDER_PARAM_SPEC_OLD_GET_SPECS,
+      newText: PROVIDER_PARAM_SPEC_NEW_GET_SPECS,
+      helperMarkerOld: helperMarker,
+      helperMarkerNew: helperMarker,
+    },
+    options,
+  );
+  const listModelIdsResult = await applyPatch(
+    {
+      filePath,
+      postPatchSymbol: 'applyProviderParamSpecPlugins(\n      undefined,\n      undefined,\n      undefined,\n      list,\n    ) as Array<{ provider: string; authType: AuthType; model: string }>',
+      oldText: PROVIDER_PARAM_SPEC_OLD_LIST_MODEL_IDS,
+      newText: PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS,
+      helperMarkerOld: helperMarker,
+      helperMarkerNew: helperMarker,
+    },
+    options,
+  );
+  const patchResults = [
+    ['helper', helperResult],
+    ['getSpecs', specsResult],
+    ['listModelIds', listModelIdsResult],
+  ] as const;
+  const drifted = patchResults.filter(([, result]) => result.status === 'upstream-drift');
+  if (drifted.length > 0) {
+    return {
+      status: 'upstream-drift',
+      file: filePath,
+      reason: drifted
+        .map(([name, result]) => `${name}: ${formatUpstreamDriftReason(result)}`)
+        .join('; '),
+    };
+  }
+  if (patchResults.some(([, result]) => result.status === 'applied')) {
+    return { status: 'applied', file: filePath };
+  }
+  return { status: 'noop', file: filePath };
+}
+
 export async function applyAdminMount(
   filePath: string,
   options: ApplyOptions = {},
@@ -464,6 +537,15 @@ export interface ManifestFileSpec {
    * override host. Optional.
    */
   headerTierService?: string;
+  /**
+   * Path to upstream's `routing-core/provider-param-spec.service.ts`.
+   * Used by `applyAllEight` (when the `providerParamSpec` option is
+   * enabled — default true) to install the provider-param-spec host
+    * on `getSpecs` / `listModelIds`. Optional;
+   * when omitted, the provider-param-spec patch is skipped with a
+   * synthetic `noop` result.
+   */
+  providerParamSpecService?: string;
 }
 
 export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
@@ -474,6 +556,8 @@ export const DEFAULT_MANIFEST_FILES: ManifestFileSpec = {
   tierService: 'packages/backend/src/routing/routing-core/tier.service.ts',
   specificityService: 'packages/backend/src/routing/routing-core/specificity.service.ts',
   headerTierService: 'packages/backend/src/routing/header-tiers/header-tier.service.ts',
+  providerParamSpecService:
+    'packages/backend/src/routing/routing-core/provider-param-spec.service.ts',
 };
 
 export interface ApplyAllResult {
@@ -564,6 +648,11 @@ export interface ApplyAllFiveResult extends ApplyAllResult {
  * four-file result unchanged with a synthetic `modelListOverride`
  * field set to `{ status: 'noop', file: '<not requested>' }`.
  */
+/** `providerParamSpec` defaults to enabled; set it to `false` to skip the host. */
+export type ApplyAllEightOptions = ApplyOptions & {
+  readonly providerParamSpec?: boolean;
+};
+
 /**
  * Result of the eight-file patch surface (the five-file set +
  * routing-layer model-list-override). See {@link applyAllEight}.
@@ -575,6 +664,8 @@ export interface ApplyAllEightResult extends ApplyAllFiveResult {
   specificityServiceRoutingModelList: ApplyResult;
   /** Result of the routing-layer model-list-override patch on `header-tier.service.ts`. */
   headerTierServiceRoutingModelList: ApplyResult;
+  /** Result of the provider-param-spec patch on `provider-param-spec.service.ts`. */
+  providerParamSpec: ApplyResult;
 }
 
 export async function applyAllFive(
@@ -655,7 +746,7 @@ export async function applyAllFive(
 export async function applyAllEight(
   manifestRoot: string,
   files: ManifestFileSpec = DEFAULT_MANIFEST_FILES,
-  options: ApplyOptions = {},
+  options: ApplyAllEightOptions = {},
 ): Promise<ApplyAllEightResult> {
   const fiveFileResult = await applyAllFive(manifestRoot, files, options);
   const resolve = (rel: string) => `${manifestRoot.replace(/\/$/, '')}/${rel}`;
@@ -688,7 +779,21 @@ export async function applyAllEight(
     );
   }
 
-  const resolved = await Promise.all(routingPatches);
+  const providerParamSpecEnabled = options.providerParamSpec !== false;
+  const providerParamSpecPatches: Array<Promise<{ key: 'providerParamSpec'; result: ApplyResult }>> = [];
+  if (providerParamSpecEnabled && files.providerParamSpecService !== undefined) {
+    providerParamSpecPatches.push(
+      applyProviderParamSpecHost(resolve(files.providerParamSpecService), options).then(
+        (result) => ({ key: 'providerParamSpec' as const, result }),
+      ),
+    );
+  }
+
+  const resolved = await Promise.all([
+    ...routingPatches,
+    ...providerParamSpecPatches,
+  ]);
+
   const tierServiceRoutingModelList: ApplyResult =
     resolved.find((r) => r.key === 'tierServiceRoutingModelList')?.result ?? {
       status: 'noop',
@@ -704,11 +809,17 @@ export async function applyAllEight(
       status: 'noop',
       file: '<headerTierService not requested>',
     };
+  const providerParamSpec: ApplyResult =
+    resolved.find((r) => r.key === 'providerParamSpec')?.result ?? {
+      status: 'noop',
+      file: '<providerParamSpec not requested>',
+    };
 
   const allDrift = [
     tierServiceRoutingModelList,
     specificityServiceRoutingModelList,
     headerTierServiceRoutingModelList,
+    providerParamSpec,
   ];
   const hasDrift = fiveFileResult.hasDrift || allDrift.some((r) => r.status === 'upstream-drift');
   const fullyApplied = fiveFileResult.fullyApplied && allDrift.every((r) => r.status !== 'upstream-drift');
@@ -718,6 +829,7 @@ export async function applyAllEight(
     tierServiceRoutingModelList,
     specificityServiceRoutingModelList,
     headerTierServiceRoutingModelList,
+    providerParamSpec,
     fullyApplied,
     hasDrift,
   };
