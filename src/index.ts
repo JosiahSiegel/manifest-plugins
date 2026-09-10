@@ -623,6 +623,11 @@ export {
   CustomProviderModelCountFixPlugin,
 } from './plugins/custom-provider-model-count-fix/plugin';
 
+export {
+  GptAstraModelListOverridePlugin,
+  GPT_ASTRA_MODEL_LIST_OVERRIDE_PLUGIN_METADATA,
+} from './plugins/gpt-astra-model-list-override/plugin';
+
 // =============================================================================
 // Re-exports for the pasted host snippets
 // =============================================================================
