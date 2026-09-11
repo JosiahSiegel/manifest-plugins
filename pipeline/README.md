@@ -117,7 +117,7 @@ The e2e test (`pipeline/e2e-test.sh`) is a sibling script — same logic runs lo
 1. `GET /api/v1/health` → 200, `application/json`
 2. `GET /` → 200, `text/html` containing `<title>Manifest</title>`
 3. `GET /assets/<filename>` → 200, `application/javascript` or `text/css`
-4. `docker exec <app> node -e ...` can require `/app/node_modules/manifest-plugins`, sees the `show-all-router-views` plugin installed/enabled, and confirms `getDashboardScript()` returns a non-empty string for that plugin against an in-memory fixture
+4. `docker exec <app> node -e ...` can require `/app/node_modules/manifest-plugins`, sees all three in-tree plugins installed/enabled, and confirms `getDashboardScript()` returns a non-empty string for that plugin against an in-memory fixture
 
 The first assertion catches backend boot regressions; the second catches missing-frontend-dist regressions (the original 404 bug); the third catches Vite asset-pipeline / hash-mismatch regressions; the fourth catches plugin packaging/runtime-discovery regressions where the image serves the dashboard but boots with an empty plugin registry.
 

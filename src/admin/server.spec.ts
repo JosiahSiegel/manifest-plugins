@@ -3,6 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { Express } from 'express';
 import request from 'supertest';
+import * as indexModule from '../index';
 import {
   getInstalledPlugins,
   resetPersistedPluginState,
@@ -32,6 +33,7 @@ type PluginJson = {
 
 const EXPECTED_PLUGIN_IDS = [
   'custom-provider-model-count-fix',
+  'gpt-astra-model-list-override',
   'show-all-router-views',
 ];
 
@@ -182,13 +184,15 @@ describe('plugin admin HTTP API', () => {
   });
 
   it('PATCH /api/plugins/show-all-router-views rejects an empty body', async () => {
-    // Given: a fresh admin server.
     const app = createApp();
-
-    // When: no enabled field is sent.
     const response = await request(app).patch('/api/plugins/show-all-router-views').send({}).expect(400);
+    expect(response.body).toEqual({ error: 'body must be { enabled: boolean }' });
+  });
 
-    // Then: the request is rejected as a bad body.
+  it('PATCH rejects null and array enabled bodies', async () => {
+    const app = createApp();
+    await request(app).patch('/api/plugins/show-all-router-views').send('null').set('Content-Type', 'application/json').expect(400);
+    const response = await request(app).patch('/api/plugins/show-all-router-views').send({ enabled: [] }).expect(400);
     expect(response.body).toEqual({ error: 'body must be { enabled: boolean }' });
   });
 
@@ -281,6 +285,56 @@ describe('plugin admin HTTP API', () => {
   // Dashboard-transform bundle endpoints
   // -------------------------------------------------------------------
 
+  it('GET /admin/dashboard-transform/show-all-router-views.js returns 500 for missing constructor metadata', async () => {
+    const index = require('../index') as { installedPlugins: readonly Record<string, unknown>[] };
+    const original = index.installedPlugins;
+    Object.defineProperty(index, 'installedPlugins', {
+      configurable: true,
+      value: Object.freeze([{ constructor: undefined, getDashboardScript: () => 'fake-script' }]),
+    });
+    try {
+      await request(createApp()).get('/admin/dashboard-transform/show-all-router-views.js').expect(500);
+    } finally {
+      Object.defineProperty(index, 'installedPlugins', { configurable: true, value: original });
+    }
+  });
+
+  it('GET /admin/dashboard-transform/all.js skips a dashboard plugin with an empty script', async () => {
+    const index = require('../index') as { installedPlugins: readonly Record<string, unknown>[] };
+    const original = index.installedPlugins;
+    const emptyPlugin = {
+      constructor: { metadata: { id: 'empty-dashboard-script' } },
+      getDashboardScript: () => '',
+    };
+    Object.defineProperty(index, 'installedPlugins', {
+      configurable: true,
+      value: Object.freeze([...original, emptyPlugin]),
+    });
+    try {
+      const response = await request(createApp()).get('/admin/dashboard-transform/all.js').expect(200);
+      expect(response.text).not.toContain('empty-dashboard-script');
+    } finally {
+      Object.defineProperty(index, 'installedPlugins', { configurable: true, value: original });
+    }
+  });
+
+  it('GET /admin/dashboard-transform/all.js labels a script whose constructor has no metadata', async () => {
+    const index = require('../index') as { installedPlugins: readonly Record<string, unknown>[] };
+    const original = index.installedPlugins;
+    const unnamedPlugin = { constructor: undefined, getDashboardScript: () => 'unnamed-script' };
+    Object.defineProperty(index, 'installedPlugins', {
+      configurable: true,
+      value: Object.freeze([...original, unnamedPlugin]),
+    });
+    try {
+      const response = await request(createApp()).get('/admin/dashboard-transform/all.js').expect(200);
+      expect(response.text).toContain('dashboard-transform: unknown');
+      expect(response.text).toContain('unnamed-script');
+    } finally {
+      Object.defineProperty(index, 'installedPlugins', { configurable: true, value: original });
+    }
+  });
+
   it('GET /admin/dashboard-transform/all.js serves a JS bundle with the bootstrap + all enabled plugins', async () => {
     // Given: a fresh admin server.
     const app = createApp();
@@ -305,12 +359,14 @@ describe('plugin admin HTTP API', () => {
     expect(body).toContain('Combined dashboard-transform bundle');
   });
 
-  it('GET /admin/dashboard-transform/<id>.js returns 400 for an invalid id', async () => {
+  it('GET /admin/dashboard-transform/<id>.js returns 400 for invalid ids', async () => {
     const app = createApp();
-    const response = await request(app)
-      .get('/admin/dashboard-transform/Bad%20Id.js')
-      .expect(400);
-    expect(response.body).toEqual({ error: 'invalid plugin id' });
+    for (const id of ['Bad%20Id', 'Bad_underscore']) {
+      const response = await request(app)
+        .get(`/admin/dashboard-transform/${id}.js`)
+        .expect(400);
+      expect(response.body).toEqual({ error: 'invalid plugin id' });
+    }
   });
 
   it('GET /admin/dashboard-transform/<id>.js returns 404 for an unknown plugin', async () => {
@@ -324,21 +380,41 @@ describe('plugin admin HTTP API', () => {
     });
   });
 
+  it('GET /admin/dashboard-transform/<id>.js returns 500 when metadata has no instance', async () => {
+    const original = indexModule.installedPlugins;
+    Object.defineProperty(indexModule, 'installedPlugins', {
+      configurable: true,
+      value: Object.freeze([]),
+    });
+    try {
+      await request(createApp()).get('/admin/dashboard-transform/show-all-router-views.js').expect(500);
+    } finally {
+      Object.defineProperty(indexModule, 'installedPlugins', { configurable: true, value: original });
+    }
+  });
+
+  it('GET /admin/dashboard-transform/<id>.js returns 204 for an empty dashboard script fixture', async () => {
+    const index = require('../index') as { installedPlugins: readonly Record<string, unknown>[] };
+    const original = index.installedPlugins.find((plugin) => plugin.constructor?.name === 'ShowAllRouterViewsPlugin');
+    const getScript = original?.getDashboardScript;
+    if (typeof getScript !== 'function') return;
+    Object.defineProperty(original, 'getDashboardScript', { value: () => '', configurable: true });
+    try {
+      await request(createApp()).get('/admin/dashboard-transform/show-all-router-views.js').expect(204);
+    } finally {
+      Object.defineProperty(original, 'getDashboardScript', { value: getScript, configurable: true });
+    }
+  });
+
   it('GET /admin/dashboard-transform/<id>.js returns 400 when the plugin is not a dashboard-transform', async () => {
-    // The 400 path is only reachable when a non-existent dashboard-transform
-    // id is queried, which doesn't currently happen with the in-tree plugin
-    // set. The 404 path is exercised below as a regression lock; the 400
-    // body shape is locked here for the rare case it's triggered by a
-    // future plugin or operator config.
     const app = createApp();
-    // 404 first to confirm the not-found path still works for a
-    // plugin id that the registry does not know about.
-    const notFound = await request(app)
-      .get('/admin/dashboard-transform/anthropic-models-fix.js')
-      .expect(404);
-    expect(notFound.body).toEqual({
-      error: 'plugin not found',
-      id: 'anthropic-models-fix',
+    const response = await request(app)
+      .get('/admin/dashboard-transform/gpt-astra-model-list-override.js')
+      .expect(400);
+    expect(response.body).toEqual({
+      error: 'plugin is not a dashboard-transform',
+      id: 'gpt-astra-model-list-override',
+      kind: 'model-list-override',
     });
   });
 
@@ -390,6 +466,50 @@ describe('plugin admin HTTP API', () => {
 
     // Then: close() resolves cleanly.
     await expect(started.close()).resolves.toBeUndefined();
+  });
+
+  it('uses env port fallback and custom static directory options', async () => {
+    const previousPort = process.env['MANIFEST_PLUGINS_ADMIN_PORT'];
+    process.env['MANIFEST_PLUGINS_ADMIN_PORT'] = 'not-a-port';
+    try {
+      const app = createApp({ staticDir: tempDir, bindHost: '127.0.0.1', stateFilePath });
+      await request(app).get('/admin/admin.js').expect(404);
+    } finally {
+      if (previousPort === undefined) delete process.env['MANIFEST_PLUGINS_ADMIN_PORT'];
+      else process.env['MANIFEST_PLUGINS_ADMIN_PORT'] = previousPort;
+    }
+  });
+
+  it('uses a valid admin port from the environment when options omit the port', async () => {
+    const previousPort = process.env['MANIFEST_PLUGINS_ADMIN_PORT'];
+    process.env['MANIFEST_PLUGINS_ADMIN_PORT'] = '3011';
+    try {
+      expect(createApp()).toBeDefined();
+    } finally {
+      if (previousPort === undefined) delete process.env['MANIFEST_PLUGINS_ADMIN_PORT'];
+      else process.env['MANIFEST_PLUGINS_ADMIN_PORT'] = previousPort;
+    }
+  });
+
+  it('returns a static-file error when admin.js resolves to a directory', async () => {
+    const directory = join(tempDir, 'admin.js');
+    mkdirSync(directory, { recursive: true });
+    await request(createApp({ staticDir: tempDir })).get('/admin/admin.js').expect(500);
+  });
+
+  it('starts with a unix socket address and closes cleanly', async () => {
+    const { startAdminServer } = require('./server');
+    const socketPath = join(tempDir, 'admin.sock');
+    const started = await startAdminServer(createApp(), { port: socketPath as unknown as number, bindHost: '' });
+    expect(started.port).toBe(socketPath);
+    await started.close();
+  });
+
+  it('reports a close failure when the listener is already closed', async () => {
+    const { startAdminServer } = require('./server');
+    const started = await startAdminServer(createApp(), { port: 0, bindHost: '127.0.0.1' });
+    await started.close();
+    await expect(started.close()).rejects.toThrow();
   });
 
   it('startAdminServer rejects on EADDRINUSE', async () => {

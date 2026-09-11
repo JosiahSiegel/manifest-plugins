@@ -11,9 +11,21 @@
       "postPatchSymbol": "function getResolvedConcurrencyMax("
     },
     {
-      "id": "model-controller-list-override-host",
-      "target": "packages/backend/src/routing/model.controller.ts",
-      "postPatchSymbol": "function applyModelListOverridePlugins("
+      "id": "provider-param-spec-host",
+      "target": "packages/backend/src/routing/routing-core/provider-param-spec.service.ts",
+      "postPatchSymbol": "function applyProviderParamSpecPlugins(",
+      "requiredPostPatchSymbols": [
+        "applyProviderParamSpecPlugins(\n      providerId,\n      authType,\n      model,\n      fallbackSpecs,\n    )",
+        "applyProviderParamSpecPlugins(\n      undefined,\n      undefined,\n      undefined,\n      list,\n    ) as Array<{ provider: string; authType: AuthType; model: string }>"
+      ]
+    },
+    {
+      "id": "provider-key-route-availability-host",
+      "target": "packages/backend/src/routing/routing-core/provider-key.service.ts",
+      "postPatchSymbol": "function applyProviderKeyModelListOverridePlugins(",
+      "requiredPostPatchSymbols": [
+        "const discovered = applyProviderKeyModelListOverridePlugins("
+      ]
     },
     {
       "id": "dashboard-plugin-manager-mount",

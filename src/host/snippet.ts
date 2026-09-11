@@ -623,6 +623,97 @@ export const ROUTING_MODEL_LIST_OVERRIDE_HELPER_MARKER_OLD_HEADER_TIER =
   '@Injectable()\nexport class HeaderTierService {\n';
 
 // =============================================================================
+// Provider-key route-availability model-list override host
+// =============================================================================
+
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_HOST_SOURCE = `function applyProviderKeyModelListOverridePlugins(
+  tenantId: string,
+  agentId: string | undefined,
+  discoveredModels: ReadonlyArray<unknown>,
+): ReadonlyArray<unknown> {
+  const fallback = Object.freeze([...discoveredModels]);
+  let pkg: {
+    plugins?: unknown;
+    applyDisabledListFromEnv?: unknown;
+  } | undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    pkg = require('manifest-plugins') as {
+      plugins?: unknown;
+      applyDisabledListFromEnv?: unknown;
+    };
+  } catch {
+    return fallback;
+  }
+  if (!pkg || !Array.isArray(pkg.plugins)) return fallback;
+  try {
+    const toggle = pkg.applyDisabledListFromEnv;
+    if (typeof toggle === 'function') {
+      (toggle as (value: string | undefined) => void)(
+        process.env['MANIFEST_PLUGINS_DISABLED'],
+      );
+    }
+  } catch {
+    // The environment toggle is best-effort and must not block route availability.
+  }
+  for (const plugin of pkg.plugins) {
+    if (
+      !plugin ||
+      typeof (plugin as { overrideModelList?: unknown }).overrideModelList !== 'function'
+    ) {
+      continue;
+    }
+    try {
+      const out = (plugin as {
+        overrideModelList: (ctx: unknown) => unknown;
+      }).overrideModelList({
+        tenantId,
+        agentId,
+        discoveredModels: fallback,
+        requestMetadata: { source: 'provider-key.service.is-route-available' },
+      });
+      if (
+        out &&
+        typeof out === 'object' &&
+        Array.isArray((out as { discoveredModels?: unknown }).discoveredModels)
+      ) {
+        const replacement = out as {
+          discoveredModels: ReadonlyArray<unknown>;
+        };
+        return Object.freeze([...replacement.discoveredModels]);
+      }
+    } catch (err) {
+      const name =
+        (plugin as { constructor?: { name?: string } }).constructor?.name ?? 'plugin';
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(
+        \`[manifest-plugins] \${name} overrideModelList failed: \${msg}\`,
+      );
+    }
+  }
+  return fallback;
+}
+
+`;
+
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_OLD = `    const discovered = await this.discoveryService.getModelsForAgent(tenantId, agentId);`;
+
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_NEW = `    const discoveredRaw = await this.discoveryService.getModelsForAgent(tenantId, agentId);
+    const discovered = applyProviderKeyModelListOverridePlugins(
+      tenantId,
+      agentId,
+      discoveredRaw,
+    ) as typeof discoveredRaw;`;
+
+export const PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_MARKER_OLD =
+  '@Injectable()\nexport class ProviderKeyService {\n';
+
+export function buildProviderKeyRouteAvailabilityHelperMarkerNew(): string {
+  return `${PROVIDER_KEY_ROUTE_AVAILABILITY_HOST_SOURCE}${PROVIDER_KEY_ROUTE_AVAILABILITY_HELPER_MARKER_OLD}`;
+}
+
+// =============================================================================
 // Admin Express app mount (injected into main.ts)
 // =============================================================================
 
@@ -647,4 +738,283 @@ export const ADMIN_MOUNT_NEW = `  // Fork: mount the plugin admin Express app on
   const port = Number(process.env['PORT'] ?? 3001);
   const host = process.env['BIND_ADDRESS'] ?? '127.0.0.1';
   await app.listen(port, host);
+`;
+
+// =============================================================================
+// Provider-param-spec host (injected into provider-param-spec.service.ts)
+// =============================================================================
+
+/**
+ * The host helper inserted into upstream's `ProviderParamSpecService` so a
+ * `ProviderParamSpecPlugin` can merge non-null param-spec rows into
+ * `getSpecs` and identity rows into `listModelIds` BEFORE upstream's
+ * controller serializes them as the response body. `getCapabilities` is
+ * intentionally left upstream-only because its contract is a string-only
+ * `ModelCapability[] | null` result.
+ *
+ * Behavior:
+ *   - Plugins receive a fully-resolved context (`provider`, `authType`,
+ *     `model`, `directSpecs`). The host resolves upstream rows first and
+ *     plugins only contribute provider-param rows or model identities.
+ *   - A plugin row with the same provider/auth/model/path replaces every
+ *     conflicting upstream row in place; unrelated upstream rows retain
+ *     their order and plugin-only rows are appended. If every plugin
+ *     returns `null`, the host returns `directSpecs` unchanged.
+ *   - Plugin errors are non-fatal — the host catches and logs them and
+ *     continues with the next plugin (or upstream's direct specs if every
+ *     plugin errored or returned `null`).
+ *
+ * Why `require()` and not `import`? Same rationale as the other host
+ * snippets: the helper is pasted into upstream Manifest source where
+ * `manifest-plugins` may not be installed. `require()` inside try/catch
+ * degrades to a no-op when the module is missing, so the upstream
+ * source stays compilable in either state.
+ *
+ * Module-scope only: this helper deliberately does NOT live inside
+ * `ProviderParamSpecService` because it must not capture `this`.
+ */
+export const PROVIDER_PARAM_SPEC_HOST_SOURCE = `/**
+ * Fork: merge provider-param-spec plugin rows onto the array upstream
+ * \`getProviderParamSpecs(...)\` / the provider list projection just
+ * returned. Plugins live in the sibling \`manifest-plugins\` repo and are
+ * loaded via \`require('manifest-plugins')\`. If the package is not
+ * installed (e.g. on upstream or in CI without the fork's plugin layer),
+ * this is a no-op that returns \`directSpecs\` unchanged.
+ *
+ * Plugin contract: each entry in \`require('manifest-plugins').plugins\`
+ * may implement \`overrideProviderParamSpecs(provider, authType, model)\`
+ * returning \`readonly ProviderParamSpec[]\` or \`null\`. The host walks
+ * the plugin array in order, validates each returned row, replaces
+ * conflicting direct rows, and appends plugin-only rows. Plugin errors are
+ * caught and logged; one broken plugin must not break the params response.
+ *
+ * Conflict resolution: the upstream rows for the same
+ * \`(provider, authType, model, path)\` identity as a plugin row are
+ * REPLACED by the plugin row, so the plugin can authoritatively widen a
+ * deprecated/partial upstream row (e.g. Astra \`reasoning_effort\`) while
+ * unrelated direct rows and their relative order are preserved. Plugin
+ * rows that target a new path or new \`(provider, authType, model)\`
+ * identity are appended.
+ *
+ * Row key normalization: the chat-completions \`reasoning_effort\` path
+ * and the Responses \`reasoning.effort\` path share a logical identity;
+ * either path is treated as the conflict key for \`reasoning\` so the
+ * Astra plugin can replace either upstream shape.
+ */
+function applyProviderParamSpecPlugins(
+  provider: string | undefined,
+  authType: string | undefined,
+  model: string | undefined,
+  directSpecs: ReadonlyArray<unknown>,
+): ReadonlyArray<unknown> {
+  const listModelIdsMode = provider === undefined && authType === undefined && model === undefined;
+  const hasSpecShape = (row: unknown): boolean => {
+    if (!row || typeof row !== 'object') return false;
+    const r = row as { provider?: unknown; authType?: unknown; model?: unknown; path?: unknown };
+    const hasIdentity = typeof r.provider === 'string' && typeof r.authType === 'string' && typeof r.model === 'string';
+    return hasIdentity && (listModelIdsMode || typeof r.path === 'string');
+  };
+  const conflictKey = (row: unknown): string | null => {
+    if (!hasSpecShape(row)) return null;
+    const r = row as { provider: string; authType: string; model: string; path?: string };
+    const path = listModelIdsMode ? '' : r.path === 'reasoning.effort' ? 'reasoning_effort' : r.path;
+    return r.provider + '\u0000' + r.authType + '\u0000' + r.model + '\u0000' + path;
+  };
+  let pkg: { plugins?: unknown } | undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    pkg = require('manifest-plugins') as { plugins?: unknown };
+  } catch {
+    return directSpecs;
+  }
+  if (!pkg || !Array.isArray(pkg.plugins)) return directSpecs;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const toggle = (pkg as { applyDisabledListFromEnv?: unknown }).applyDisabledListFromEnv;
+    if (typeof toggle === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      (toggle as (v: unknown) => void)(process.env['MANIFEST_PLUGINS_DISABLED']);
+    }
+  } catch {
+    // env-toggle is best-effort; never block a request on it.
+  }
+  const merged: unknown[] = [...directSpecs];
+  let appended = false;
+  for (const plugin of pkg.plugins) {
+    if (!plugin || typeof (plugin as { overrideProviderParamSpecs?: unknown }).overrideProviderParamSpecs !== 'function') continue;
+    try {
+      const out = (plugin as {
+        overrideProviderParamSpecs: (
+          provider: string | undefined,
+          authType: string | undefined,
+          model: string | undefined,
+        ) => ReadonlyArray<unknown> | null;
+      }).overrideProviderParamSpecs(provider, authType, model);
+      if (!Array.isArray(out)) continue;
+      for (const row of out) {
+        if (!hasSpecShape(row)) continue;
+        const key = conflictKey(row);
+        const conflictIndexes: number[] = [];
+        if (key !== null) {
+          for (let index = 0; index < merged.length; index += 1) {
+            if (conflictKey(merged[index]) === key) conflictIndexes.push(index);
+          }
+        }
+        if (conflictIndexes.length === 0) {
+          merged.push(row);
+        } else {
+          const first = conflictIndexes[0];
+          if (first !== undefined) merged[first] = row;
+          for (let index = conflictIndexes.length - 1; index >= 1; index -= 1) {
+            const removeAt = conflictIndexes[index];
+            if (removeAt !== undefined) merged.splice(removeAt, 1);
+          }
+        }
+        appended = true;
+      }
+    } catch (err) {
+      const name =
+        (plugin as { constructor?: { name?: string } }).constructor?.name ?? 'plugin';
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(\`[manifest-plugins] \${name} overrideProviderParamSpecs failed: \${msg}\`);
+    }
+  }
+  return appended ? merged : directSpecs;
+}
+
+`;
+
+/**
+ * Helper-marker anchor for inserting the
+ * `applyProviderParamSpecPlugins` function definition above the
+ * `ProviderParamSpecService` class. Mirrors the pattern used by the
+ * model-list-override host: insert the helper immediately above the
+ * `@Injectable()` decorator, which is a stable, byte-exact line in
+ * upstream.
+ */
+export const PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD =
+  "@Injectable()\nexport class ProviderParamSpecService implements OnModuleInit {\n";
+
+/**
+ * Build the post-helper-insertion marker text: same anchor as
+ * `_HELPER_MARKER_OLD` but prefixed with the helper definition so the
+ * `apply.ts` patcher's `next.replace(helperMarkerOld, helperMarkerNew)`
+ * call inserts the function above the call sites.
+ */
+export function buildProviderParamSpecHelperMarkerNew(): string {
+  return `${PROVIDER_PARAM_SPEC_HOST_SOURCE}${PROVIDER_PARAM_SPEC_HELPER_MARKER_OLD}`;
+}
+
+/**
+ * The exact upstream body of `ProviderParamSpecService::getSpecs` that the
+ * apply tool replaces. The replacement preserves every upstream behavior
+ * (providerless fallback, direct lookup, metadata fallback) and only adds
+ * a final step that appends plugin-returned rows AFTER `directSpecs` (or
+ * the metadata-fallback result), so the plugin's rows never reorder the
+ * upstream stable list.
+ */
+export const PROVIDER_PARAM_SPEC_OLD_GET_SPECS = `  async getSpecs(
+    providerId: string | undefined,
+    authType: AuthType | undefined,
+    model: string | undefined,
+  ): Promise<readonly ProviderParamSpec[]> {
+    const providerlessSpecs = this.getProviderlessSpecs(this.specs, providerId, authType, model);
+    if (providerlessSpecs.length > 0) return providerlessSpecs;
+
+    const directSpecs = getProviderParamSpecs(this.specs, providerId, authType, model);
+    if (directSpecs.length > 0) return directSpecs;
+
+    const metadata = providerMetadataIdentity(providerId, model);
+    if (!metadata || metadataMatchesRoute(metadata, providerId, model)) return directSpecs;
+
+    return getProviderParamSpecs(this.specs, metadata.provider, authType, metadata.model).map(
+      (spec) => withRouteIdentity(spec, providerId, authType, model),
+    );
+  }
+`;
+
+/**
+ * The replacement body for `getSpecs` runs the helper after every
+ * upstream lookup path that can be extended: providerless rows, direct
+ * rows, metadata-fallback rows, and the empty direct/no-metadata path.
+ * The host preserves upstream order, replaces conflicting plugin paths,
+ * and appends plugin-only rows. An empty upstream result can therefore
+ * become plugin-only rows (the Astra compatibility case), while a null
+ * plugin result falls back to the exact upstream result.
+ */
+export const PROVIDER_PARAM_SPEC_NEW_GET_SPECS = `  async getSpecs(
+    providerId: string | undefined,
+    authType: AuthType | undefined,
+    model: string | undefined,
+  ): Promise<readonly ProviderParamSpec[]> {
+    const providerlessSpecs = this.getProviderlessSpecs(this.specs, providerId, authType, model);
+    const directSpecs = providerlessSpecs.length > 0
+      ? providerlessSpecs
+      : getProviderParamSpecs(this.specs, providerId, authType, model);
+    const metadata = providerMetadataIdentity(providerId, model);
+    const fallbackSpecs = directSpecs.length > 0
+      ? directSpecs
+      : metadata && !metadataMatchesRoute(metadata, providerId, model)
+        ? getProviderParamSpecs(this.specs, metadata.provider, authType, metadata.model).map(
+            (spec) => withRouteIdentity(spec, providerId, authType, model),
+          )
+        : directSpecs;
+    const pluginSpecs = applyProviderParamSpecPlugins(
+      providerId,
+      authType,
+      model,
+      fallbackSpecs,
+    );
+    return pluginSpecs as readonly ProviderParamSpec[];
+  }
+`;
+
+
+/**
+ * The exact upstream body of `ProviderParamSpecService::listModelIds`
+ * that the apply tool replaces. The replacement preserves every upstream
+ * behavior (the `this.specs.map(...)` projection over
+ * `{ provider, authType, model }`) and only adds the plugin identity merge
+ * after the projection. `getCapabilities` is intentionally not patched:
+ * provider-parameter rows are not valid model capabilities.
+ */
+export const PROVIDER_PARAM_SPEC_OLD_LIST_MODEL_IDS = `  listModelIds(): Array<{ provider: string; authType: AuthType; model: string }> {
+    return this.specs.map((entry) => {
+      const provider = normalizeProviderParamProviderId(entry.provider);
+      return {
+        provider,
+        authType: entry.authType,
+        model: entry.model,
+      };
+    });
+  }
+`;
+
+/**
+ * The replacement body for `listModelIds`. Calls
+ * `applyProviderParamSpecPlugins(undefined, undefined, undefined, list)`
+ * after the upstream `this.specs.map(...)` projection so plugins can
+ * surface additional identity rows that the model-list-override route
+ * (`GET :agentName/model-param-specs/index`) renders alongside the
+ * upstream catalog. The host helper preserves `list` first and appends
+ * non-null plugin rows; when every plugin returns `null` it returns
+ * `list` unchanged.
+ */
+export const PROVIDER_PARAM_SPEC_NEW_LIST_MODEL_IDS = `  listModelIds(): Array<{ provider: string; authType: AuthType; model: string }> {
+    const list = this.specs.map((entry) => {
+      const provider = normalizeProviderParamProviderId(entry.provider);
+      return {
+        provider,
+        authType: entry.authType,
+        model: entry.model,
+      };
+    });
+    return applyProviderParamSpecPlugins(
+      undefined,
+      undefined,
+      undefined,
+      list,
+    ) as Array<{ provider: string; authType: AuthType; model: string }>;
+  }
 `;

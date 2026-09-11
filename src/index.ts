@@ -38,6 +38,7 @@
  * `git pull` of upstream, run `npm run apply -- /path/to/manifest` to
  * re-inject the hosts. No fork repo or housekeeping overlay needed.
  */
+import type { ProviderParamSpec } from './provider-params';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { applyDisabledListFromEnv } from './host/env-toggle';
@@ -465,6 +466,36 @@ export interface ModelListOverridePlugin {
 }
 
 // =============================================================================
+// ProviderParamSpecPlugin — model-parameter catalog hook
+// =============================================================================
+
+export type {
+  AuthType,
+  JsonPrimitive,
+  JsonValue,
+  ModelCapability,
+  ModelParamDefinition,
+  ModelParamGroup,
+  ModelParamRange,
+  ModelParamType,
+  ParamApplicability,
+  ParamApplicabilityCondition,
+  ParamApplicabilityMatch,
+  ParamApplicabilityRule,
+  ParamApplicabilityValue,
+  ProviderParamSpec,
+} from './provider-params';
+export { providerParamValueIsValid } from './provider-params';
+
+export interface ProviderParamSpecPlugin {
+  overrideProviderParamSpecs(
+    provider: 'openai',
+    authType: 'api_key' | 'subscription',
+    model: 'gpt-6-astra',
+  ): readonly ProviderParamSpec[] | null;
+}
+
+// =============================================================================
 // Plugin registry metadata + runtime toggles
 // =============================================================================
 
@@ -504,7 +535,8 @@ type ManifestPlugin = Partial<RequestTransformPlugin> &
   Partial<RequestPolicyPlugin> &
   Partial<RoutingOverridePlugin> &
   Partial<DashboardTransformPlugin> &
-  Partial<ModelListOverridePlugin>;
+  Partial<ModelListOverridePlugin> &
+  Partial<ProviderParamSpecPlugin>;
 
 interface PluginRegistryEntry {
   readonly pluginClassName: string;
@@ -608,6 +640,11 @@ export {
   CUSTOM_PROVIDER_MODEL_COUNT_FIX_SCRIPT,
   CustomProviderModelCountFixPlugin,
 } from './plugins/custom-provider-model-count-fix/plugin';
+
+export {
+  GptAstraModelListOverridePlugin,
+  GPT_ASTRA_MODEL_LIST_OVERRIDE_PLUGIN_METADATA,
+} from './plugins/gpt-astra-model-list-override/plugin';
 
 // =============================================================================
 // Re-exports for the pasted host snippets

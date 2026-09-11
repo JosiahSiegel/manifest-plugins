@@ -34,6 +34,7 @@ interface LoadedModule {
   readonly resetPersistedPluginState: () => void;
   readonly ShowAllRouterViewsPlugin: new (...args: never[]) => unknown;
   readonly CustomProviderModelCountFixPlugin: new (...args: never[]) => unknown;
+  readonly GptAstraModelListOverridePlugin: new (...args: never[]) => unknown;
 }
 
 function freshStateFile(): string {
@@ -78,9 +79,27 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     });
 
     // The single plugin explicitly disabled at the state file is the only
-    // one absent from the runtime array; the other shipped plugin stays.
-    expect(mod!.plugins).toHaveLength(1);
+    // one absent from the runtime array; the other shipped plugins stay.
+    expect(mod!.plugins).toHaveLength(2);
     expect(mod!.plugins).not.toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
+    expect(mod!.plugins).toContainEqual(expect.any(mod!.CustomProviderModelCountFixPlugin));
+    expect(mod!.plugins).toContainEqual(expect.any(mod!.GptAstraModelListOverridePlugin));
+  });
+
+  it('applies the disabled environment list after persisted state', () => {
+    process.env['MANIFEST_PLUGINS_DISABLED'] = 'gpt-astra-model-list-override';
+
+    let mod: LoadedModule;
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      mod = require('../src/index') as LoadedModule;
+    });
+
+    expect(mod!.plugins).toHaveLength(2);
+    expect(mod!.plugins).not.toContainEqual(
+      expect.any(mod!.GptAstraModelListOverridePlugin),
+    );
+    expect(mod!.plugins).toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
     expect(mod!.plugins).toContainEqual(expect.any(mod!.CustomProviderModelCountFixPlugin));
   });
 
@@ -115,8 +134,8 @@ describe('persistence bootstrap (bootPersistedState)', () => {
       mod = require('../src/index') as LoadedModule;
     });
 
-    // Both shipped plugins are enabled by default.
-    expect(mod!.plugins).toHaveLength(2);
+    // All three shipped plugins are enabled by default.
+    expect(mod!.plugins).toHaveLength(3);
     const installed = mod!.getInstalledPlugins();
     const sarv = installed.find((p) => p.id === 'show-all-router-views');
     expect(sarv!.enabled).toBe(true);
@@ -124,6 +143,9 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     const cpfix = installed.find((p) => p.id === 'custom-provider-model-count-fix');
     expect(cpfix!.enabled).toBe(true);
     expect(cpfix!.enabledByDefault).toBe(true);
+    const astra = installed.find((p) => p.id === 'gpt-astra-model-list-override');
+    expect(astra!.enabled).toBe(true);
+    expect(astra!.enabledByDefault).toBe(true);
   });
 
   it('exposes getPersistedStateFile() reading the env var (and a default when unset)', () => {
@@ -152,20 +174,21 @@ describe('persistence bootstrap (bootPersistedState)', () => {
     });
 
     // Boot has dropped show-all-router-views (persisted false). Runtime
-    // array only contains the other shipped plugin.
-    expect(mod!.plugins).toHaveLength(1);
+    // array only contains the other shipped plugins.
+    expect(mod!.plugins).toHaveLength(2);
     expect(mod!.plugins).not.toContainEqual(expect.any(mod!.ShowAllRouterViewsPlugin));
+    expect(mod!.plugins).toContainEqual(expect.any(mod!.GptAstraModelListOverridePlugin));
 
     mod!.resetPersistedPluginState();
 
     expect(existsSync(stateFile)).toBe(false);
 
-    // After reset: per-plugin defaults are restored. Both shipped
+    // After reset: per-plugin defaults are restored. All three shipped
     // plugins are back to enabled by default.
     const installed = mod!.getInstalledPlugins();
     const sarv = installed.find((p) => p.id === 'show-all-router-views');
     expect(sarv!.enabled).toBe(true);
     expect(sarv!.enabledByDefault).toBe(true);
-    expect(mod!.plugins).toHaveLength(2);
+    expect(mod!.plugins).toHaveLength(3);
   });
 });

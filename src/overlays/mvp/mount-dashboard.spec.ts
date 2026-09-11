@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mountDashboardPluginManager } from './mount-dashboard';
+import { mountDashboardTransform } from './mount-dashboard-transform';
 
 interface TempDir {
   readonly path: string;
@@ -55,6 +56,35 @@ function targetMountTemps(targetDir: string): readonly string[] {
     .filter((entry) => entry.startsWith('.mwp-mount-'))
     .sort();
 }
+
+describe('mountDashboardTransform', () => {
+  it('injects before body, appends without body, is idempotent, and no-ops when missing', async () => {
+    const cases = [
+      '<html><body><main>Dashboard</main></body></html>',
+      '<html><main>Dashboard</main></html>',
+    ];
+    for (const [index, original] of cases.entries()) {
+      const tmp = tempDir(`manifest-plugins-mount-transform-${index}-`);
+      try {
+        const indexPath = writeDashboardIndex(tmp.path, original);
+        await mountDashboardTransform(tmp.path);
+        const first = readFileSync(indexPath, 'utf-8');
+        expect(first).toContain('data-mwp-dashboard-transform');
+        expect(first).toContain('/admin/dashboard-transform/all.js');
+        await mountDashboardTransform(tmp.path);
+        expect(readFileSync(indexPath, 'utf-8')).toBe(first);
+      } finally {
+        tmp.cleanup();
+      }
+    }
+    const missing = tempDir('manifest-plugins-mount-transform-missing-');
+    try {
+      await expect(mountDashboardTransform(missing.path)).resolves.toBeUndefined();
+    } finally {
+      missing.cleanup();
+    }
+  });
+});
 
 describe('mountDashboardPluginManager', () => {
   it('injects the plugin manager div and script into packages/frontend/index.html that ends with </body>', async () => {

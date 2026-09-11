@@ -148,6 +148,19 @@ const KIND_PILL_TINT: Readonly<Record<PluginKind, { readonly bg: string; readonl
  * Uses CSS variables so it adopts the dashboard's focus ring color
  * and primary accent (`--ring`, `--foreground`).
  */
+export function isToggleDisabled(disabled: boolean | undefined): boolean {
+  return disabled === true;
+}
+
+export function handleToggleChange(
+  disabled: boolean | undefined,
+  checked: boolean,
+  onChange: (checked: boolean) => void,
+): void {
+  if (isToggleDisabled(disabled)) return;
+  onChange(checked);
+}
+
 function ToggleSwitch(props: {
   readonly id: string;
   readonly checked: boolean;
@@ -156,8 +169,7 @@ function ToggleSwitch(props: {
 }): React.ReactElement {
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>): void => {
-      if (props.disabled === true) return;
-      props.onChange(e.target.checked);
+      handleToggleChange(props.disabled, e.target.checked, props.onChange);
     },
     [props],
   );
@@ -640,10 +652,24 @@ let mountedRoot: Root | null = null;
  *     Tighten padding. Stack the title row above the kind pill.
  *   - >768px: native dashboard layout (sidebar offset + container max).
  */
-function ensureResponsiveStylesInjected(): void {
-  if (typeof document === 'undefined') return;
-  if (document.querySelector('style[data-mwp-styles]') !== null) return;
-  const style = document.createElement('style');
+export function hasResponsiveStyle(documentLike?: Document | null): boolean {
+  const resolvedDocument = documentLike === undefined ? globalThis.document : documentLike;
+  if (!resolvedDocument) return false;
+  return resolvedDocument.querySelector('style[data-mwp-styles]') !== null;
+}
+
+export function autoMountPluginManager(documentLike?: Document | null): void {
+  const resolvedDocument = documentLike === undefined ? globalThis.document : documentLike;
+  if (!resolvedDocument) return;
+  const auto = resolvedDocument.getElementById('plugin-manager-root');
+  if (auto !== null) mountPluginManager(auto);
+}
+
+export function ensureResponsiveStylesInjected(documentLike?: Document | null): void {
+  const resolvedDocument = documentLike === undefined ? globalThis.document : documentLike;
+  if (!resolvedDocument) return;
+  if (resolvedDocument.querySelector('style[data-mwp-styles]') !== null) return;
+  const style = resolvedDocument.createElement('style');
   style.setAttribute('data-mwp-styles', 'manifest-plugins-admin-ui');
   style.textContent = `
     .mwp-plugin-manager {
@@ -682,9 +708,12 @@ export function unmountPluginManager(): void {
   }
 }
 
+export function hasAutoMountRoot(documentLike?: Document | null): boolean {
+  const resolvedDocument = documentLike === undefined ? globalThis.document : documentLike;
+  if (!resolvedDocument) return false;
+  return resolvedDocument.getElementById('plugin-manager-root') !== null;
+}
+
 // Auto-mount when the bundle is loaded into a page that already has the
 // root div injected by the dashboard mount overlay.
-if (typeof document !== 'undefined') {
-  const auto = document.getElementById('plugin-manager-root');
-  if (auto !== null) mountPluginManager(auto);
-}
+autoMountPluginManager();

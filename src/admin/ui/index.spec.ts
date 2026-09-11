@@ -21,8 +21,14 @@
  * The fixture uses only the in-tree plugins.
  */
 import '@testing-library/jest-dom';
-import { act, cleanup, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import {
+  autoMountPluginManager,
+  ensureResponsiveStylesInjected,
+  handleToggleChange,
+  hasAutoMountRoot,
+  hasResponsiveStyle,
+  isToggleDisabled,
   mountPluginManager,
   unmountPluginManager,
   type PluginMetadata,
@@ -54,6 +60,16 @@ const SAMPLE_PLUGINS: readonly PluginMetadata[] = [
     enabledByDefault: true,
     enabled: true,
   },
+  {
+    id: 'gpt-astra-model-list-override',
+    name: 'OpenAI GPT-6 Astra compatibility shim',
+    version: '0.1.0',
+    description:
+      'Adds the OpenAI GPT-6 Astra model row and reasoning-effort parameter spec.',
+    kind: 'model-list-override',
+    enabledByDefault: true,
+    enabled: true,
+  },
 ];
 
 let originalFetch: typeof fetch | undefined;
@@ -61,6 +77,10 @@ let originalFetch: typeof fetch | undefined;
 beforeEach(() => {
   originalFetch = global.fetch;
   jest.useFakeTimers();
+  const injected = document.querySelector('style[data-mwp-styles]');
+  if (injected !== null) injected.remove();
+  const root = document.getElementById('plugin-manager-root');
+  if (root !== null) root.remove();
 });
 
 afterEach(() => {
@@ -273,6 +293,15 @@ describe('PluginManager UI', () => {
     }
   });
 
+  it('renders empty descriptions without a description paragraph', async () => {
+    installFetchMock(jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>(() => Promise.resolve(jsonResponse({ plugins: [{ ...SAMPLE_PLUGINS[0], description: '' }] }))));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+    expect(document.querySelector('.mwp-plugin-row__desc')).toBeNull();
+  });
+
   it('renders a kind pill for every installed plugin kind, including dashboard-transform', async () => {
     // Regression: KIND_PILL_TINT did not include the new 'dashboard-transform'
     // kind, so the row crashed with "Cannot read properties of undefined
@@ -288,5 +317,305 @@ describe('PluginManager UI', () => {
     expect(screen.getByTestId('plugin-kind-show-all-router-views')).toHaveTextContent(
       'dashboard-transform',
     );
+  });
+
+  it('renders an error state when the initial plugin response is not ok', async () => {
+    installFetchMock(jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>(() => Promise.resolve(jsonResponse({}, 503))));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('error')).toBeTruthy());
+    expect(screen.getByTestId('error')).toHaveTextContent('GET /api/plugins → 503');
+  });
+
+  it('uses the unknown-error fallback for a malformed initial fetch failure', async () => {
+    installFetchMock(jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>(() => Promise.reject({})));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('error')).toBeTruthy());
+    expect(screen.getByTestId('error')).toHaveTextContent('Unknown error');
+  });
+
+  it('shows an error when patchPlugin receives a non-OK response', async () => {
+    installFetchMock(jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>((input, init) => {
+      if ((init?.method ?? 'GET') === 'PATCH') return Promise.resolve(jsonResponse({}, 500));
+      return Promise.resolve(jsonResponse({ plugins: SAMPLE_PLUGINS }));
+    }));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+    await act(async () => {
+      (screen.getByTestId('plugin-toggle-show-all-router-views') as HTMLInputElement).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByTestId('refresh-error')).toBeTruthy());
+    expect(screen.getByTestId('refresh-error')).toHaveTextContent('PATCH /api/plugins/show-all-router-views → 500');
+  });
+
+  it('shows an error for an unexpected plugin response shape', async () => {
+    installFetchMock(jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>(() => Promise.resolve(jsonResponse({ plugins: {} }))));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('error')).toBeTruthy());
+    expect(screen.getByTestId('error')).toHaveTextContent('unexpected /api/plugins shape');
+  });
+
+  it('renders a refresh error while retaining previously loaded plugins', async () => {
+    let calls = 0;
+    installFetchMock(jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>(() => {
+      calls += 1;
+      return calls === 1
+        ? Promise.resolve(jsonResponse({ plugins: SAMPLE_PLUGINS }))
+        : Promise.resolve(jsonResponse({}, 503));
+    }));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+    await act(async () => {
+      jest.advanceTimersByTime(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByTestId('refresh-error')).toBeTruthy());
+    expect(screen.getByTestId('refresh-error')).toHaveTextContent('Refresh failed');
+  });
+
+  it('shows the singular plugin count and idempotent style/mount behavior', async () => {
+    installFetchMock(jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>(() => Promise.resolve(jsonResponse({ plugins: [SAMPLE_PLUGINS[0]] }))));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    act(() => {
+      mountPluginManager(target);
+      mountPluginManager(target);
+    });
+    await waitFor(() => expect(screen.getByTestId('plugin-count')).toHaveTextContent('1 plugin'));
+    expect(screen.getByTestId('plugin-count')).toHaveTextContent('1 plugin');
+    const checkbox = screen.getByTestId('plugin-toggle-show-all-router-views') as HTMLInputElement;
+    fireEvent.change(checkbox, { target: { checked: true } });
+    expect(checkbox.checked).toBe(true);
+    expect(document.querySelectorAll('style[data-mwp-styles]')).toHaveLength(1);
+    unmountPluginManager();
+    unmountPluginManager();
+  });
+
+  it('shows a refresh error when a PATCH response has no plugin payload', async () => {
+    const fetchMock = jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>((input, init) => {
+      if ((init?.method ?? 'GET') === 'PATCH') return Promise.resolve(jsonResponse({}));
+      return Promise.resolve(jsonResponse({ plugins: SAMPLE_PLUGINS }));
+    });
+    installFetchMock(fetchMock);
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+    await act(async () => {
+      (screen.getByTestId('plugin-toggle-show-all-router-views') as HTMLInputElement).click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByTestId('refresh-error')).toBeTruthy());
+    expect(screen.getByTestId('refresh-error')).toHaveTextContent('unexpected PATCH response shape');
+  });
+
+  it('shows a refresh error when a previously loaded plugin list fetch rejects', async () => {
+    let calls = 0;
+    installFetchMock(jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>(() => {
+      calls += 1;
+      return calls === 1
+        ? Promise.resolve(jsonResponse({ plugins: SAMPLE_PLUGINS }))
+        : Promise.reject(new Error('refresh transport failed'));
+    }));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+    await act(async () => {
+      jest.advanceTimersByTime(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByTestId('refresh-error')).toBeTruthy());
+    expect(screen.getByTestId('refresh-error')).toHaveTextContent('refresh transport failed');
+  });
+
+  it('renders the singular count after the loaded list resolves', async () => {
+    installFetchMock(jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>(() => Promise.resolve(jsonResponse({ plugins: [SAMPLE_PLUGINS[0]] }))));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-count')).toHaveTextContent('1 plugin'));
+    expect(screen.getByTestId('plugin-count')).toHaveTextContent('1 plugin');
+  });
+
+  it('does not invoke a disabled toggle callback', async () => {
+    const calls: boolean[] = [];
+    handleToggleChange(true, true, (checked) => calls.push(checked));
+    expect(calls).toEqual([]);
+    handleToggleChange(false, true, (checked) => calls.push(checked));
+    expect(calls).toEqual([true]);
+
+    const fetchMock = createAlwaysResolvingFetch();
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+    const checkbox = screen.getByTestId('plugin-toggle-show-all-router-views') as HTMLInputElement;
+    expect(checkbox.disabled).toBe(false);
+    await act(async () => {
+      checkbox.click();
+      await Promise.resolve();
+    });
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true);
+    const disabledTarget = document.createElement('div');
+    disabledTarget.innerHTML = '<input type="checkbox">';
+    const disabledCheckbox = disabledTarget.querySelector('input') as HTMLInputElement;
+    disabledCheckbox.disabled = true;
+    disabledCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(disabledCheckbox.disabled).toBe(true);
+  });
+
+  it('does not auto-mount when the root element is absent in an isolated module', () => {
+    jest.isolateModules(() => {
+      const root = document.getElementById('plugin-manager-root');
+      root?.remove();
+      expect(() => require('./index')).not.toThrow();
+    });
+  });
+
+  it('no-ops style injection and auto-mount when no document is supplied', () => {
+    expect(() => ensureResponsiveStylesInjected(null)).not.toThrow();
+    expect(() => autoMountPluginManager(null)).not.toThrow();
+  });
+
+  it('injects styles once and auto-mounts only when a root exists', () => {
+    ensureResponsiveStylesInjected(document);
+    const before = document.querySelectorAll('style[data-mwp-styles]').length;
+    ensureResponsiveStylesInjected(document);
+    expect(document.querySelectorAll('style[data-mwp-styles]')).toHaveLength(before);
+    const root = document.createElement('div');
+    root.id = 'plugin-manager-root';
+    document.body.appendChild(root);
+    expect(() => autoMountPluginManager(document)).not.toThrow();
+  });
+
+  it('does not mount again when the responsive style is already present', async () => {
+    const preexisting = document.createElement('style');
+    preexisting.setAttribute('data-mwp-styles', 'manifest-plugins-admin-ui');
+    document.head.appendChild(preexisting);
+    installFetchMock(createAlwaysResolvingFetch());
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+    expect(document.querySelectorAll('style[data-mwp-styles]')).toHaveLength(1);
+  });
+
+  it('ignores timer refresh while a PATCH is pending', async () => {
+    let resolvePatch: ((response: FetchResponseLike) => void) | undefined;
+    const fetchMock = jest.fn<Promise<FetchResponseLike>, [RequestInfo | URL, RequestInit?]>((input, init) => {
+      if ((init?.method ?? 'GET') === 'PATCH') return new Promise((resolve) => { resolvePatch = resolve; });
+      return Promise.resolve(jsonResponse({ plugins: SAMPLE_PLUGINS }));
+    });
+    installFetchMock(fetchMock);
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+    await act(async () => {
+      (screen.getByTestId('plugin-toggle-show-all-router-views') as HTMLInputElement).click();
+      await Promise.resolve();
+      jest.advanceTimersByTime(5000);
+      await Promise.resolve();
+    });
+    expect(fetchMock.mock.calls.filter(([, init]) => (init?.method ?? 'GET') === 'GET')).toHaveLength(1);
+    resolvePatch?.(jsonResponse({ plugin: { ...SAMPLE_PLUGINS[0], enabled: false } }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  });
+
+  it('keeps a toggle disabled while its PATCH is pending', async () => {
+    let resolvePatch: ((response: FetchResponseLike) => void) | undefined;
+    const patch = new Promise<FetchResponseLike>((resolve) => {
+      resolvePatch = resolve;
+    });
+    installFetchMock(jest.fn((input, init) => {
+      if ((init?.method ?? 'GET') === 'PATCH') return patch;
+      return Promise.resolve(jsonResponse({ plugins: SAMPLE_PLUGINS }));
+    }));
+    const target = document.createElement('div');
+    document.body.appendChild(target);
+    mountPluginManager(target);
+    await waitFor(() => expect(screen.getByTestId('plugin-list')).toBeTruthy());
+    const checkbox = screen.getByTestId('plugin-toggle-show-all-router-views') as HTMLInputElement;
+    await act(async () => {
+      checkbox.click();
+      await Promise.resolve();
+    });
+    expect(checkbox.disabled).toBe(true);
+    fireEvent.change(checkbox, { target: { checked: true } });
+    expect(checkbox.checked).toBe(true);
+    resolvePatch?.(jsonResponse({ plugin: { ...SAMPLE_PLUGINS[0], enabled: false } }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(checkbox.disabled).toBe(false);
+  });
+
+  it('exercises both arms of the disabled guard through the production seam', () => {
+    expect(isToggleDisabled(true)).toBe(true);
+    expect(isToggleDisabled(false)).toBe(false);
+    expect(isToggleDisabled(undefined)).toBe(false);
+  });
+
+  it('exercises the style and auto-mount nullish branches through the production seams', () => {
+    const initialStyles = document.querySelectorAll('style[data-mwp-styles]').length;
+    ensureResponsiveStylesInjected(null);
+    expect(document.querySelectorAll('style[data-mwp-styles]').length).toBe(initialStyles);
+    ensureResponsiveStylesInjected(document);
+    expect(document.querySelectorAll('style[data-mwp-styles]').length).toBe(initialStyles + 1);
+    expect(() => autoMountPluginManager(null)).not.toThrow();
+    expect(hasAutoMountRoot()).toBe(false);
+    const root = document.createElement('div');
+    root.id = 'plugin-manager-root';
+    document.body.appendChild(root);
+    expect(hasAutoMountRoot()).toBe(true);
+    expect(() => autoMountPluginManager(document)).not.toThrow();
+  });
+
+  it('returns safe defaults for an explicitly absent browser document', () => {
+    expect(hasResponsiveStyle(null)).toBe(false);
+    expect(hasAutoMountRoot(null)).toBe(false);
+    expect(() => ensureResponsiveStylesInjected(null)).not.toThrow();
+    expect(() => autoMountPluginManager(null)).not.toThrow();
+  });
+
+  it('reports responsive style and auto-mount root state from the current document', () => {
+    expect(hasResponsiveStyle()).toBe(false);
+    const style = document.createElement('style');
+    style.setAttribute('data-mwp-styles', 'manifest-plugins-admin-ui');
+    document.head.appendChild(style);
+    expect(hasResponsiveStyle()).toBe(true);
+    style.remove();
+
+    const root = document.createElement('div');
+    root.id = 'plugin-manager-root';
+    document.body.appendChild(root);
+    expect(hasAutoMountRoot()).toBe(true);
+    root.remove();
+    expect(hasAutoMountRoot()).toBe(false);
+  });
+
+  it('reports auto-mount root state from the current document', () => {
+    const root = document.createElement('div');
+    root.id = 'plugin-manager-root';
+    document.body.appendChild(root);
+    expect(hasAutoMountRoot()).toBe(true);
+    root.remove();
+    expect(hasAutoMountRoot()).toBe(false);
   });
 });

@@ -11,7 +11,7 @@
  *   - Named class exports (no `default` required).
  *   - `static metadata` with a unique `id` is required.
  *   - Throws loudly on duplicate class names AND duplicate `metadata.id`.
- *   - Discovers the 2 built-in plugins from the real `src/plugins/` AND
+ *   - Discovers the 3 built-in plugins from the real `src/plugins/` AND
  *     from the compiled `dist/plugins/` mirror (this is the runtime
  *     shape; if it breaks, the production image boots with zero plugins).
  */
@@ -68,7 +68,7 @@ function writeBrokenPlugin(
 }
 
 describe('discoverPlugins (filesystem enumeration)', () => {
-  it('discovers both built-in plugins from src/plugins/', () => {
+  it('discovers all three built-in plugins from src/plugins/', () => {
     const discovered = discoverPlugins(PLUGINS_SRC_DIR);
 
     const classNames = discovered.map((entry) => entry.pluginClassName);
@@ -76,9 +76,18 @@ describe('discoverPlugins (filesystem enumeration)', () => {
       expect.arrayContaining([
         'ShowAllRouterViewsPlugin',
         'CustomProviderModelCountFixPlugin',
+        'GptAstraModelListOverridePlugin',
       ]),
     );
-    expect(discovered).toHaveLength(2);
+    const ids = discovered.map((entry) => entry.metadata.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'show-all-router-views',
+        'custom-provider-model-count-fix',
+        'gpt-astra-model-list-override',
+      ]),
+    );
+    expect(discovered).toHaveLength(3);
   });
 
   it('returns plugin entries with a non-empty id, kind, and instance', () => {
@@ -100,10 +109,18 @@ describe('discoverPlugins (filesystem enumeration)', () => {
     try {
       writeTempPlugin(tmp, 'alpha', 'AlphaPlugin', 'alpha');
       writeTempPlugin(tmp, 'beta', 'BetaPlugin', 'beta');
+      writeTempPlugin(
+        tmp,
+        'gpt-astra-model-list-override',
+        'GptAstraModelListOverridePlugin',
+        'gpt-astra-model-list-override',
+      );
       const discovered = discoverPlugins(tmp);
       const ids = discovered.map((entry) => entry.metadata.id);
-      expect(ids).toEqual(expect.arrayContaining(['alpha', 'beta']));
-      expect(discovered).toHaveLength(2);
+      expect(ids).toEqual(
+        expect.arrayContaining(['alpha', 'beta', 'gpt-astra-model-list-override']),
+      );
+      expect(discovered).toHaveLength(3);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -166,12 +183,113 @@ describe('discoverPlugins (filesystem enumeration)', () => {
     );
   });
 
-  it('skips subdirectories without a plugin file', () => {
+  it('skips subdirectories without a plugin file, hidden entries, and regular files', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-skip-'));
     try {
       writeTempPlugin(tmp, 'real', 'RealPlugin', 'real');
       mkdirSync(join(tmp, 'no-plugin-here'), { recursive: true });
-      expect(discoverPlugins(tmp)).toHaveLength(1);
+      mkdirSync(join(tmp, '.hidden-plugin'), { recursive: true });
+      writeTempPlugin(tmp, '.hidden-plugin', 'HiddenPlugin', 'hidden');
+      writeFileSync(join(tmp, 'regular.txt'), 'not a plugin', 'utf-8');
+      expect(discoverPlugins(tmp).map((entry) => entry.metadata.id)).toEqual(['real']);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('throws for a plugin root that is a regular file', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-file-')), 'plugins.txt');
+    try {
+      writeFileSync(file, 'not a directory', 'utf-8');
+      expect(() => discoverPlugins(file)).toThrow(/not a directory/);
+    } finally {
+      rmSync(dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it('throws on duplicate class names across compiled plugin files', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-dup-js-class-'));
+    try {
+      for (const [name, id] of [['one', 'one-id'], ['two', 'two-id']] as const) {
+        const dir = join(tmp, name);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'plugin.js'), `class DupPlugin {}\nconst META = { id: '${id}', name: '${id}', version: '0.0.1', description: 'x', kind: 'transform' };\nDupPlugin.metadata = META;\nexports.DupPlugin = DupPlugin;\n`, 'utf-8');
+      }
+      expect(() => discoverPlugins(tmp)).toThrow(/duplicate class name/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when one plugin file exports two classes', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-multi-class-'));
+    try {
+      writeBrokenPlugin(tmp, 'multi', 'export class FirstPlugin {}\nexport class SecondPlugin {}\n');
+      expect(() => discoverPlugins(tmp)).toThrow(/multiple exported classes/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('skips compiled plugin files without a matching exported class', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-no-class-'));
+    try {
+      const dir = join(tmp, 'empty-export');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'plugin.js'), 'exports.NotTheExpectedShape = {};\n', 'utf-8');
+      expect(discoverPlugins(tmp)).toEqual([]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not expose an undefined class name for malformed CommonJS exports', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-malformed-cjs-'));
+    try {
+      const dir = join(tmp, 'malformed');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'plugin.js'), 'exports. = {};\n', 'utf-8');
+      expect(discoverPlugins(tmp)).toEqual([]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when compiled runtime export is not callable', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-not-callable-'));
+    try {
+      const dir = join(tmp, 'broken');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'plugin.js'), 'const BrokenPlugin = {};\nexports.BrokenPlugin = BrokenPlugin;\n', 'utf-8');
+      expect(() => discoverPlugins(tmp)).toThrow(/expected exported class/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when metadata id is empty', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-empty-id-'));
+    try {
+      writeBrokenPlugin(tmp, 'empty-id', [
+        'export class EmptyIdPlugin {',
+        "  static metadata = { id: '', name: 'x', version: '0.0.1', description: 'x', kind: 'transform' };",
+        '}',
+      ].join('\n'));
+      expect(() => discoverPlugins(tmp)).toThrow(/metadata\.id/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when metadata kind is unsupported', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'manifest-plugins-discover-bad-kind-'));
+    try {
+      writeBrokenPlugin(tmp, 'bad-kind', [
+        'export class BadKindPlugin {',
+        "  static metadata = { id: 'bad-kind', name: 'x', version: '0.0.1', description: 'x', kind: 'unknown' };",
+        '}',
+      ].join('\n'));
+      expect(() => discoverPlugins(tmp)).toThrow(/metadata\.kind/);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -246,14 +364,26 @@ describe('discoverPlugins (compiled JS shape — post-tsc runtime)', () => {
     try {
       writeCompiledPlugin(tmp, 'alpha', 'AlphaPlugin', 'alpha');
       writeCompiledPlugin(tmp, 'beta', 'BetaPlugin', 'beta');
+      writeCompiledPlugin(
+        tmp,
+        'gpt-astra-model-list-override',
+        'GptAstraModelListOverridePlugin',
+        'gpt-astra-model-list-override',
+      );
       const discovered = discoverPlugins(tmp);
       const ids = discovered.map((entry) => entry.metadata.id);
       const classes = discovered.map((entry) => entry.pluginClassName);
-      expect(ids).toEqual(expect.arrayContaining(['alpha', 'beta']));
-      expect(classes).toEqual(
-        expect.arrayContaining(['AlphaPlugin', 'BetaPlugin']),
+      expect(ids).toEqual(
+        expect.arrayContaining(['alpha', 'beta', 'gpt-astra-model-list-override']),
       );
-      expect(discovered).toHaveLength(2);
+      expect(classes).toEqual(
+        expect.arrayContaining([
+          'AlphaPlugin',
+          'BetaPlugin',
+          'GptAstraModelListOverridePlugin',
+        ]),
+      );
+      expect(discovered).toHaveLength(3);
       // The instance must actually be a usable object, not the metadata bag.
       expect(typeof discovered[0]?.instance.transformRequest).toBe('function');
     } finally {
@@ -296,12 +426,14 @@ describe('discoverPlugins (compiled JS shape — post-tsc runtime)', () => {
       expect.arrayContaining([
         'show-all-router-views',
         'custom-provider-model-count-fix',
+        'gpt-astra-model-list-override',
       ]),
     );
     expect(classNames).toEqual(
       expect.arrayContaining([
         'ShowAllRouterViewsPlugin',
         'CustomProviderModelCountFixPlugin',
+        'GptAstraModelListOverridePlugin',
       ]),
     );
 
