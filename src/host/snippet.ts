@@ -465,29 +465,32 @@ function applyModelListOverridePlugins(
  * the model-list-override hook.
  *
  * The replacement is byte-equivalent to the host's intent above: it
- * runs the plugin array against the upstream `models` array BEFORE
- * the upstream `models.map(...)` transforms it into the wire-shape
- * response body. Plugins see raw `DiscoveredModel` rows (`id`,
- * `provider`, `authType`) and their returned array is consumed by
- * the upstream mapper unchanged.
+ * runs the plugin array against the upstream `models` array BEFORE any
+ * downstream reader — the OpenCode Go shadow check, the
+ * `customProviderService.list(...)` name map, and the final
+ * `models.map(...)` wire-shape transform. Plugins see raw
+ * `DiscoveredModel` rows (`id`, `provider`, `authType`) and their
+ * returned array replaces `models` for the rest of the handler.
  *
- * Anchor note: the anchor is the upstream `getModelsForAgent` call
- * immediately followed by `customProviderService.list(...)` plus the
- * `cpNameMap` build-up. If upstream restructures this block, update
- * this anchor.
+ * Anchor note: the anchor is the single upstream `getModelsForAgent`
+ * assignment. Upstream commit `45627a2d5` (2026-10-12) inserted the
+ * `publishedOpencodeGoIds(...)` shadow check between that assignment
+ * and the name-map build-up, which broke the previous three-line anchor
+ * (it required `customProviderService.list(...)` to follow immediately).
+ * Anchoring on the discovery line alone — the one statement the host
+ * must follow — keeps the patch stable across such insertions. If
+ * upstream renames the local or the call, update this anchor.
  */
-export const MODEL_LIST_OVERRIDE_OLD = `    const models = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);
-
-    // Build display name map for custom providers (tenant-global)
-    const customProviders = await this.customProviderService.list(agent.tenant_id);`;
+export const MODEL_LIST_OVERRIDE_OLD = `    const models = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);`;
 
 /**
  * The replacement text. The host calls `applyModelListOverridePlugins(...)`
- * immediately after the upstream `getModelsForAgent` call and BEFORE
- * the upstream `customProviderService.list(...)` call, so the plugin
- * can rewrite the raw `models` array used by the wire-shape `.map`.
- * If a plugin returns a non-null result the plugin's `discoveredModels`
- * array replaces `models` for the rest of the handler.
+ * immediately after the upstream `getModelsForAgent` call, so the plugin
+ * can rewrite the raw `models` array before anything downstream reads it
+ * (including the upstream `customProviderService.list(...)` name-map and
+ * the wire-shape `models.map(...)`). If a plugin returns a non-null
+ * result the plugin's `discoveredModels` array replaces `models` for the
+ * rest of the handler.
  *
  * `reason` is surfaced via `console.info` so operators can audit why a
  * client sees a different model list than upstream's static catalog
@@ -506,9 +509,7 @@ export const MODEL_LIST_OVERRIDE_NEW = `    const discovered = await this.discov
         // eslint-disable-next-line no-console
         console.info(\`[manifest-plugins] /v1/models overridden: \${pluginOverride.reason}\`);
       }
-    }
-    // Build display name map for custom providers (tenant-global)
-    const customProviders = await this.customProviderService.list(agent.tenant_id);`;
+    }`;
 
 /**
  * Helper-marker anchor for inserting the

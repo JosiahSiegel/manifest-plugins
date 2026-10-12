@@ -886,6 +886,40 @@ describe('applyAllFive (provider-client + rate-limiter + admin-mount + model-lis
       expect(all.hasDrift).toBe(true);
     });
   });
+
+  it('applies the model-list override when upstream inserts a statement after getModelsForAgent', async () => {
+    await withTempManifest(async (files) => {
+      // Upstream commit 45627a2d5 inserted the `publishedOpencodeGoIds(...)`
+      // shadow check between the discovery call and the
+      // `customProviderService.list(...)` name-map. The anchor must track the
+      // discovery line itself, not the block that used to follow it.
+      const original = readFileSync(files.modelFetcher, 'utf-8');
+      const inserted = original.replace(
+        '    const models = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);',
+        [
+          '    const models = await this.discoveryService.getModelsForAgent(agent.tenant_id, agent.id);',
+          '    const publishedGatewayIds = await publishedOpencodeGoIds(models, catalog, sync);',
+        ].join('\n'),
+      );
+      expect(inserted).not.toBe(original);
+      writeFileSync(files.modelFetcher, inserted, 'utf-8');
+
+      const result = await applyModelListOverrideHost(files.modelFetcher);
+      expectStatus('model-list-inserted-statement', result, 'applied');
+
+      const patched = readFileSync(files.modelFetcher, 'utf-8');
+      expect(patched).toContain('function applyModelListOverridePlugins(');
+      expect(patched).toContain('const pluginOverride = applyModelListOverridePlugins(');
+      // The inserted upstream statement survives the patch, and the
+      // override runs before it so the plugin can rewrite the list.
+      expect(patched).toContain(
+        'const publishedGatewayIds = await publishedOpencodeGoIds(models, catalog, sync);',
+      );
+      expect(patched.indexOf('const pluginOverride')).toBeLessThan(
+        patched.indexOf('const publishedGatewayIds'),
+      );
+    });
+  });
 });
 
 describe('ProviderKeyService route-availability host', () => {
@@ -1320,6 +1354,60 @@ describe('applyPatch direct invocation (covers internal defaults)', () => {
     });
     // Reference DEFAULT_MANIFEST_FILES to keep it in the type graph (no-op assertion).
     expect(DEFAULT_MANIFEST_FILES).toBeDefined();
+  });
+});
+
+describe('applyPatch sentinel fallback soundness', () => {
+  it('does not treat a retained upstream line as proof the patch already ran', async () => {
+    const { applyPatch } = await import('../src/host/apply');
+    const dir = mkdtempSync(join(tmpdir(), 'mwp-sentinel-'));
+    try {
+      const file = join(dir, 'sample.ts');
+      // Upstream renamed the first statement but kept the `retained`
+      // assignment that the replacement text also carries over. The
+      // sentinel extraction must skip lines copied from the old anchor,
+      // otherwise the moved anchor is silently reported as `noop` and the
+      // post-apply check fails later with a misleading message.
+      writeFileSync(
+        file,
+        ['    const renamed = 1;', '    const retained = await upstream();', ''].join('\n'),
+        'utf-8',
+      );
+      const result = await applyPatch({
+        filePath: file,
+        postPatchSymbol: 'const patched = ',
+        oldText: '    const original = 1;\n    const retained = await upstream();',
+        newText:
+          '    const renamed = 1;\n    const patched = 2;\n    const retained = await upstream();',
+      });
+      expectStatus('retained-sentinel', result, 'upstream-drift');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still reports noop when the replacement introduces a genuinely new marker', async () => {
+    const { applyPatch } = await import('../src/host/apply');
+    const dir = mkdtempSync(join(tmpdir(), 'mwp-sentinel-noop-'));
+    try {
+      const file = join(dir, 'sample.ts');
+      // Already patched by an older patcher shape: the old anchor is gone
+      // but the new marker is present.
+      writeFileSync(
+        file,
+        ['    const renamed = 1;', '    const patched = 2;', ''].join('\n'),
+        'utf-8',
+      );
+      const result = await applyPatch({
+        filePath: file,
+        postPatchSymbol: 'const never-seen = ',
+        oldText: '    const original = 1;',
+        newText: '    const renamed = 1;\n    const patched = 2;',
+      });
+      expectStatus('new-marker-noop', result, 'noop');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
