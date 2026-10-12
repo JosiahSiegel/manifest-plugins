@@ -18,6 +18,17 @@ The apply tool couldn't find one of the byte-exact upstream anchors. This happen
 
 If upstream genuinely restructured the file (e.g. split into multiple files), the fix is more involved — open an issue with the failing upstream commit.
 
+### `apply` prints `already patched — nothing to do` for one file, then the pipeline's `post-apply check failed`
+
+The two messages disagree, which means the anchor for that file moved: `apply` could not find the `*_OLD` text and fell back to its "already applied in a different shape" heuristic. That heuristic looks for a declaration line from `*_NEW` in the file; if the replacement text keeps a line that upstream also has (a shared assignment, a copied comment block), the heuristic finds it and wrongly reports `noop`.
+
+**Fix:**
+
+1. Update the `*_OLD` anchor in `src/host/snippet.ts` to the new upstream shape, and drop any upstream lines the `*_NEW` replacement does not actually add — a sentinel must be text the patch *introduces*, never text it copies.
+2. Re-run `npm run apply -- <checkout>` against a fresh `mnfst/manifest` clone and confirm the file reports `applied`.
+
+`extractSentinelFromNew` already skips candidate lines that appear in the old text, so a genuinely moved anchor now reports `upstream-drift` instead of `noop`. The `already patched` message should only ever mean the file really is patched.
+
 ### `docker build` fails with `forbidden path outside build context`
 
 You forgot `--build-context manifest-plugins=...`. The Dockerfile expects a named build context.

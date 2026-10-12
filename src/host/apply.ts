@@ -156,14 +156,25 @@ interface PatchSpec {
  * identifier-shaped declaration (a `const X = ...` or `function X(...)`
  * line). If the file already contains that exact line verbatim, the
  * patch was already applied in this or a similar form.
+ *
+ * Lines that also appear in the pre-patch (old) text are skipped: they
+ * are carried over from upstream, so their presence proves nothing about
+ * whether this patch ran. Without that filter a replacement that keeps
+ * any upstream line (e.g. a shared `customProviders` assignment) yields a
+ * sentinel that already exists in the untouched file, and a genuinely
+ * moved anchor is silently reported as `noop` instead of `upstream-drift`
+ * (the `model.controller.ts` regression from upstream commit `45627a2d5`).
  */
-function extractSentinelFromNew(newText: string): string | null {
+function extractSentinelFromNew(
+  newText: string,
+  oldTexts: readonly string[],
+): string | null {
   const lines = newText.split('\n');
   let lastMatch: string | null = null;
   for (const line of lines) {
-    if (/^(?:function|const)\s+\w+\s*[=(]/.test(line.trim())) {
-      lastMatch = line;
-    }
+    if (!/^(?:function|const)\s+\w+\s*[=(]/.test(line.trim())) continue;
+    if (oldTexts.some((oldText) => oldText.includes(line))) continue;
+    lastMatch = line;
   }
   return lastMatch;
 }
@@ -210,7 +221,10 @@ export async function applyPatch(
     //   (b) Upstream actually restructured and the patch is now stale.
     //       We surface the same drift message as before so the user
     //       knows to update snippet.ts.
-    const newTextSentinel = extractSentinelFromNew(spec.newText);
+    const newTextSentinel = extractSentinelFromNew(spec.newText, [
+      spec.oldText,
+      ...(spec.oldTextAlternatives ?? []),
+    ]);
     if (newTextSentinel && original.includes(newTextSentinel)) {
       return { status: 'noop', file: spec.filePath };
     }
